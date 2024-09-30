@@ -37,10 +37,8 @@ impl Communicator {
     }
 
     pub fn register_message_module<M: MessageModule>(&mut self, message_module: M) {
-        let module_id = M::id();
-
-        if let Some(_) = self.message_modules.insert(module_id.clone(), message_module.receiver()) {
-            warn!("replacing a second message module for module id {:?}", module_id)
+        if let Some(_) = self.message_modules.insert(M::id(), message_module.receiver()) {
+            warn!("replacing a second message module for module id {:?}", M::id())
         }
     }
 

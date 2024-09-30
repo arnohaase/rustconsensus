@@ -14,7 +14,7 @@ impl Debug for MessageModuleId {
 
         let string_repr = std::str::from_utf8(used).unwrap_or("???");
 
-        write!(f, "{:X}({:?}", self.0, string_repr)
+        write!(f, "0x{:016X}({:?})", self.0, string_repr)
     }
 }
 
@@ -54,4 +54,20 @@ pub trait MessageModuleReceiver: 'static {
     ///  probably be offloaded to some asynchronous processing, but it is up to the module
     ///  implementation to decide and do this.
     fn on_message(&self, buf: &[u8]);
+}
+
+#[cfg(test)]
+mod test {
+    use rstest::rstest;
+    use super::*;
+
+    #[rstest]
+    #[case::abc(MessageModuleId::from("abc"), "0x0000000000636261(\"abc\")")]
+    #[case::empty(MessageModuleId::from(""), "0x0000000000000000(\"\")")]
+    #[case::hex(MessageModuleId::from([1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8]), "0x0807060504030201(\"\\u{1}\\u{2}\\u{3}\\u{4}\\u{5}\\u{6}\\u{7}\\u{8}\")")]
+    #[case::no_utf(MessageModuleId::from([0xff, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8]), "0x00000000000000FF(\"???\")")]
+    fn test_id_debug(#[case] id: MessageModuleId, #[case] expected: &str) {
+        let formatted = format!("{:?}", id);
+        assert_eq!(&formatted, expected);
+    }
 }

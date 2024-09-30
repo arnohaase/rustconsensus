@@ -3,6 +3,9 @@ name = "rustconsensus"
 version = "0.1.0"
 edition = "2021"
 
+[dev-dependencies]
+rstest = "*"
+
 [dependencies]
 #TODO version numbers
 anyhow = "*"
