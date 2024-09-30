@@ -15,6 +15,18 @@ pub struct NodeAddr {
     pub unique: u32,
     pub addr: SocketAddr,
 }
+impl NodeAddr {
+    #[cfg(test)]
+    pub fn localhost(unique: u32) -> NodeAddr {
+        let addr: SocketAddr = std::str::FromStr::from_str("127.0.0.1:8888").unwrap();
+
+        NodeAddr {
+            unique,
+            addr,
+        }
+    }
+}
+
 impl From<SocketAddr> for NodeAddr { //TODO ToSocketAddrs
     fn from(addr: SocketAddr) -> Self {
         //TODO overarching clock concept
