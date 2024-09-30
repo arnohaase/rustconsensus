@@ -1,0 +1,13 @@
+[package]
+name = "rustconsensus"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+#TODO version numbers
+anyhow = "*"
+bytes = "*"
+rustc-hash = "*"
+tokio = { version = "*", features = ["net", "sync", "macros"] } #TODO
+tracing = "*"
+
