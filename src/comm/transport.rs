@@ -62,7 +62,7 @@ impl UdpTransport {
         Envelope::write(self.myself, to, M::id(), &mut buf);
         msg_module.ser(msg, &mut buf);
 
-        //TODO batch messages (?)
+        //TODO message batching (?)
 
         let socket = if to.addr.is_ipv4() { &self.ipv4_send_socket } else { &self.ipv6_send_socket };
         socket.send_to(&buf, to.addr).await?;
@@ -116,6 +116,7 @@ impl UdpTransport {
         //TODO safeguard against panics
 
         debug!("received message");
+        trace!(?msg_buf);
         //TODO trace raw message
 
         if msg_buf.len() == MAX_MSG_SIZE {
