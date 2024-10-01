@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
+use std::str::FromStr;
 
 use anyhow::anyhow;
 use bytes::{Buf, BufMut, BytesMut};
@@ -38,7 +39,7 @@ impl Communicator {
 
     pub fn register_message_module<M: MessageModule>(&mut self, message_module: M) {
         if let Some(_) = self.message_modules.insert(M::id(), message_module.receiver()) {
-            warn!("replacing a second message module for module id {:?}", M::id())
+            warn!("registering a second message module for module id {:?}, replacing the first", M::id())
         }
     }
 
@@ -51,12 +52,25 @@ impl Communicator {
 
     #[tracing::instrument]
     pub async fn recv(&self) -> anyhow::Result<()> {
+        match self._recv().await {
+            Ok(()) => {
+                info!("shutting down receiver");
+                Ok(())
+            }
+            Err(e) => {
+                error!("error: {}", e);
+                Err(e)
+            }
+        }
+    }
+
+    async fn _recv(&self) -> anyhow::Result<()> {
         let socket = UdpSocket::bind(self.myself.addr).await?;
         let mut buf: [u8; MAX_MSG_SIZE] = [0; MAX_MSG_SIZE];
 
         let mut cancel_receiver = self.cancel_sender.subscribe();
 
-        trace!(addr = ?self.myself, "starting receive loop");
+        trace!("starting receive loop");
 
         loop {
             tokio::select! {
@@ -114,7 +128,10 @@ impl Communicator {
         //TODO reuse sending sockets
         //TODO batch messages (?)
 
-        let socket = UdpSocket::bind(to.addr).await?;
+        let bind_addr = if to.addr.is_ipv4() { SocketAddr::from_str("0.0.0.0:0").unwrap() }
+            else { SocketAddr::from_str("[::]:0").unwrap() };
+
+        let socket = UdpSocket::bind(bind_addr).await?;
         socket.send_to(&buf, to.addr).await?;
 
         Ok(())
@@ -124,6 +141,7 @@ impl Communicator {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct Envelope {
+    //TODO hashcode / checksum
     from: NodeAddr,
     to: NodeAddr,
     message_module_id: MessageModuleId,
@@ -167,10 +185,64 @@ impl Envelope {
 #[cfg(test)]
 mod test {
     use std::str::FromStr;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use bytes::BytesMut;
 
     use rstest::rstest;
+    use log::info;
 
     use super::*;
+
+    struct TestMessageModule {}
+    impl MessageModule for TestMessageModule {
+        type Message = u32;
+
+        fn id() -> MessageModuleId where Self: Sized {
+            MessageModuleId::from("test")
+        }
+
+        fn receiver(&self) -> Box<dyn MessageModuleReceiver> {
+            Box::new(TestMessageReceiver{})
+        }
+
+        fn ser(&self, msg: &Self::Message, buf: &mut impl BufMut) {
+            buf.put_u32_le(*msg);
+        }
+    }
+
+    struct TestMessageReceiver {}
+    impl MessageModuleReceiver for TestMessageReceiver {
+        fn on_message(&self, buf: &[u8]) {
+            let mut buf = buf;
+            let msg = buf.get_u32_le();
+            info!("received {}", msg);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_simple_communication() {
+        let addr1 = NodeAddr::from(SocketAddr::from_str("127.0.0.1:9810").unwrap());
+        let addr2 = NodeAddr::from(SocketAddr::from_str("127.0.0.1:9811").unwrap());
+
+        let c1 = Communicator::new(addr1);
+        let mut c2 = Communicator::new(addr2);
+
+        c2.register_message_module(TestMessageModule{});
+
+        let c1 = Arc::new(c1);
+        let c2 = Arc::new(c2);
+
+        tokio::select!(
+            a = c1.recv() => {}
+            b = c2.recv() => {}
+            _ = async {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                c1.send(&addr2, &TestMessageModule{}, &123).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            } => {}
+        );
+    }
 
     #[rstest]
     #[case::just_envelope(b"1\0\0\04\0\0\0abcdefgh", b"", "1.2.3.4:5678", "9.8.7.6:1234", Some(Envelope {

@@ -44,9 +44,7 @@ pub trait MessageModule: 'static {
     fn ser(&self, msg: &Self::Message, buf: &mut impl BufMut);
 }
 
-pub trait MessageModuleReceiver: 'static {
-    fn id() -> MessageModuleId where Self: Sized;
-
+pub trait MessageModuleReceiver: 'static + Sync + Send {
     /// called to handle a message that was received for this message module. It contains the
     ///  module specific message buffer, i.e. starting immediately *after* the module ID.
     ///

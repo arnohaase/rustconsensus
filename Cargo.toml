@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dev-dependencies]
+ctor = "*"
 rstest = "*"
+tokio = { version = "*", features = ["full"]}
+tracing-subscriber = "*"
 
 [dependencies]
 #TODO version numbers
@@ -13,4 +16,5 @@ bytes = "*"
 rustc-hash = "*"
 tokio = { version = "*", features = ["net", "sync", "macros"] } #TODO
 tracing = "*"
+log = "0.4.22"
 
