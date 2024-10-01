@@ -1,6 +1,13 @@
 use std::fmt::{Debug, Formatter};
 use bytes::BufMut;
 
+
+/// A [MessageModuleId] is sent as part of a message's envelope to identify the module for
+///  deserialization and dispatch on the receiving side.
+///
+/// An id is technically a u64, but it is intended to be used as a sequence of up to eight ASCII
+///  characters to give it a human-readable name, both for uniqueness and for debugging at the
+///  wire level.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct MessageModuleId(pub u64);
 
@@ -34,6 +41,13 @@ impl From<[u8;8]> for MessageModuleId {
     }
 }
 
+
+/// Messages are pluggable, and they are organized in [MessageModule]s. Each module has its own
+///  (single) type of messages, it takes care of serializing / deserializing them, and for handling
+///  received messages.
+///
+/// Messages for a given module are identified in the envelope by a specific and (hopefully) unique
+///  [MessageModuleId].
 pub trait MessageModule: 'static {
     type Message;
 
