@@ -1,2 +1,3 @@
-pub mod communicator;
+pub mod envelope;
 pub mod message_module;
+pub mod transport;

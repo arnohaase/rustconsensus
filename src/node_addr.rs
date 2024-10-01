@@ -1,3 +1,4 @@
+use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,11 +11,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///       etc. It is purely in the interest of a rejoining node to have a different value from
 ///       previous join attempts from the same network address. Using the seconds since epoch is
 ///       just a convenient way of ensuring this in typical environments
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct NodeAddr {
     pub unique: u32,
     pub addr: SocketAddr,
 }
+impl Debug for NodeAddr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{:?}@{}]", self.addr, self.unique)
+    }
+}
+
 impl NodeAddr {
     #[cfg(test)]
     pub fn localhost(unique: u32) -> NodeAddr {
