@@ -1,4 +1,3 @@
-pub mod node;
 pub mod node_addr;
 pub mod comm;
 

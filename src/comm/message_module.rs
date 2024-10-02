@@ -1,5 +1,4 @@
 use std::fmt::{Debug, Formatter};
-use bytes::BufMut;
 
 
 /// A [MessageModuleId] is sent as part of a message's envelope to identify the module for
@@ -49,16 +48,8 @@ impl From<[u8;8]> for MessageModuleId {
 /// Messages for a given module are identified in the envelope by a specific and (hopefully) unique
 ///  [MessageModuleId].
 pub trait MessageModule: 'static {
-    type Message;
+    fn id(&self) -> MessageModuleId where Self: Sized;
 
-    fn id() -> MessageModuleId where Self: Sized;
-
-    fn receiver(&self) -> Box<dyn MessageModuleReceiver>;
-
-    fn ser(&self, msg: &Self::Message, buf: &mut impl BufMut);
-}
-
-pub trait MessageModuleReceiver: 'static + Sync + Send {
     /// called to handle a message that was received for this message module. It contains the
     ///  module specific message buffer, i.e. starting immediately *after* the module ID.
     ///

@@ -1,40 +1,35 @@
 use std::net::SocketAddr;
-use bytes::{Buf, BufMut};
-
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use bytes::BytesMut;
+use lazy_static::lazy_static;
 
-use rstest::rstest;
-use log::info;
 use tracing::Level;
-use rustconsensus::comm::message_module::{MessageModule, MessageModuleId, MessageModuleReceiver};
+
+use rustconsensus::comm::message_module::{MessageModule, MessageModuleId};
 use rustconsensus::comm::transport::UdpTransport;
 use rustconsensus::node_addr::NodeAddr;
 
+lazy_static! {
+    static ref ID: MessageModuleId = MessageModuleId::from("test");
+}
 
-struct TestMessageModule {}
+struct TestMessageModule {
+}
+impl TestMessageModule {
+    pub fn ser(&self, msg: u32) -> Vec<u8> {
+        msg.to_le_bytes().to_vec()
+    }
+}
+
 impl MessageModule for TestMessageModule {
-    type Message = u32;
-
-    fn id() -> MessageModuleId where Self: Sized {
-        MessageModuleId::from("test")
+    fn id(&self) -> MessageModuleId where Self: Sized {
+        *ID
     }
 
-    fn receiver(&self) -> Box<dyn MessageModuleReceiver> {
-        Box::new(TestMessageReceiver{})
-    }
-
-    fn ser(&self, msg: &Self::Message, buf: &mut impl BufMut) {
-        buf.put_u32_le(*msg);
-    }
+    fn on_message(&self, _buf: &[u8]) {}
 }
 
-struct TestMessageReceiver {}
-impl MessageModuleReceiver for TestMessageReceiver {
-    fn on_message(&self, buf: &[u8]) {}
-}
 
 fn init_logging() {
     tracing_subscriber::fmt()
@@ -47,7 +42,7 @@ fn init_logging() {
 async fn create_transport(addr: &str) -> Arc<UdpTransport> {
     let addr = NodeAddr::from(SocketAddr::from_str(addr).unwrap());
     let mut transport = UdpTransport::new(addr).await.unwrap();
-    transport.register_message_module(TestMessageModule{});
+    transport.register_message_module(Arc::new(TestMessageModule{}));
     Arc::new(transport)
 }
 
@@ -58,15 +53,17 @@ pub async fn main() {
     let t1 = create_transport("127.0.0.1:9810").await;
     let t2 = create_transport("127.0.0.1:9811").await;
 
+    let m = TestMessageModule{};
+
     let start = SystemTime::now();
 
     tokio::select!(
-        a = t1.recv() => {}
-        b = t2.recv() => {}
+        _ = t1.recv() => {}
+        _ = t2.recv() => {}
         _ = async {
             tokio::time::sleep(Duration::from_millis(500)).await;
             for i in 0u32..10 {
-                t1.send(t2.get_addr(), &TestMessageModule{}, &i).await.unwrap();
+                t1.send(t2.get_addr(), m.id(), &m.ser(i)).await.unwrap();
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         } => {}

@@ -1,15 +1,16 @@
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::sync::Arc;
 
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use rustc_hash::FxHashMap;
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::comm::envelope::Envelope;
-use crate::comm::message_module::{MessageModule, MessageModuleId, MessageModuleReceiver};
+use crate::comm::message_module::{MessageModule, MessageModuleId};
 use crate::node_addr::NodeAddr;
 
 
@@ -17,7 +18,7 @@ const MAX_MSG_SIZE: usize = 16384; //TODO make this configurable
 
 pub struct UdpTransport {
     myself: NodeAddr,
-    message_modules: FxHashMap<MessageModuleId, Box<dyn MessageModuleReceiver>>,
+    message_modules: FxHashMap<MessageModuleId, Arc<dyn MessageModule>>,
     cancel_sender: broadcast::Sender<()>,
     ipv4_send_socket: UdpSocket,
     ipv6_send_socket: UdpSocket,
@@ -49,18 +50,24 @@ impl UdpTransport {
         self.myself
     }
 
-    pub fn register_message_module<M: MessageModule>(&mut self, message_module: M) {
-        if let Some(_) = self.message_modules.insert(M::id(), message_module.receiver()) {
-            warn!("registering a second message module for module id {:?}, replacing the first", M::id())
+    pub fn register_message_module(&mut self, message_module: Arc<impl MessageModule>) {
+        let id = message_module.id();
+        if let Some(_) = self.message_modules.insert(id, message_module) {
+            warn!("registering a second message module for module id {:?}, replacing the first", id)
         }
     }
 
-    pub async fn send<M: MessageModule>(&self, to: NodeAddr, msg_module: &M, msg: &M::Message) -> anyhow::Result<()> {
+    /// Passing in the message as a byte slice instead of serializing it into the send buffer may introduce
+    ///  some overhead, but it simplifies the design. If profiling shows significant potential for
+    ///  speedup at some point, this may be worth revisiting, but for now it looks like a good trade-off.
+    ///
+    /// When Tokio's UdpSocket adds support for multi-buffer send, the point may be moot anyway.
+    pub async fn send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
         debug!(from=?self.myself, ?to, "sending message");
 
         let mut buf = BytesMut::new();
-        Envelope::write(self.myself, to, M::id(), &mut buf);
-        msg_module.ser(msg, &mut buf);
+        Envelope::write(self.myself, to, msg_module_id, &mut buf);
+        buf.put_slice(msg);
 
         //TODO message batching (?)
 
