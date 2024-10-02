@@ -1,110 +1,68 @@
-use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use bytes::{BufMut, BytesMut};
-use rustc_hash::FxHashMap;
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{error, trace, warn};
 
-use crate::comm::envelope::Envelope;
-use crate::comm::message_module::{MessageModule, MessageModuleId};
-use crate::node_addr::NodeAddr;
+#[async_trait::async_trait]
+pub trait Transport : Sync + Send {
+    async fn send(&self, to: SocketAddr, buf: &[u8]) -> anyhow::Result<()>;
 
+    async fn recv_loop(&self, handler: Arc<dyn MessageHandler>) -> anyhow::Result<()>;
 
-const MAX_MSG_SIZE: usize = 16384; //TODO make this configurable
+    fn cancel_recv_loop(&self);
+}
 
 pub struct UdpTransport {
-    myself: NodeAddr,
-    message_modules: FxHashMap<MessageModuleId, Arc<dyn MessageModule>>,
+    self_addr: SocketAddr,
     cancel_sender: broadcast::Sender<()>,
     ipv4_send_socket: UdpSocket,
     ipv6_send_socket: UdpSocket,
 }
-
-impl Debug for UdpTransport {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "UdpTransport{{myself:{:?}}}", &self.myself)
-    }
-}
-
 impl UdpTransport {
-    pub async fn new(myself: NodeAddr) -> anyhow::Result<UdpTransport> {
+    pub async fn new(self_addr: SocketAddr) -> anyhow::Result<UdpTransport> {
         let (cancel_sender, _) = broadcast::channel(1);
 
         let ipv4_send_socket = UdpSocket::bind(SocketAddr::from_str("0.0.0.0:0")?).await?;
         let ipv6_send_socket = UdpSocket::bind(SocketAddr::from_str("[::]:0")?).await?;
 
         Ok(UdpTransport {
-            myself,
-            message_modules: Default::default(),
+            self_addr,
             cancel_sender,
             ipv4_send_socket,
             ipv6_send_socket,
         })
     }
+}
 
-    pub fn get_addr(&self) -> NodeAddr {
-        self.myself
-    }
+pub trait MessageHandler : Sync + Send {
+    fn handle_message(&self, buf: &[u8], sender: SocketAddr);
+}
 
-    pub fn register_message_module(&mut self, message_module: Arc<impl MessageModule>) {
-        let id = message_module.id();
-        if let Some(_) = self.message_modules.insert(id, message_module) {
-            warn!("registering a second message module for module id {:?}, replacing the first", id)
-        }
-    }
-
-    /// Passing in the message as a byte slice instead of serializing it into the send buffer may introduce
-    ///  some overhead, but it simplifies the design. If profiling shows significant potential for
-    ///  speedup at some point, this may be worth revisiting, but for now it looks like a good trade-off.
-    ///
-    /// When Tokio's UdpSocket adds support for multi-buffer send, the point may be moot anyway.
-    pub async fn send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
-        debug!(from=?self.myself, ?to, "sending message");
-
-        let mut buf = BytesMut::new();
-        Envelope::write(self.myself, to, msg_module_id, &mut buf);
-        buf.put_slice(msg);
-
-        //TODO message batching (?)
-
-        let socket = if to.addr.is_ipv4() { &self.ipv4_send_socket } else { &self.ipv6_send_socket };
-        socket.send_to(&buf, to.addr).await?;
-
+#[async_trait::async_trait]
+impl Transport for UdpTransport {
+    async fn send(&self, to: SocketAddr, buf: &[u8]) -> anyhow::Result<()> {
+        let socket = if to.is_ipv4() { &self.ipv4_send_socket } else { &self.ipv6_send_socket };
+        socket.send_to(&buf, to).await?;
         Ok(())
     }
 
-    #[tracing::instrument]
-    pub async fn recv(&self) -> anyhow::Result<()> {
-        match self._recv().await {
-            Ok(()) => {
-                info!("shutting down receiver");
-                Ok(())
-            }
-            Err(e) => {
-                error!("error: {}", e);
-                Err(e)
-            }
-        }
-    }
-
-    async fn _recv(&self) -> anyhow::Result<()> {
-        let socket = UdpSocket::bind(self.myself.addr).await?;
-        let mut buf: [u8; MAX_MSG_SIZE] = [0; MAX_MSG_SIZE];
+    async fn recv_loop(&self, handler: Arc<dyn MessageHandler>) -> anyhow::Result<()> {
+        let socket = UdpSocket::bind(self.self_addr).await?;
+        let mut buf: [u8; crate::comm::messaging::MAX_MSG_SIZE] = [0; crate::comm::messaging::MAX_MSG_SIZE]; //TODO
 
         let mut cancel_receiver = self.cancel_sender.subscribe();
 
-        trace!("starting receive loop");
+        trace!("starting UDP receive loop");
 
         loop {
             tokio::select! {
                 r = socket.recv_from(&mut buf) => {
                     match r {
                         Ok((len, from)) => {
-                            self.handle_received(&buf[..len], from);
+                            handler.handle_message(&buf[..len], from);
                         }
                         Err(e) => {
                             error!(error = ?e, "error receiving from datagram socket");
@@ -119,33 +77,9 @@ impl UdpTransport {
         Ok(())
     }
 
-    fn handle_received(&self, msg_buf: &[u8], from: SocketAddr) {
-        //TODO safeguard against panics
-
-        debug!("received message");
-        trace!(?msg_buf);
-        //TODO trace raw message
-
-        if msg_buf.len() == MAX_MSG_SIZE {
-            warn!("received a message exceeding max message size of {} bytes - skipping", MAX_MSG_SIZE);
-            return;
-        }
-
-        let mut msg_buf = msg_buf;
-        match Envelope::try_read(&mut msg_buf, from, self.myself.addr) {
-            Ok(env) => {
-                //TODO check myself unique part
-
-                if let Some(message_module) = self.message_modules.get(&env.message_module_id) {
-                    message_module.on_message(msg_buf);
-                }
-                else {
-                    warn!("received message for module {:?} for which there is no handler - ignoring. Different nodes may be running different software versions", env.message_module_id);
-                }
-            }
-            Err(e) => {
-                warn!("received a message without a valid envelope - discarding: {}", e);
-            }
+    fn cancel_recv_loop(&self) {
+        if let Err(err) = self.cancel_sender.send(()) {
+            warn!(?err, "error canceling receive loop");
         }
     }
 }

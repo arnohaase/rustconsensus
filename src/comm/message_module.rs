@@ -47,8 +47,8 @@ impl From<[u8;8]> for MessageModuleId {
 ///
 /// Messages for a given module are identified in the envelope by a specific and (hopefully) unique
 ///  [MessageModuleId].
-pub trait MessageModule: 'static {
-    fn id(&self) -> MessageModuleId where Self: Sized;
+pub trait MessageModule: 'static + Sync + Send {
+    fn id(&self) -> MessageModuleId;
 
     /// called to handle a message that was received for this message module. It contains the
     ///  module specific message buffer, i.e. starting immediately *after* the module ID.

@@ -7,7 +7,7 @@ use lazy_static::lazy_static;
 use tracing::Level;
 
 use rustconsensus::comm::message_module::{MessageModule, MessageModuleId};
-use rustconsensus::comm::transport::UdpTransport;
+use rustconsensus::comm::messaging::Messaging;
 use rustconsensus::node_addr::NodeAddr;
 
 lazy_static! {
@@ -39,10 +39,11 @@ fn init_logging() {
         .ok();
 }
 
-async fn create_transport(addr: &str) -> Arc<UdpTransport> {
+async fn create_transport(addr: &str) -> Arc<Messaging> {
     let addr = NodeAddr::from(SocketAddr::from_str(addr).unwrap());
-    let mut transport = UdpTransport::new(addr).await.unwrap();
-    transport.register_message_module(Arc::new(TestMessageModule{}));
+    let transport = Messaging::new(addr, vec![
+        Arc::new(TestMessageModule{}),
+    ]).await.unwrap();
     Arc::new(transport)
 }
 

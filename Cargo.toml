@@ -13,6 +13,7 @@ tracing-subscriber = "*"
 [dependencies]
 #TODO version numbers
 anyhow = "*"
+async-trait = "*"
 bytes = "*"
 rustc-hash = "*"
 tokio = { version = "*", features = ["net", "sync", "macros"] } #TODO

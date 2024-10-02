@@ -2,7 +2,6 @@ pub mod node_addr;
 pub mod comm;
 
 
-
 #[cfg(test)]
 mod test {
     use tracing::Level;
