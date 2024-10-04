@@ -10,6 +10,12 @@ use std::fmt::{Debug, Formatter};
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct MessageModuleId(pub u64);
 
+impl MessageModuleId {
+    pub const fn new(value: &[u8; 8]) -> MessageModuleId {
+        Self(u64::from_le_bytes(*value))
+    }
+}
+
 impl Debug for MessageModuleId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let bytes = self.0.to_le_bytes();
@@ -24,21 +30,15 @@ impl Debug for MessageModuleId {
     }
 }
 
-impl From<&str> for MessageModuleId {
-    fn from(value: &str) -> Self {
-        let bytes = value.as_bytes();
-        assert!(bytes.len() <= 8, "a message module id must have at most 8 bytes");
-        let mut buf = [0u8;8];
-        buf[..bytes.len()].copy_from_slice(bytes);
-        buf.into()
-    }
-}
-
-impl From<[u8;8]> for MessageModuleId {
-    fn from(value: [u8; 8]) -> Self {
-        Self(u64::from_le_bytes(value)) //TODO check that network byte order keeps string representation
-    }
-}
+// impl From<&str> for MessageModuleId {
+//     fn from(value: &str) -> Self {
+//         let bytes = value.as_bytes();
+//         assert!(bytes.len() <= 8, "a message module id must have at most 8 bytes");
+//         let mut buf = [0u8;8];
+//         buf[..bytes.len()].copy_from_slice(bytes);
+//         buf.into()
+//     }
+// }
 
 
 /// Messages are pluggable, and they are organized in [MessageModule]s. Each module has its own
@@ -65,10 +65,8 @@ mod test {
     use super::*;
 
     #[rstest]
-    #[case::abc(MessageModuleId::from("abc"), "0x0000000000636261(\"abc\")")]
-    #[case::empty(MessageModuleId::from(""), "0x0000000000000000(\"\")")]
-    #[case::hex(MessageModuleId::from([1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8]), "0x0807060504030201(\"\\u{1}\\u{2}\\u{3}\\u{4}\\u{5}\\u{6}\\u{7}\\u{8}\")")]
-    #[case::no_utf(MessageModuleId::from([0xff, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8]), "0x00000000000000FF(\"???\")")]
+    #[case::abc(MessageModuleId::new(b"abc\0\0\0\0\0"), "0x0000000000636261(\"abc\")")]
+    #[case::empty(MessageModuleId::new(b"\0\0\0\0\0\0\0\0"), "0x0000000000000000(\"\")")]
     fn test_id_debug(#[case] id: MessageModuleId, #[case] expected: &str) {
         let formatted = format!("{:?}", id);
         assert_eq!(&formatted, expected);

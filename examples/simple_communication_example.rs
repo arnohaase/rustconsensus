@@ -2,7 +2,6 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use lazy_static::lazy_static;
 
 use tracing::Level;
 
@@ -10,13 +9,12 @@ use rustconsensus::comm::message_module::{MessageModule, MessageModuleId};
 use rustconsensus::comm::messaging::Messaging;
 use rustconsensus::node_addr::NodeAddr;
 
-lazy_static! {
-    static ref ID: MessageModuleId = MessageModuleId::from("test");
-}
 
 struct TestMessageModule {
 }
 impl TestMessageModule {
+    const ID: MessageModuleId = MessageModuleId::new(b"test\0\0\0\0");
+
     pub fn ser(&self, msg: u32) -> Vec<u8> {
         msg.to_le_bytes().to_vec()
     }
@@ -24,7 +22,7 @@ impl TestMessageModule {
 
 impl MessageModule for TestMessageModule {
     fn id(&self) -> MessageModuleId where Self: Sized {
-        *ID
+        Self::ID
     }
 
     fn on_message(&self, _buf: &[u8]) {}
@@ -58,17 +56,19 @@ pub async fn main() {
 
     let start = SystemTime::now();
 
-    tokio::select!(
-        _ = t1.recv() => {}
-        _ = t2.recv() => {}
-        _ = async {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            for i in 0u32..10 {
-                t1.send(t2.get_addr(), m.id(), &m.ser(i)).await.unwrap();
-            }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        } => {}
-    );
+    let t1_recv = t1.clone();
+    let t2_recv = t2.clone();
+
+    tokio::spawn(async move {tokio::select!(
+        _ = t1_recv.recv() => {}
+        _ = t2_recv.recv() => {}
+    )});
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    for i in 0u32..10 {
+        t1.send(t2.get_addr(), m.id(), &m.ser(i)).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     let duration = SystemTime::elapsed(&start).unwrap();
     println!("duration: {:?}", duration)

@@ -5,7 +5,6 @@ edition = "2021"
 
 [dev-dependencies]
 ctor = "*"
-lazy_static = "*"
 rstest = "*"
 tokio = { version = "*", features = ["full"]}
 tracing-subscriber = "*"

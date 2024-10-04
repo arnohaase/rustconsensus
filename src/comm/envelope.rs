@@ -66,12 +66,12 @@ mod test {
     #[case::just_envelope(b"1\0\0\04\0\0\0abcdefgh", b"", "1.2.3.4:5678", "9.8.7.6:1234", Some(Envelope {
     from: NodeAddr { unique: 0x31, addr: SocketAddr::from_str("1.2.3.4:5678").unwrap() },
     to:   NodeAddr { unique: 0x34, addr: SocketAddr::from_str("9.8.7.6:1234").unwrap() },
-    message_module_id: MessageModuleId::from(b"abcdefgh".clone())
+    message_module_id: MessageModuleId::new(b"abcdefgh")
     }))]
     #[case::remainder(b"2\0\0\03\0\0\012345678abc", b"abc", "4.3.2.1:5678", "1.2.3.4:1234", Some(Envelope {
     from: NodeAddr { unique: 0x32, addr: SocketAddr::from_str("4.3.2.1:5678").unwrap() },
     to:   NodeAddr { unique: 0x33, addr: SocketAddr::from_str("1.2.3.4:1234").unwrap() },
-    message_module_id: MessageModuleId::from(b"12345678".clone())
+    message_module_id: MessageModuleId::new(b"12345678")
     }))]
     #[case::too_short(b"123412341234567", b"", "1.2.3.4:5678", "9.8.7.6:1234", None)]
     fn test_envelope_try_read(#[case] mut buf: &[u8], #[case] buf_after: &[u8], #[case] from: &str, #[case] to: &str, #[case] expected: Option<Envelope>) {
@@ -100,10 +100,10 @@ mod test {
     }
 
     #[rstest]
-    #[case(1, 2, "abc", b"\x01\0\0\0\x02\0\0\0abc\0\0\0\0\0")]
-    fn test_envelope_write(#[case] from: u32, #[case] to: u32, #[case] module_id: &str, #[case] expected: &[u8]) {
+    #[case(1, 2, b"abc\0\0\0\0\0", b"\x01\0\0\0\x02\0\0\0abc\0\0\0\0\0")]
+    fn test_envelope_write(#[case] from: u32, #[case] to: u32, #[case] module_id: &[u8;8], #[case] expected: &[u8]) {
         let mut buf = BytesMut::new();
-        Envelope::write(NodeAddr::localhost(from), NodeAddr::localhost(to), MessageModuleId::from(module_id), &mut buf);
+        Envelope::write(NodeAddr::localhost(from), NodeAddr::localhost(to), MessageModuleId::new(module_id), &mut buf);
         assert_eq!(&buf, expected);
     }
 
