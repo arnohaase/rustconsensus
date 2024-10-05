@@ -51,7 +51,6 @@ impl CrdtOrdering {
 ///
 /// NB: merging is O(N)
 impl <T: Clone + Hash + Eq + PartialEq> Crdt for FxHashSet<T> {
-    //TODO unit test
     fn merge_from(&mut self, other: &Self) -> CrdtOrdering {
         let initial_self_len = self.len();
 
