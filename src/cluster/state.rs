@@ -82,7 +82,6 @@ pub enum NodeState {
     Removed,
 }
 impl Crdt for NodeState {
-    //TODO unit test
     fn merge_from(&mut self, other: &NodeState) -> CrdtOrdering {
         match Ord::cmp(self, other) {
             Ordering::Less => {
@@ -93,8 +92,72 @@ impl Crdt for NodeState {
                 CrdtOrdering::Equal
             }
             Ordering::Greater => {
-                CrdtOrdering::OtherWasBigger
+                CrdtOrdering::SelfWasBigger
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use rstest::rstest;
+    use NodeState::*;
+
+    use super::*;
+    use CrdtOrdering::*;
+
+    #[rstest]
+    #[case(Joining,  Joining,  Joining,   Equal)]
+    #[case(Joining,  WeaklyUp, WeaklyUp,  OtherWasBigger)]
+    #[case(Joining,  Up,       Up,        OtherWasBigger)]
+    #[case(Joining,  Leaving,  Leaving,   OtherWasBigger)]
+    #[case(Joining,  Exiting,  Exiting,   OtherWasBigger)]
+    #[case(Joining,  Down,     Down,      OtherWasBigger)]
+    #[case(Joining,  Removed,  Removed,   OtherWasBigger)]
+    #[case(WeaklyUp,  Joining,  WeaklyUp, SelfWasBigger)]
+    #[case(WeaklyUp,  WeaklyUp, WeaklyUp, Equal)]
+    #[case(WeaklyUp,  Up,       Up,       OtherWasBigger)]
+    #[case(WeaklyUp,  Leaving,  Leaving,  OtherWasBigger)]
+    #[case(WeaklyUp,  Exiting,  Exiting,  OtherWasBigger)]
+    #[case(WeaklyUp,  Down,     Down,     OtherWasBigger)]
+    #[case(WeaklyUp,  Removed,  Removed,  OtherWasBigger)]
+    #[case(Up,        Joining,  Up,       SelfWasBigger)]
+    #[case(Up,        WeaklyUp, Up,       SelfWasBigger)]
+    #[case(Up,        Up,       Up,       Equal)]
+    #[case(Up,        Leaving,  Leaving,  OtherWasBigger)]
+    #[case(Up,        Exiting,  Exiting,  OtherWasBigger)]
+    #[case(Up,        Down,     Down,     OtherWasBigger)]
+    #[case(Up,        Removed,  Removed,  OtherWasBigger)]
+    #[case(Leaving,   Joining,  Leaving,  SelfWasBigger)]
+    #[case(Leaving,   WeaklyUp, Leaving,  SelfWasBigger)]
+    #[case(Leaving,   Up,       Leaving,  SelfWasBigger)]
+    #[case(Leaving,   Leaving,  Leaving,  Equal)]
+    #[case(Leaving,   Exiting,  Exiting,  OtherWasBigger)]
+    #[case(Leaving,   Down,     Down,     OtherWasBigger)]
+    #[case(Leaving,   Removed,  Removed,  OtherWasBigger)]
+    #[case(Exiting,   Joining,  Exiting,  SelfWasBigger)]
+    #[case(Exiting,   WeaklyUp, Exiting,  SelfWasBigger)]
+    #[case(Exiting,   Up,       Exiting,  SelfWasBigger)]
+    #[case(Exiting,   Leaving,  Exiting,  SelfWasBigger)]
+    #[case(Exiting,   Exiting,  Exiting,  Equal)]
+    #[case(Exiting,   Down,     Down,     OtherWasBigger)]
+    #[case(Exiting,   Removed,  Removed,  OtherWasBigger)]
+    #[case(Down,      Joining,  Down,     SelfWasBigger)]
+    #[case(Down,      WeaklyUp, Down,     SelfWasBigger)]
+    #[case(Down,      Up,       Down,     SelfWasBigger)]
+    #[case(Down,      Leaving,  Down,     SelfWasBigger)]
+    #[case(Down,      Exiting,  Down,     SelfWasBigger)]
+    #[case(Down,      Down,     Down,     Equal)]
+    #[case(Down,      Removed,  Removed,  OtherWasBigger)]
+    #[case(Removed,   Joining,  Removed,  SelfWasBigger)]
+    #[case(Removed,   WeaklyUp, Removed,  SelfWasBigger)]
+    #[case(Removed,   Up,       Removed,  SelfWasBigger)]
+    #[case(Removed,   Leaving,  Removed,  SelfWasBigger)]
+    #[case(Removed,   Exiting,  Removed,  SelfWasBigger)]
+    #[case(Removed,   Down,     Removed,  SelfWasBigger)]
+    #[case(Removed,   Removed,  Removed,  Equal)]
+    fn test_node_state_merge(#[case] mut a: NodeState, #[case] b: NodeState, #[case] expected_state: NodeState, #[case] expected_ordering: CrdtOrdering) {
+        assert_eq!(a.merge_from(&b), expected_ordering);
+        assert_eq!(a, expected_state);
     }
 }
