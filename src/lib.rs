@@ -1,5 +1,6 @@
-pub mod node_addr;
-pub mod comm;
+pub mod msg;
+pub mod cluster;
+pub mod util;
 
 
 #[cfg(test)]

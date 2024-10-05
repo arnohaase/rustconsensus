@@ -6,10 +6,10 @@ use bytes::{BufMut, BytesMut};
 use rustc_hash::FxHashMap;
 use tracing::{debug, error, info, trace, warn};
 
-use crate::comm::envelope::Envelope;
-use crate::comm::message_module::{MessageModule, MessageModuleId};
-use crate::comm::transport::{MessageHandler, Transport, UdpTransport};
-use crate::node_addr::NodeAddr;
+use crate::msg::envelope::Envelope;
+use crate::msg::message_module::{MessageModule, MessageModuleId};
+use crate::msg::transport::{MessageHandler, Transport, UdpTransport};
+use crate::msg::node_addr::NodeAddr;
 
 
 pub const MAX_MSG_SIZE: usize = 16384; //TODO make this configurable

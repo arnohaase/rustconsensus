@@ -5,9 +5,9 @@ use std::time::{Duration, SystemTime};
 
 use tracing::Level;
 
-use rustconsensus::comm::message_module::{MessageModule, MessageModuleId};
-use rustconsensus::comm::messaging::Messaging;
-use rustconsensus::node_addr::NodeAddr;
+use rustconsensus::msg::message_module::{MessageModule, MessageModuleId};
+use rustconsensus::msg::messaging::Messaging;
+use rustconsensus::msg::node_addr::NodeAddr;
 
 
 struct TestMessageModule {
