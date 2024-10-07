@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///       etc. It is purely in the interest of a rejoining node to have a different value from
 ///       previous join attempts from the same network address. Using the seconds since epoch is
 ///       just a convenient way of ensuring this in typical environments
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub struct NodeAddr {
     pub unique: u32,
     pub addr: SocketAddr,
