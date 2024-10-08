@@ -1,4 +1,5 @@
 use std::fmt::{Debug, Formatter};
+use crate::msg::envelope::Envelope;
 
 
 /// A [MessageModuleId] is sent as part of a message's envelope to identify the module for
@@ -47,6 +48,7 @@ impl Debug for MessageModuleId {
 ///
 /// Messages for a given module are identified in the envelope by a specific and (hopefully) unique
 ///  [MessageModuleId].
+#[async_trait::async_trait]
 pub trait MessageModule: 'static + Sync + Send {
     fn id(&self) -> MessageModuleId;
 
@@ -56,7 +58,7 @@ pub trait MessageModule: 'static + Sync + Send {
     /// This is a blocking call, holding up the central receive loop. Non-trivial work should
     ///  probably be offloaded to some asynchronous processing, but it is up to the module
     ///  implementation to decide and do this.
-    fn on_message(&self, buf: &[u8]);
+    async fn on_message(&self, envelope: &Envelope, buf: &[u8]);
 }
 
 #[cfg(test)]

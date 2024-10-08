@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use tracing::Level;
+use rustconsensus::msg::envelope::Envelope;
 
 use rustconsensus::msg::message_module::{MessageModule, MessageModuleId};
 use rustconsensus::msg::messaging::Messaging;
@@ -20,12 +21,13 @@ impl TestMessageModule {
     }
 }
 
+#[async_trait::async_trait]
 impl MessageModule for TestMessageModule {
     fn id(&self) -> MessageModuleId where Self: Sized {
         Self::ID
     }
 
-    fn on_message(&self, _buf: &[u8]) {}
+    async fn on_message(&self, _envelope: &Envelope, _buf: &[u8]) {}
 }
 
 

@@ -10,8 +10,8 @@ use crate::msg::node_addr::NodeAddr;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Envelope {
     //TODO hashcode / checksum
-    from: NodeAddr,
-    to: NodeAddr,
+    pub from: NodeAddr,
+    pub to: NodeAddr,
     pub message_module_id: MessageModuleId,
 }
 impl Envelope {

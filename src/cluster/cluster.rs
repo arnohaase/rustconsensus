@@ -6,7 +6,8 @@ use std::ops::Deref;
 
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::thread_rng;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
+use crate::cluster::cluster_messages::ClusterMessage;
 
 use crate::msg::node_addr::NodeAddr;
 use crate::util::crdt::{Crdt, CrdtOrdering};
@@ -51,16 +52,25 @@ impl Ord for OrderedNodeAddr {
 
 
 pub struct Cluster {
+    myself: NodeAddr,
     members: BTreeMap<OrderedNodeAddr, NodeMembershipState>,
 }
 impl Cluster {
+    pub fn welcome_joining_node(&mut self, new_node: NodeAddr) {
+        let asdf = self.merge_node(NodeMembershipState {
+            node_addr: new_node,
+            state: NodeState::Joining,
+            seen_by: [self.myself.addr].into_iter().collect(),
+        });
+    }
+
     /// Merge a single node's state into the overall membership state. The returned ordering
     ///  refers to this specific node's state.
     //TODO unit test
-    pub fn merge_node(&mut self, other: &NodeMembershipState) -> CrdtOrdering {
+    pub fn merge_node(&mut self, other: NodeMembershipState) -> CrdtOrdering {
         let result = match self.members.entry(OrderedNodeAddr(other.node_addr)) {
             Entry::Occupied(mut e) => {
-                e.get_mut().merge_from(other)
+                e.get_mut().merge_from(&other)
             }
             Entry::Vacant(e) => {
                 e.insert(other.clone());
@@ -134,7 +144,7 @@ impl Cluster {
     /// Pick nodes for a new round of gossip by random, giving more weight to nodes that have not
     ///  yet converged. Nodes are picked randomly for each new round of gossip.
     //TODO unit test
-    pub (in crate::cluster) fn new_gossip_partners(&self) -> Vec<NodeAddr> {
+    pub (in crate::cluster) fn choose_gossip_partners(&self) -> Vec<NodeAddr> {
         const NUM_GOSSIP_PARTNERS: usize = 5; //TODO config
 
         let num_convergence_nodes = self.num_convergence_nodes();
@@ -162,36 +172,39 @@ impl Cluster {
         result
     }
 
-    pub (in crate::cluster) fn new_gossip_message(&self, for_node: &NodeAddr) -> String {
+    pub (in crate::cluster) fn gossip_message_for(&self, for_node: &NodeAddr) -> ClusterMessage {
+
 
 
 
         todo!()
     }
 
-    pub fn hash_for_equality_check(&self, nonce: u32) -> u64 {
+    pub fn hash_for_equality_check(&self, nonce: u32) -> FxHashMap<NodeAddr, u64> {
         //NB: spurious hash collision is not a problem - the nonce is to prevent it being permanent
 
         todo!()
     }
 }
-impl Crdt for Cluster {
-    //TODO unit test
-    fn merge_from(&mut self, other: &Self) -> CrdtOrdering {
-        let all_orderings = other.members.values()
-            .map(|other| {
-                self.merge_node(other)
-            });
-        CrdtOrdering::merge_all(all_orderings)
-            .unwrap_or(if self.members.is_empty() {CrdtOrdering::Equal} else { CrdtOrdering::SelfWasBigger })
-    }
-}
+
+//TODO do we need Cluster to be a Crdt?!
+
+// impl Crdt for Cluster {
+    // fn merge_from(&mut self, other: &Self) -> CrdtOrdering {
+    //     let all_orderings = other.members.values()
+    //         .map(|other| {
+    //             self.merge_node(other)
+    //         });
+    //     CrdtOrdering::merge_all(all_orderings)
+    //         .unwrap_or(if self.members.is_empty() {CrdtOrdering::Equal} else { CrdtOrdering::SelfWasBigger })
+    // }
+// }
 
 #[derive(Debug, Clone)]
 pub struct NodeMembershipState {
-    node_addr: NodeAddr,
-    state: NodeState,
-    seen_by: FxHashSet<SocketAddr>,
+    pub node_addr: NodeAddr,
+    pub state: NodeState,
+    pub seen_by: FxHashSet<SocketAddr>,
 }
 impl Crdt for NodeMembershipState {
     //TODO unit test

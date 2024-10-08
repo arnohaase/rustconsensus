@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use rustc_hash::FxHashMap;
 use tracing::{debug, error, info, trace, warn};
 
@@ -58,7 +58,8 @@ impl Messaging {
 
         let mut buf = BytesMut::new();
         Envelope::write(self.myself, to, msg_module_id, &mut buf);
-        buf.put_slice(msg);
+
+        buf.extend_from_slice(msg);
 
         self.transport.send(to.addr, &buf).await?;
         Ok(())
@@ -86,10 +87,17 @@ impl Messaging {
     }
 }
 
+/// This is a well-known ID: Messaging checks the unique part that a message is addressed to,
+///  except for JOIN messages
+pub const JOIN_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"ClstJoin");
+
+
 struct ReceivedMessageHandler {
     myself: NodeAddr,
     message_modules: Arc<FxHashMap<MessageModuleId, Arc<dyn MessageModule>>>,
 }
+
+//TODO why do we need the MessageHandler trait?!
 
 impl MessageHandler for ReceivedMessageHandler {
     fn handle_message(&self, msg_buf: &[u8], sender: SocketAddr) {
@@ -105,14 +113,18 @@ impl MessageHandler for ReceivedMessageHandler {
 
         let mut msg_buf = msg_buf;
         match Envelope::try_read(&mut msg_buf, sender, self.myself.addr) {
-            Ok(env) => {
-                //TODO check myself unique part
+            Ok(envelope) => {
+                // NB: JOIN messages are the only messages that are accepted regardless of target node address' unique part
+                if envelope.to.unique != self.myself.unique && envelope.message_module_id != JOIN_MESSAGE_MODULE_ID {
+                    warn!("received a message for {:?}: wrong unique part - was a node restarted without rejoining? Ignoring the message", envelope.to);
+                    return;
+                }
 
-                if let Some(message_module) = self.message_modules.get(&env.message_module_id) {
-                    message_module.on_message(msg_buf);
+                if let Some(message_module) = self.message_modules.get(&envelope.message_module_id) {
+                    message_module.on_message(&envelope, msg_buf);
                 }
                 else {
-                    warn!("received message for module {:?} for which there is no handler - ignoring. Different nodes may be running different software versions", env.message_module_id);
+                    warn!("received message for module {:?} for which there is no handler - ignoring. Different nodes may be running different software versions", envelope.message_module_id);
                 }
             }
             Err(e) => {
