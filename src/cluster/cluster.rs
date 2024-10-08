@@ -50,15 +50,15 @@ impl Ord for OrderedNodeAddr {
 }
 
 
-pub struct MembershipState {
+pub struct Cluster {
     members: BTreeMap<OrderedNodeAddr, NodeMembershipState>,
 }
-impl MembershipState {
+impl Cluster {
     /// Merge a single node's state into the overall membership state. The returned ordering
     ///  refers to this specific node's state.
     //TODO unit test
-    pub fn merge_node(&mut self, addr: NodeAddr, other: &NodeMembershipState) -> CrdtOrdering {
-        let result = match self.members.entry(OrderedNodeAddr(addr)) {
+    pub fn merge_node(&mut self, other: &NodeMembershipState) -> CrdtOrdering {
+        let result = match self.members.entry(OrderedNodeAddr(other.node_addr)) {
             Entry::Occupied(mut e) => {
                 e.get_mut().merge_from(other)
             }
@@ -74,7 +74,7 @@ impl MembershipState {
             //      as inactive should not have this inactive node in its 'seen by' sets
             //      anyway
             for s in self.members.values_mut() {
-                let _ = s.seen_by.remove(&addr.addr);
+                let _ = s.seen_by.remove(&other.node_addr.addr);
             }
         }
 
@@ -162,16 +162,25 @@ impl MembershipState {
         result
     }
 
-    pub fn hash_for_equality_check(&self) -> u64 {
+    pub (in crate::cluster) fn new_gossip_message(&self, for_node: &NodeAddr) -> String {
+
+
+
+        todo!()
+    }
+
+    pub fn hash_for_equality_check(&self, nonce: u32) -> u64 {
+        //NB: spurious hash collision is not a problem - the nonce is to prevent it being permanent
+
         todo!()
     }
 }
-impl Crdt for MembershipState {
+impl Crdt for Cluster {
     //TODO unit test
     fn merge_from(&mut self, other: &Self) -> CrdtOrdering {
-        let all_orderings = other.members.iter()
-            .map(|(addr, other)| {
-                self.merge_node(**addr, other)
+        let all_orderings = other.members.values()
+            .map(|other| {
+                self.merge_node(other)
             });
         CrdtOrdering::merge_all(all_orderings)
             .unwrap_or(if self.members.is_empty() {CrdtOrdering::Equal} else { CrdtOrdering::SelfWasBigger })
@@ -180,6 +189,7 @@ impl Crdt for MembershipState {
 
 #[derive(Debug, Clone)]
 pub struct NodeMembershipState {
+    node_addr: NodeAddr,
     state: NodeState,
     seen_by: FxHashSet<SocketAddr>,
 }
