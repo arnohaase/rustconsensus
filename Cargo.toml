@@ -14,6 +14,8 @@ tracing-subscriber = "*"
 anyhow = "*"
 async-trait = "*"
 bytes = "*"
+bytes-varint = "*"
+num_enum = "*"
 rand = "*"
 rustc-hash = "*"
 tokio = { version = "*", features = ["net", "sync", "macros"] } #TODO

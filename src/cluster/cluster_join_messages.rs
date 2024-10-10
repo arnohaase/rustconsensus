@@ -39,7 +39,7 @@ impl MessageModule for ClusterJoinMessageModule {
 
                     self.cluster.write()
                         .await
-                        .welcome_joining_node(envelope.from);
+                        .add_joining_node(envelope.from);
                 },
                 _ => warn!("invalid message, skipping"),
             };

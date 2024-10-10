@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
 use std::ops::Deref;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::thread_rng;
@@ -56,12 +56,16 @@ pub struct Cluster {
     members: BTreeMap<OrderedNodeAddr, NodeMembershipState>,
 }
 impl Cluster {
-    pub fn welcome_joining_node(&mut self, new_node: NodeAddr) {
+    pub fn add_joining_node(&mut self, new_node: NodeAddr) {
         let asdf = self.merge_node(NodeMembershipState {
             node_addr: new_node,
             state: NodeState::Joining,
-            seen_by: [self.myself.addr].into_iter().collect(),
+            seen_by: [self.myself].into_iter().collect(),
         });
+    }
+
+    pub fn get_membership_state(&self, addr: NodeAddr) -> Option<&NodeMembershipState> {
+        self.members.get(&OrderedNodeAddr(addr))
     }
 
     /// Merge a single node's state into the overall membership state. The returned ordering
@@ -84,7 +88,7 @@ impl Cluster {
             //      as inactive should not have this inactive node in its 'seen by' sets
             //      anyway
             for s in self.members.values_mut() {
-                let _ = s.seen_by.remove(&other.node_addr.addr);
+                let _ = s.seen_by.remove(&other.node_addr);
             }
         }
 
@@ -204,7 +208,7 @@ impl Cluster {
 pub struct NodeMembershipState {
     pub node_addr: NodeAddr,
     pub state: NodeState,
-    pub seen_by: FxHashSet<SocketAddr>,
+    pub seen_by: FxHashSet<NodeAddr>,
 }
 impl Crdt for NodeMembershipState {
     //TODO unit test
@@ -229,29 +233,30 @@ impl Crdt for NodeMembershipState {
 
 
 /// see https://doc.akka.io/docs/akka/current/typed/cluster-membership.html
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[repr(u8)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, TryFromPrimitive, IntoPrimitive)]
 pub enum NodeState {
     /// A node has registered its wish to join the cluster, starting dissemination of that wish
     ///  through gossip - but the leader has not yet transitions the node to 'up' (after gossip
     ///  convergence was reached)
-    Joining,
+    Joining = 1,
     /// todo
-    WeaklyUp,
+    WeaklyUp = 2,
     /// The regular state for a node that is 'up and running', a full member of the cluster. Note
     ///  that reachability (or lack thereof) is orthogonal to states, so a node can be 'up' but
     ///  (temporarily) unreachable.
-    Up,
+    Up = 3,
     /// A node transitions to 'Leaving' when it starts to leave the cluster (typically as part of
     ///  its shutdown). Nodes in state 'leaving' are still full members of the cluster, but this
     ///  state allows 'higher-up' components built on top of the cluster to prepare for a node
     ///  leaving the cluster in a graceful manner (e.g resharding), i.e. without any gap in
     ///  operation.
-    Leaving,
+    Leaving = 4,
     /// Once all preparations for a node leaving the cluster are completed (i.e. confirmed by
     ///  all registered components on the leader node), the leader transitions a node to 'Exiting'.
     ///  An Exiting node is basically not part of the cluster anymore, and this is a transient
     ///  state for reaching gossip consensus before the leader moves the node to 'Removed'
-    Exiting,
+    Exiting = 5,
     /// 'Down' is not part of a node's regular lifecycle, but is assigned to unreachable nodes
     ///  algorithmically once some threshold of unreachability is passed; the details are intricate.
     ///
@@ -261,12 +266,12 @@ pub enum NodeState {
     ///
     /// Note that 'down' nodes are excluded from heartbeat and gossip - they are essentially written
     ///  of, and this state is just part of writing them out of the books.
-    Down,
+    Down = 6,
     /// This is a tombstone state: Once there is consensus that a node 'Removed', it can and should
     ///  be removed from internal tracking data structures: It ceases to exist for all intents and
     ///  purposes, and no messages (gossip, heartbeat or otherwise) should be sent to it. Its
     ///  process is likely terminated.
-    Removed,
+    Removed = 7,
 }
 impl NodeState {
     /// Active nodes are the ones participating in gossip. Inactive nodes may be gossipped about,

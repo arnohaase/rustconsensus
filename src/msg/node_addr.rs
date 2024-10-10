@@ -2,6 +2,8 @@ use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use bytes::{Buf, BytesMut};
+
 /// Nodes' lifecycle of membership in a cluster is monotonous to allow tracking with CRDTs, so a
 ///  node can never rejoin once it left (or was evicted). To allow rejoining from the same network
 ///  address, a u32 is added to the network address for identification purposes (initialized with
@@ -31,6 +33,14 @@ impl NodeAddr {
             unique,
             addr,
         }
+    }
+
+    pub fn ser(&self, buf: &mut BytesMut) {
+        todo!()
+    }
+
+    pub fn deser(buf: &impl Buf) -> anyhow::Result<NodeAddr> {
+        todo!()
     }
 }
 
