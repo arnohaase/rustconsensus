@@ -7,9 +7,9 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::thread_rng;
 use rustc_hash::{FxHashMap, FxHashSet};
-use crate::cluster::cluster_messages::ClusterMessage;
+use crate::_cluster::cluster_messages::ClusterMessage;
 
-use crate::msg::node_addr::NodeAddr;
+use crate::messaging::node_addr::NodeAddr;
 use crate::util::crdt::{Crdt, CrdtOrdering};
 
 //TODO concurrent initial startup -> how to detect and merge disjoint clusters
@@ -21,7 +21,7 @@ use crate::util::crdt::{Crdt, CrdtOrdering};
 //TODO handle reconnect by a node that is still marked as 'unreachable' or 'down'
 
 //TODO heartbeat -> if one node is isolated, how does it know if only its partners are
-//          unreachable, or the entire rest of the cluster?
+//          unreachable, or the entire rest of the _cluster?
 //TODO should every node track the leader's heartbeat?
 
 //TODO when the topology changes, 'unreachable' may not be the detecting node's responsibility any more
@@ -110,7 +110,7 @@ impl Cluster {
     }
 
     /// Checks if there is gossip convergence from this node's perspective, i.e. this node's
-    ///  perspective on the cluster has been confirmed by all other nodes.
+    ///  perspective on the _cluster has been confirmed by all other nodes.
     //TODO unit test
     pub fn is_converged(&self) -> bool {
         let num_convergence_nodes = self.num_convergence_nodes();
@@ -125,7 +125,7 @@ impl Cluster {
     ///
     /// In that case, the oldest node in 'up' state is used, or failing that, the oldest active
     ///  node.
-    //TODO graceful handling of cluster shutdown - what if all nodes move to 'removed', or 'joining' / 'weakly up'?
+    //TODO graceful handling of _cluster shutdown - what if all nodes move to 'removed', or 'joining' / 'weakly up'?
     //TODO unit test
     pub fn leader(&self) -> Option<NodeAddr> {
         if self.is_converged() {
@@ -148,7 +148,7 @@ impl Cluster {
     /// Pick nodes for a new round of gossip by random, giving more weight to nodes that have not
     ///  yet converged. Nodes are picked randomly for each new round of gossip.
     //TODO unit test
-    pub (in crate::cluster) fn choose_gossip_partners(&self) -> Vec<NodeAddr> {
+    pub (in crate::_cluster) fn choose_gossip_partners(&self) -> Vec<NodeAddr> {
         const NUM_GOSSIP_PARTNERS: usize = 5; //TODO config
 
         let num_convergence_nodes = self.num_convergence_nodes();
@@ -176,7 +176,7 @@ impl Cluster {
         result
     }
 
-    pub (in crate::cluster) fn gossip_message_for(&self, for_node: &NodeAddr) -> ClusterMessage {
+    pub (in crate::_cluster) fn gossip_message_for(&self, for_node: &NodeAddr) -> ClusterMessage {
 
 
 
@@ -236,25 +236,25 @@ impl Crdt for NodeMembershipState {
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, TryFromPrimitive, IntoPrimitive)]
 pub enum NodeState {
-    /// A node has registered its wish to join the cluster, starting dissemination of that wish
+    /// A node has registered its wish to join the _cluster, starting dissemination of that wish
     ///  through gossip - but the leader has not yet transitions the node to 'up' (after gossip
     ///  convergence was reached)
     Joining = 1,
     /// todo
     WeaklyUp = 2,
-    /// The regular state for a node that is 'up and running', a full member of the cluster. Note
+    /// The regular state for a node that is 'up and running', a full member of the _cluster. Note
     ///  that reachability (or lack thereof) is orthogonal to states, so a node can be 'up' but
     ///  (temporarily) unreachable.
     Up = 3,
-    /// A node transitions to 'Leaving' when it starts to leave the cluster (typically as part of
-    ///  its shutdown). Nodes in state 'leaving' are still full members of the cluster, but this
-    ///  state allows 'higher-up' components built on top of the cluster to prepare for a node
-    ///  leaving the cluster in a graceful manner (e.g resharding), i.e. without any gap in
+    /// A node transitions to 'Leaving' when it starts to leave the _cluster (typically as part of
+    ///  its shutdown). Nodes in state 'leaving' are still full members of the _cluster, but this
+    ///  state allows 'higher-up' components built on top of the _cluster to prepare for a node
+    ///  leaving the _cluster in a graceful manner (e.g resharding), i.e. without any gap in
     ///  operation.
     Leaving = 4,
-    /// Once all preparations for a node leaving the cluster are completed (i.e. confirmed by
+    /// Once all preparations for a node leaving the _cluster are completed (i.e. confirmed by
     ///  all registered components on the leader node), the leader transitions a node to 'Exiting'.
-    ///  An Exiting node is basically not part of the cluster anymore, and this is a transient
+    ///  An Exiting node is basically not part of the _cluster anymore, and this is a transient
     ///  state for reaching gossip consensus before the leader moves the node to 'Removed'
     Exiting = 5,
     /// 'Down' is not part of a node's regular lifecycle, but is assigned to unreachable nodes

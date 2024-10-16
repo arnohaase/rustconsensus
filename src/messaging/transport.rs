@@ -51,7 +51,7 @@ impl Transport for UdpTransport {
 
     async fn recv_loop(&self, handler: Arc<dyn MessageHandler>) -> anyhow::Result<()> {
         let socket = UdpSocket::bind(self.self_addr).await?;
-        let mut buf: [u8; crate::msg::messaging::MAX_MSG_SIZE] = [0; crate::msg::messaging::MAX_MSG_SIZE]; //TODO
+        let mut buf: [u8; crate::messaging::messaging::MAX_MSG_SIZE] = [0; crate::messaging::messaging::MAX_MSG_SIZE]; //TODO
 
         let mut cancel_receiver = self.cancel_sender.subscribe();
 

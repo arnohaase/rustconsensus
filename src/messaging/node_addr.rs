@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::{Buf, BytesMut};
 
-/// Nodes' lifecycle of membership in a cluster is monotonous to allow tracking with CRDTs, so a
+/// Nodes' lifecycle of membership in a _cluster is monotonous to allow tracking with CRDTs, so a
 ///  node can never rejoin once it left (or was evicted). To allow rejoining from the same network
 ///  address, a u32 is added to the network address for identification purposes (initialized with
 ///  the seconds since epoch) for disambiguation.
@@ -13,7 +13,7 @@ use bytes::{Buf, BytesMut};
 ///       etc. It is purely in the interest of a rejoining node to have a different value from
 ///       previous join attempts from the same network address. Using the seconds since epoch is
 ///       just a convenient way of ensuring this in typical environments
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct NodeAddr {
     pub unique: u32,
     pub addr: SocketAddr,

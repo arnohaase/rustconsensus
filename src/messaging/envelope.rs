@@ -3,8 +3,8 @@ use std::net::SocketAddr;
 use anyhow::anyhow;
 use bytes::{Buf, BufMut, BytesMut};
 
-use crate::msg::message_module::MessageModuleId;
-use crate::msg::node_addr::NodeAddr;
+use crate::messaging::message_module::MessageModuleId;
+use crate::messaging::node_addr::NodeAddr;
 
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -58,8 +58,8 @@ mod test {
     use bytes::BytesMut;
     use rstest::rstest;
 
-    use crate::msg::message_module::MessageModuleId;
-    use crate::msg::node_addr::NodeAddr;
+    use crate::messaging::message_module::MessageModuleId;
+    use crate::messaging::node_addr::NodeAddr;
     use super::*;
 
     #[rstest]

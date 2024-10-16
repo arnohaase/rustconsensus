@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use tracing::Level;
-use rustconsensus::msg::envelope::Envelope;
+use rustconsensus::messaging::envelope::Envelope;
 
-use rustconsensus::msg::message_module::{MessageModule, MessageModuleId};
-use rustconsensus::msg::messaging::Messaging;
-use rustconsensus::msg::node_addr::NodeAddr;
+use rustconsensus::messaging::message_module::{MessageModule, MessageModuleId};
+use rustconsensus::messaging::messaging::Messaging;
+use rustconsensus::messaging::node_addr::NodeAddr;
 
 
 struct TestMessageModule {

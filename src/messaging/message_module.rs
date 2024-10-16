@@ -1,5 +1,5 @@
 use std::fmt::{Debug, Formatter};
-use crate::msg::envelope::Envelope;
+use crate::messaging::envelope::Envelope;
 
 
 /// A [MessageModuleId] is sent as part of a message's envelope to identify the module for

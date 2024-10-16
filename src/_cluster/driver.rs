@@ -7,11 +7,11 @@ use tokio::task;
 use tokio::time::sleep;
 use tracing::error;
 
-use crate::cluster::cluster::Cluster;
-use crate::msg::message_module::MessageModuleId;
-use crate::msg::messaging::Messaging;
+use crate::_cluster::cluster::Cluster;
+use crate::messaging::message_module::MessageModuleId;
+use crate::messaging::messaging::Messaging;
 
-/// This is the active part and wrapper around a node's view of cluster state.
+/// This is the active part and wrapper around a node's view of _cluster state.
 pub struct ClusterDriver {
     state: RwLock<Cluster>,
     messaging: Arc<Messaging>,

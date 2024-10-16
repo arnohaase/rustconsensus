@@ -4,10 +4,10 @@ use bytes::BufMut;
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
-use crate::cluster::cluster::Cluster;
-use crate::msg::envelope::Envelope;
-use crate::msg::message_module::{MessageModule, MessageModuleId};
-use crate::msg::messaging::JOIN_MESSAGE_MODULE_ID;
+use crate::_cluster::cluster::Cluster;
+use crate::messaging::envelope::Envelope;
+use crate::messaging::message_module::{MessageModule, MessageModuleId};
+use crate::messaging::messaging::JOIN_MESSAGE_MODULE_ID;
 
 
 pub struct ClusterJoinMessageModule {
