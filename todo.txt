@@ -1,0 +1,19 @@
+todo
+----
+* cluster join
+* ser / deser NodeAddr
+* MembershipState::is_gossip_partner
+* merge NodeState
+* calculate gossip summary digest (SHA-1)
+* leader actions
+* convergence
+* leader change event
+* cleanup; removal of converged 'is_reachable=true'
+* weakly up
+* increased gossip frequency when not converged
+* termination / shutdown
+* extract stuff to varint crate
+* update_current_reachability: handle additional / removed nodes since last call
+* roles
+* hashcode / checksum in envelope
+

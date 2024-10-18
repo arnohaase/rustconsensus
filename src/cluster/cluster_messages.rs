@@ -179,7 +179,7 @@ impl ClusterMessage {
         for s in &data.nodes {
             addr_pool.put_node_addr(buf, s.addr);
             buf.put_u8(s.membership_state.into());
-            &s.reachability; //TODO!()
+            Self::ser_reachability(&s.reachability, buf, &mut addr_pool);
             addr_pool.put_addr_set(buf, s.seen_by.iter());
         }
 
@@ -369,9 +369,6 @@ pub struct HeartbeatResponseData {
     pub counter: u32,
     pub timestamp_nanos: u64,
 }
-
-
-
 
 
 /// Messages can contain the same NodeAddr values numerous times (e.g. in 'seen by' sets). This
