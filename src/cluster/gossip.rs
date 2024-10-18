@@ -1,7 +1,8 @@
 use std::sync::Arc;
+
 use rand::{Rng, RngCore};
-use rustc_hash::FxHashSet;
 use tokio::sync::RwLock;
+
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_messages::{ClusterMessage, GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipNodesData, GossipSummaryDigestData};
 use crate::cluster::cluster_state::{ClusterState, NodeState};

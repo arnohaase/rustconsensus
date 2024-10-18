@@ -54,6 +54,16 @@ impl Messaging {
     ///
     /// When Tokio's UdpSocket adds support for multi-buffer send, the point may be moot anyway.
     pub async fn send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
+        match self._send(to, msg_module_id, msg).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                error!("error sending message: {}", e);
+                Err(e)
+            }
+        }
+    }
+
+    async fn _send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
         debug!(from=?self.myself, ?to, "sending message");
 
         let mut buf = BytesMut::new();
@@ -99,8 +109,9 @@ struct ReceivedMessageHandler {
 
 //TODO why do we need the MessageHandler trait?!
 
+#[async_trait::async_trait]
 impl MessageHandler for ReceivedMessageHandler {
-    fn handle_message(&self, msg_buf: &[u8], sender: SocketAddr) {
+    async fn handle_message(&self, msg_buf: &[u8], sender: SocketAddr) {
         //TODO safeguard against panics
 
         debug!("received message");
@@ -121,7 +132,7 @@ impl MessageHandler for ReceivedMessageHandler {
                 }
 
                 if let Some(message_module) = self.message_modules.get(&envelope.message_module_id) {
-                    message_module.on_message(&envelope, msg_buf);
+                    message_module.on_message(&envelope, msg_buf).await;
                 }
                 else {
                     warn!("received message for module {:?} for which there is no handler - ignoring. Different nodes may be running different software versions", envelope.message_module_id);

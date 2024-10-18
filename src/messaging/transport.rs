@@ -37,8 +37,9 @@ impl UdpTransport {
     }
 }
 
+#[async_trait::async_trait]
 pub trait MessageHandler : Sync + Send {
-    fn handle_message(&self, buf: &[u8], sender: SocketAddr);
+    async fn handle_message(&self, buf: &[u8], sender: SocketAddr);
 }
 
 #[async_trait::async_trait]
@@ -62,7 +63,7 @@ impl Transport for UdpTransport {
                 r = socket.recv_from(&mut buf) => {
                     match r {
                         Ok((len, from)) => {
-                            handler.handle_message(&buf[..len], from);
+                            handler.handle_message(&buf[..len], from).await;
                         }
                         Err(e) => {
                             error!(error = ?e, "error receiving from datagram socket");

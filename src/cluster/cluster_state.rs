@@ -2,7 +2,6 @@ use std::sync::Arc;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::{FxHashMap, FxHashSet};
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::unreachable_set::UnreachableSet;
 use crate::messaging::node_addr::NodeAddr;
 
 
@@ -10,7 +9,7 @@ pub struct ClusterState { //todo  move to ../cluster_state?
     myself: NodeAddr,
     config: Arc<ClusterConfig>,
     nodes_with_state: FxHashMap<NodeAddr, NodeState>,
-    unreachable_set: UnreachableSet, //TODO ???
+    // unreachable_set: UnreachableSet, //TODO ???
 }
 impl ClusterState {
     pub fn myself(&self) -> NodeAddr {
@@ -26,6 +25,10 @@ impl ClusterState {
     }
 
     pub fn merge_node_state(&mut self, state: &NodeState) {
+        todo!()
+    }
+
+    pub fn update_current_reachability(&mut self, reachability: &FxHashMap<NodeAddr, bool>) {
         todo!()
     }
 }

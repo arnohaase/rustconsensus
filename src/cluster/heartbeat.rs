@@ -1,11 +1,11 @@
-use std::cmp::{max, Ordering};
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
+use std::collections::hash_map::Entry;
 use std::f64::consts::PI;
 use std::hash::{Hash, Hasher};
 use std::ops::Bound::{Excluded, Unbounded};
-use std::ops::RangeBounds;
 use std::sync::Arc;
-use rustc_hash::FxHasher;
+use rustc_hash::{FxHasher, FxHashMap};
 use tokio::time::Instant;
 use tracing::{debug, error, warn};
 use crate::cluster::cluster_config::ClusterConfig;
@@ -19,10 +19,15 @@ pub struct HeartBeat {
     config: Arc<ClusterConfig>,
     counter: u32,
     reference_time: Instant,
+    registry: HeartbeatRegistry,
 }
 impl HeartBeat {
+    pub fn new() -> HeartBeat {
+        todo!()
+    }
+
     //TODO unit test
-    pub fn heartbeat_recipients(&self, cluster_state: &ClusterState) -> Vec<NodeAddr> {
+    pub fn heartbeat_recipients(&mut self, cluster_state: &ClusterState) -> Vec<NodeAddr> {
         let mut result = Vec::new();
         let mut num_reachable = 0;
 
@@ -46,6 +51,7 @@ impl HeartBeat {
             }
         }
 
+        self.registry.clean_up_untracked_nodes(&result);
         result
     }
 
@@ -57,13 +63,13 @@ impl HeartBeat {
         }
     }
 
-    fn timestamp_nanos_now(&mut self) -> u32 {
+    fn timestamp_nanos_now(&mut self) -> u64 {
         match Instant::now().duration_since(self.reference_time).as_nanos().try_into() {
             Ok(nanos) => nanos,
-            Err(_) => {
-                error!("system clock appears to have jumped widely - trying to readjust");
+            Err(e) => {
+                error!("system clock appears to have jumped widely - trying to readjust: {}", e);
                 self.reference_time = Instant::now();
-                u32::MAX //TODO
+                u64::MAX //TODO
             }
         }
     }
@@ -80,28 +86,67 @@ impl HeartBeat {
             return;
         }
 
-        let received_timestamp = response.timestamp_nanos as u64;
-        if received_timestamp + self.config.ignore_heartbeat_response_after_n_seconds as u64 * 1_000_000_000 < self.timestamp_nanos_now() as u64 {
+        let received_timestamp_nanos = response.timestamp_nanos;
+        if received_timestamp_nanos + self.config.ignore_heartbeat_response_after_n_seconds as u64 * 1_000_000_000 < self.timestamp_nanos_now() { //TODO check overflow
             warn!("received heartbeat response that took too long from {:?} - ignoring", from);
             return;
         }
 
+        match self.timestamp_nanos_now().checked_sub(response.timestamp_nanos) {
+            None => {
+                warn!("system clock apparently went backwards - this is not supposed to happen");
+                return;
+            }
+            Some(rtt_nanos) => {
+                if rtt_nanos > self.config.ignore_heartbeat_response_after_n_seconds as u64 * 1_000_000_000 {
+                    warn!("received heartbeat response that took too long from {:?} - ignoring", from);
+                    return;
+                }
+                self.registry.on_heartbeat_response(from, rtt_nanos);
+            }
+        };
+    }
 
-
-
-
-        //TODO track reachability transitions
-
-
-
-        todo!()
-
+    pub fn get_current_reachability(&self) -> FxHashMap<NodeAddr, bool> {
+        self.registry.trackers.iter()
+            .map(|(addr, tracker)| (addr, tracker.is_reachable()))
+            .map(|(addr, b)| (addr.clone(), b))
+            .collect()
     }
 }
 
 
-struct ReachabilityRegistry {
+struct HeartbeatRegistry {
+    config: Arc<ClusterConfig>,
+    trackers: FxHashMap<NodeAddr, HeartbeatTracker>,
+}
+impl HeartbeatRegistry {
+    //TODO clean up untracked remotes
 
+    //TODO unit test
+    fn on_heartbeat_response(&mut self, other: NodeAddr, rtt_nanos: u64) {
+        match self.trackers.entry(other) {
+            Entry::Occupied(mut e) => e.get_mut().on_heartbeat_roundtrip(rtt_nanos),
+            Entry::Vacant(e) => {
+                let mut tracker = HeartbeatTracker::new(self.config.clone(), other);
+                tracker.on_heartbeat_roundtrip(rtt_nanos);
+                let _ = e.insert(tracker);
+            }
+        }
+    }
+
+    //TODO unit test
+    fn clean_up_untracked_nodes(&mut self, heartbeat_recipients: &[NodeAddr]) {
+        let untracked_nodes = self.trackers.keys()
+            .filter(|addr| !heartbeat_recipients.contains(addr))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for addr in untracked_nodes {
+            debug!("heartbeat was previously exchanged with {:?}, is not tracked any more", addr);
+            self.trackers.remove(&addr);
+        }
+    }
 }
 
 
@@ -124,22 +169,22 @@ impl HeartbeatTracker {
     }
 
     //TODO unit test
-    fn on_heartbeat_roundtrip(&mut self, duration_nanos: u32) {
+    fn on_heartbeat_roundtrip(&mut self, rtt_nanos: u64) {
         self.last_seen = Instant::now();
 
         if let Some(prev) = self.moving_mean_rtt {
             // calculate moving avg / variance
             let alpha = self.config.rtt_moving_avg_new_weight;
 
-            let mean = duration_nanos as f64 * alpha + prev * (1.0 - alpha);
+            let mean = rtt_nanos as f64 * alpha + prev * (1.0 - alpha);
             self.moving_mean_rtt = Some(mean);
 
-            let s = (mean - duration_nanos as f64).powi(2);
+            let s = (mean - rtt_nanos as f64).powi(2);
             self.moving_variance_rtt = s * alpha + self.moving_variance_rtt * (1.0 - alpha);
         }
         else {
             // first RTT response
-            self.moving_variance_rtt = duration_nanos as f64;
+            self.moving_variance_rtt = rtt_nanos as f64;
             self.moving_variance_rtt = 0.0;
         }
     }
