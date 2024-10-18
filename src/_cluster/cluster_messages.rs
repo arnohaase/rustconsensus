@@ -95,7 +95,7 @@ impl ClusterMessage {
     fn deser_gossip_hi(mut buf: impl Buf) -> anyhow::Result<ClusterMessage> {
         // discriminator is already consumed
 
-        let nonce = buf.try_get_u32()?;
+        let nonce = buf.try_get_u32_le()?;
 
         let addr_deserializer = NodeAddressesDeserializer::new(&mut buf)?;
         let mut nodes: FxHashMap<NodeAddr, u64> = Default::default();
@@ -103,7 +103,7 @@ impl ClusterMessage {
         let num_nodes = buf.try_get_usize_varint()?;
         for _ in 0..num_nodes {
             let addr = addr_deserializer.get_node_add(&mut buf)?;
-            let hash = buf.try_get_u64()?;
+            let hash = buf.try_get_u64_le()?;
             let _ = nodes.insert(addr, hash);
         }
 
@@ -306,7 +306,7 @@ impl NodeAddressesDeserializer {
 
         let mut resolution_table = Vec::with_capacity(num_addresses);
         for _ in 0..num_addresses {
-            resolution_table.push(NodeAddr::deser(&buf_resolution_table)?);
+            resolution_table.push(NodeAddr::try_deser(&mut buf_resolution_table)?);
         }
 
         Ok(NodeAddressesDeserializer {

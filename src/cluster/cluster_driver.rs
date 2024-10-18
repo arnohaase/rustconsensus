@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
+use bytes::BytesMut;
 
 use tokio::sync::RwLock;
 use tokio::time::{Instant, sleep};
@@ -52,8 +53,9 @@ pub async fn run_cluster(
                 let gossip_partners = gossip.read().await
                     .gossip_partners().await;
                 for (addr, msg) in gossip_partners {
-                    // there is nothing we can do about an error when sending a message
-                    let _ = messaging.send(addr, CLUSTER_MESSAGE_MODULE_ID, &msg.ser()).await;
+                    let mut buf = BytesMut::new();
+                    msg.ser(&mut buf);
+                    let _ = messaging.send(addr, CLUSTER_MESSAGE_MODULE_ID, &buf).await;
                 }
 
                 //TODO increased gossip frequency if not converged
@@ -72,7 +74,9 @@ pub async fn run_cluster(
                 let recipients = heart_beat.write().await
                     .heartbeat_recipients(&*cluster_state.read().await);
                 for recipient in recipients {
-                    let _ = messaging.send(recipient, CLUSTER_MESSAGE_MODULE_ID, &msg.ser()).await;
+                    let mut buf = BytesMut::new();
+                    msg.ser(&mut buf);
+                    let _ = messaging.send(recipient, CLUSTER_MESSAGE_MODULE_ID, &buf).await;
                 }
 
                 config.heartbeat_interval.as_millis() as u32 //TODO make sure it fits into u32

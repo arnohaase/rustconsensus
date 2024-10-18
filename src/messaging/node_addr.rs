@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, BufMut};
 
 /// Nodes' lifecycle of membership in a _cluster is monotonous to allow tracking with CRDTs, so a
 ///  node can never rejoin once it left (or was evicted). To allow rejoining from the same network
@@ -35,11 +35,11 @@ impl NodeAddr {
         }
     }
 
-    pub fn ser(&self, buf: &mut BytesMut) {
+    pub fn ser(&self, buf: &mut impl BufMut) {
         todo!()
     }
 
-    pub fn deser(buf: &impl Buf) -> anyhow::Result<NodeAddr> {
+    pub fn try_deser(buf: &mut impl Buf) -> anyhow::Result<NodeAddr> {
         todo!()
     }
 }

@@ -27,15 +27,15 @@ pub trait BufExt: bytes::Buf + bytes_varint::VarIntSupport {
     }
 
     get_try_impl!(try_get_u8, u8, get_u8);
-    get_try_impl!(try_get_u16, u16, get_u16);
-    get_try_impl!(try_get_u32, u32, get_u32);
-    get_try_impl!(try_get_u64, u64, get_u64);
-    get_try_impl!(try_get_u128, u128, get_u128);
+    get_try_impl!(try_get_u16_le, u16, get_u16_le);
+    get_try_impl!(try_get_u32_le, u32, get_u32_le);
+    get_try_impl!(try_get_u64_le, u64, get_u64_le);
+    get_try_impl!(try_get_u128_le, u128, get_u128_le);
 
     get_try_impl!(try_get_i8, i8, get_i8);
-    get_try_impl!(try_get_i16, i16, get_i16);
-    get_try_impl!(try_get_i32, i32, get_i32);
-    get_try_impl!(try_get_i64, i64, get_i64);
+    get_try_impl!(try_get_i16_le, i16, get_i16_le);
+    get_try_impl!(try_get_i32_le, i32, get_i32_le);
+    get_try_impl!(try_get_i64_le, i64, get_i64_le);
 }
 
 pub trait BufMutExt: bytes::BufMut + bytes_varint::VarIntSupportMut {

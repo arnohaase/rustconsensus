@@ -152,6 +152,7 @@ impl ClusterState {
 pub struct NodeState {
     pub addr: NodeAddr,
     pub membership_state: MembershipState,
+    //TODO roles
     pub reachability: FxHashMap<NodeAddr, NodeReachability>, //TODO when to clean up 'is_reachable == true' entries
     pub seen_by: FxHashSet<NodeAddr>,
 }
@@ -172,10 +173,10 @@ impl NodeState {
 pub struct NodeReachability {
     /// a node reporting a change in reachability for a node attaches a strictly monotonous
     ///  counter so that reachability can be merged in a coordination-free fashion
-    counter_of_reporter: u32,
+    pub counter_of_reporter: u32,
     /// only `reachable=false` is really of interest, reachability being the default. But storing
     ///  reachability is necessary to spread that information by gossip.
-    is_reachable: bool,
+    pub is_reachable: bool,
 }
 
 /// see https://doc.akka.io/docs/akka/current/typed/cluster-membership.html
