@@ -1,9 +1,12 @@
+use std::collections::hash_map::Entry;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use anyhow::anyhow;
 
 use bytes::BytesMut;
 use rustc_hash::FxHashMap;
+use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::messaging::envelope::Envelope;
@@ -16,7 +19,7 @@ pub const MAX_MSG_SIZE: usize = 16384; //TODO make this configurable
 
 pub struct Messaging {
     myself: NodeAddr,
-    message_modules: Arc<FxHashMap<MessageModuleId, Arc<dyn MessageModule>>>,
+    message_modules: Arc<RwLock<FxHashMap<MessageModuleId, Arc<dyn MessageModule>>>>,
     transport: Arc<dyn Transport>,
 }
 
@@ -27,24 +30,29 @@ impl Debug for Messaging {
 }
 
 impl Messaging {
-    pub async fn new(myself: NodeAddr, message_modules: Vec<Arc<dyn MessageModule>>) -> anyhow::Result<Messaging> {
-        let transport = Arc::new(UdpTransport::new(myself.addr).await?); //TODO configurable transport
-
-        let mut message_module_map = FxHashMap::default();
-        for m in message_modules {
-            if let Some(prev) = message_module_map.insert(m.id(), m) {
-                warn!("registering a second message module for module id {:?}, replacing the first", prev.id());
-            }
-        }
-
+    pub async fn new(myself: NodeAddr) -> anyhow::Result<Messaging> {
         Ok(Messaging {
             myself,
-            message_modules: Arc::new(message_module_map),
-            transport,
+            message_modules: Default::default(),
+            transport: Arc::new(UdpTransport::new(myself.addr).await?), //TODO configurable transport
         })
     }
 
-    pub fn get_addr(&self) -> NodeAddr {
+    pub async fn register_module(&self, message_module: Arc<dyn MessageModule>) -> anyhow::Result<()> {
+        match self.message_modules.write().await
+            .entry(message_module.id())
+        {
+            Entry::Occupied(_) => {
+                Err(anyhow!("registering a second message module for module id {:?}, replacing the first", message_module.id()))
+            }
+            Entry::Vacant(e) => {
+                let _ = e.insert(message_module);
+                Ok(())
+            },
+        }
+    }
+
+    pub fn get_self_addr(&self) -> NodeAddr {
         self.myself
     }
 
@@ -104,10 +112,8 @@ pub const JOIN_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"ClstJ
 
 struct ReceivedMessageHandler {
     myself: NodeAddr,
-    message_modules: Arc<FxHashMap<MessageModuleId, Arc<dyn MessageModule>>>,
+    message_modules: Arc<RwLock<FxHashMap<MessageModuleId, Arc<dyn MessageModule>>>>,
 }
-
-//TODO why do we need the MessageHandler trait?!
 
 #[async_trait::async_trait]
 impl MessageHandler for ReceivedMessageHandler {
@@ -131,7 +137,8 @@ impl MessageHandler for ReceivedMessageHandler {
                     return;
                 }
 
-                if let Some(message_module) = self.message_modules.get(&envelope.message_module_id) {
+                if let Some(message_module) = self.message_modules.read().await.get(&envelope.message_module_id) {
+                    let message_module = message_module.clone();
                     message_module.on_message(&envelope, msg_buf).await;
                 }
                 else {

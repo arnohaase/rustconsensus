@@ -14,6 +14,14 @@ pub struct Gossip {
     cluster_state: Arc<RwLock<ClusterState>>, //TODO extract as ClusterStateHandle?
 }
 impl  Gossip {
+    pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>) -> Gossip {
+        Gossip {
+            config,
+            myself,
+            cluster_state,
+        }
+    }
+
     //TODO unit test
     async fn nodes_by_differing_state(&self) -> (Vec<NodeAddr>, Vec<NodeAddr>) {
         let cluster_state = self.cluster_state.read().await;

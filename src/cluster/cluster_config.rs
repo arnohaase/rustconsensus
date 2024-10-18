@@ -19,4 +19,6 @@ pub struct ClusterConfig {
     /// safety margin during which we decide not to worry about missing heartbeats
     pub heartbeat_grace_period: Duration,
     pub reachability_phi_threshold: f64,
+
+    pub internal_event_queue_size: usize,
 }

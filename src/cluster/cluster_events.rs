@@ -66,6 +66,12 @@ pub struct ClusterEventNotifier {
     listeners: RwLock<FxHashMap<Uuid, Arc<dyn ClusterEventListener>>>,
 }
 impl ClusterEventNotifier {
+    pub fn new() -> ClusterEventNotifier {
+        ClusterEventNotifier {
+            listeners: Default::default(),
+        }
+    }
+
     //TODO documentation, especially for key / removal
     pub async fn add_listener(&self, listener: Arc<dyn ClusterEventListener>) -> Uuid {
         let id = Uuid::new_v4();

@@ -39,20 +39,20 @@ fn init_logging() {
         .ok();
 }
 
-async fn create_transport(addr: &str) -> Arc<Messaging> {
+async fn create_transport(addr: &str) -> anyhow::Result<Arc<Messaging>> {
     let addr = NodeAddr::from(SocketAddr::from_str(addr).unwrap());
-    let transport = Messaging::new(addr, vec![
-        Arc::new(TestMessageModule{}),
-    ]).await.unwrap();
-    Arc::new(transport)
+    let transport = Messaging::new(addr).await?;
+    transport.register_module(Arc::new(TestMessageModule{})).await?;
+
+    Ok(Arc::new(transport))
 }
 
 #[tokio::main]
-pub async fn main() {
+pub async fn main() -> anyhow::Result<()> {
     init_logging();
 
-    let t1 = create_transport("127.0.0.1:9810").await;
-    let t2 = create_transport("127.0.0.1:9811").await;
+    let t1 = create_transport("127.0.0.1:9810").await?;
+    let t2 = create_transport("127.0.0.1:9811").await?;
 
     let m = TestMessageModule{};
 
@@ -68,10 +68,12 @@ pub async fn main() {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
     for i in 0u32..10 {
-        t1.send(t2.get_addr(), m.id(), &m.ser(i)).await.unwrap();
+        t1.send(t2.get_self_addr(), m.id(), &m.ser(i)).await.unwrap();
     }
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let duration = SystemTime::elapsed(&start).unwrap();
-    println!("duration: {:?}", duration)
+    println!("duration: {:?}", duration);
+
+    Ok(())
 }

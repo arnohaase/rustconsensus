@@ -17,6 +17,16 @@ pub struct ClusterState { //todo  move to ../cluster_state?
     version_counter: u32,
 }
 impl ClusterState {
+    pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_event_queue: mpsc::Sender<ClusterEvent>) -> ClusterState {
+        ClusterState {
+            myself,
+            config,
+            nodes_with_state: Default::default(),
+            cluster_event_queue,
+            version_counter: 0,
+        }
+    }
+
     pub fn myself(&self) -> NodeAddr {
         self.myself
     }

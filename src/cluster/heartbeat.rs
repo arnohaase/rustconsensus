@@ -15,15 +15,23 @@ use crate::messaging::node_addr::NodeAddr;
 
 pub struct HeartBeat {
     myself: NodeAddr,
-    node_ring: BTreeSet<SortedByHash>,
     config: Arc<ClusterConfig>,
     counter: u32,
     reference_time: Instant,
     registry: HeartbeatRegistry,
 }
 impl HeartBeat {
-    pub fn new() -> HeartBeat {
-        todo!()
+    pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>) -> HeartBeat {
+        HeartBeat {
+            myself,
+            config: config.clone(),
+            counter: 0,
+            reference_time: Instant::now(),
+            registry: HeartbeatRegistry {
+                config,
+                trackers: Default::default(),
+            },
+        }
     }
 
     //TODO unit test
@@ -31,9 +39,13 @@ impl HeartBeat {
         let mut result = Vec::new();
         let mut num_reachable = 0;
 
+        let node_ring = cluster_state.node_states()
+            .map(|s| SortedByHash(s.addr))
+            .collect::<BTreeSet<_>>();
+
         // iterator over the ring, starting at `myself`
-        let candidates = self.node_ring.range((Excluded(&SortedByHash(self.myself)), Unbounded))
-            .chain(self.node_ring.range((Unbounded, Excluded(&SortedByHash(self.myself)))));
+        let candidates = node_ring.range((Excluded(&SortedByHash(self.myself)), Unbounded))
+            .chain(node_ring.range((Unbounded, Excluded(&SortedByHash(self.myself)))));
 
         for candidate in candidates {
             if num_reachable == self.config.num_heartbeat_partners_per_node  {
