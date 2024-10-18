@@ -1,7 +1,11 @@
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::{FxHashMap, FxHashSet};
+use tokio::sync::mpsc;
+use tracing::{error, warn};
 use crate::cluster::cluster_config::ClusterConfig;
+use crate::cluster::cluster_events::{ClusterEvent, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
 use crate::messaging::node_addr::NodeAddr;
 
 
@@ -9,7 +13,8 @@ pub struct ClusterState { //todo  move to ../cluster_state?
     myself: NodeAddr,
     config: Arc<ClusterConfig>,
     nodes_with_state: FxHashMap<NodeAddr, NodeState>,
-    // unreachable_set: UnreachableSet, //TODO ???
+    cluster_event_queue: mpsc::Sender<ClusterEvent>,
+    version_counter: u32,
 }
 impl ClusterState {
     pub fn myself(&self) -> NodeAddr {
@@ -24,12 +29,112 @@ impl ClusterState {
         self.nodes_with_state.get(addr)
     }
 
-    pub fn merge_node_state(&mut self, state: &NodeState) {
-        todo!()
+    //TODO API for accessing state
+
+    pub async fn merge_node_state(&mut self, state: NodeState) {
+        //TODO events, notifications
+        let addr = state.addr;
+
+        match self.nodes_with_state.entry(state.addr) {
+            Entry::Occupied(mut e) => {
+                let old_state = e.get().membership_state;
+                let new_state = state.membership_state;
+                let was_changed = e.get_mut().merge(state);
+
+                if was_changed {
+                    self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr })).await;
+                    self.send_event(ClusterEvent::NodeStateChanged(NodeStateChangedData {
+                        addr,
+                        old_state,
+                        new_state,
+                    })).await;
+                }
+            }
+            Entry::Vacant(e) => {
+                e.insert(state.clone());
+
+                self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr })).await;
+                self.send_event(ClusterEvent::NodeAdded(NodeAddedData {
+                    addr,
+                    state: state.membership_state,
+                })).await;
+            }
+        }
     }
 
-    pub fn update_current_reachability(&mut self, reachability: &FxHashMap<NodeAddr, bool>) {
-        todo!()
+    async fn send_event(&self, event: ClusterEvent) {
+        if let Err(e) = self.cluster_event_queue.send(event).await {
+            error!("error sending cluster event (queue overflow?): {}", e);
+        }
+    }
+
+    fn next_counter(&mut self) -> u32 {
+        self.version_counter += 1;
+        self.version_counter
+    }
+
+    //TODO unit test
+    pub async fn update_current_reachability(&mut self, reachability: &FxHashMap<NodeAddr, bool>) {
+        //TODO handle added / removed reachability keys since last call
+
+
+        let has_change = reachability.iter()
+            .any(|(addr, &reachable)| match self.nodes_with_state.get(addr) {
+                None => true,
+                Some(s) => {
+                    match s.reachability.get(&self.myself) {
+                        None => true,
+                        Some(r) => r.is_reachable != reachable,
+                    }
+                }
+            });
+
+        if has_change {
+            let new_counter_version = self.next_counter();
+
+            for (&addr, &reachable) in reachability {
+                if let Some(node) = self.nodes_with_state.get_mut(&addr) {
+                    let old_is_reachable = node.is_reachable();
+
+                    let was_updated = match node.reachability.entry(self.myself) {
+                        Entry::Occupied(mut e) => {
+                            if e.get().is_reachable != reachable {
+                                e.get_mut().is_reachable = reachable;
+                                e.get_mut().counter_of_reporter = new_counter_version;
+                                true
+                            }
+                            else {
+                                false
+                            }
+                        }
+                        Entry::Vacant(e) => {
+                            e.insert(NodeReachability {
+                                counter_of_reporter: new_counter_version,
+                                is_reachable: reachable,
+                            });
+                            true
+                        }
+                    };
+                    let new_is_reachable = node.is_reachable();
+
+                    if was_updated {
+                        self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr })).await;
+                    }
+
+                    if old_is_reachable != new_is_reachable {
+                        self.send_event(ClusterEvent::ReachabilityChanged(ReachabilityChangedData {
+                            addr,
+                            old_is_reachable,
+                            new_is_reachable,
+                        })).await;
+                    }
+
+                }
+                else {
+                    warn!("reachability data for node {:?} which is not part of the cluster's known state - ignoring", addr);
+                }
+            }
+        }
     }
 }
 
@@ -41,10 +146,15 @@ pub struct NodeState {
     pub seen_by: FxHashSet<NodeAddr>,
 }
 impl NodeState {
+    //TODO unit test
     pub fn is_reachable(&self) -> bool {
-        //TODO unit test
         self.reachability.values()
             .all(|r| r.is_reachable)
+    }
+
+    /// returns true iff self wos modified
+    pub fn merge(&mut self, other: NodeState) -> bool {
+        todo!()
     }
 }
 
@@ -52,7 +162,7 @@ impl NodeState {
 pub struct NodeReachability {
     /// a node reporting a change in reachability for a node attaches a strictly monotonous
     ///  counter so that reachability can be merged in a coordination-free fashion
-    counter_of_reporter: u64,
+    counter_of_reporter: u32,
     /// only `reachable=false` is really of interest, reachability being the default. But storing
     ///  reachability is necessary to spread that information by gossip.
     is_reachable: bool,

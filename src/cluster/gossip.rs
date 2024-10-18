@@ -123,6 +123,8 @@ impl  Gossip {
         Some(self.gossip_detailed_digest().await)
     }
 
+    //TODO debug logging for gossip
+
     //TODO unit test
     pub async fn on_detailed_digest(&self, other_digest: &GossipDetailedDigestData) -> Option<GossipDifferingAndMissingNodesData> {
         let cluster_state = self.cluster_state.read().await;
@@ -155,15 +157,19 @@ impl  Gossip {
     }
 
     //TODO unit test
-    pub async fn on_differing_and_missing_nodes(&self, other_data: &GossipDifferingAndMissingNodesData) -> Option<GossipNodesData> {
+    pub async fn on_differing_and_missing_nodes(&self, other_data: GossipDifferingAndMissingNodesData) -> Option<GossipNodesData> {
+        let differing_keys = other_data.differing.iter()
+            .map(|n| n.addr)
+            .collect::<Vec<_>>();
+
         let mut cluster_state = self.cluster_state.write().await;
-        for s in &other_data.differing {
-            cluster_state.merge_node_state(s);
+        for s in other_data.differing {
+            cluster_state.merge_node_state(s).await;
         }
 
         let mut nodes = Vec::new();
-        for differing in &other_data.differing {
-            if let Some(state) = cluster_state.get_node_state(&differing.addr) {
+        for differing_addr in differing_keys {
+            if let Some(state) = cluster_state.get_node_state(&differing_addr) {
                 nodes.push(state.clone());
             }
         }
@@ -185,10 +191,10 @@ impl  Gossip {
     }
 
     //TODO unit test
-    pub async fn on_nodes(&self, other_data: &GossipNodesData) {
+    pub async fn on_nodes(&self, other_data: GossipNodesData) {
         let mut cluster_state = self.cluster_state.write().await;
-        for s in &other_data.nodes {
-            cluster_state.merge_node_state(s);
+        for s in other_data.nodes {
+            cluster_state.merge_node_state(s).await;
         }
     }
 }

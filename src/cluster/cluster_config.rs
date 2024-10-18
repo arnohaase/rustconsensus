@@ -6,6 +6,8 @@ pub struct ClusterConfig {
     ///  proven differences from myself (rather than a node that may have an identical perception
     ///  of the cluster's state)
     pub gossip_with_differing_state_probability: f64,
+    pub regular_gossip_interval: Duration,
+
     pub num_heartbeat_partners_per_node: usize,
     pub ignore_heartbeat_response_after_n_counter_increments: u32,
     pub ignore_heartbeat_response_after_n_seconds: u32,
