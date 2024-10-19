@@ -16,4 +16,6 @@ todo
 * update_current_reachability: handle additional / removed nodes since last call
 * roles
 * hashcode / checksum in envelope
-
+* downing
+* event sender without first queue
+* clear 'seen by'

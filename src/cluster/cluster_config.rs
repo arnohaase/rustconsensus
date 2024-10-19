@@ -1,4 +1,5 @@
 use std::time::Duration;
+use crate::messaging::node_addr::NodeAddr;
 
 pub struct ClusterConfig {
     pub num_gossip_partners: usize,
@@ -19,6 +20,8 @@ pub struct ClusterConfig {
     /// safety margin during which we decide not to worry about missing heartbeats
     pub heartbeat_grace_period: Duration,
     pub reachability_phi_threshold: f64,
+
+    pub leader_action_interval: Duration,
 
     pub internal_event_queue_size: usize,
 }

@@ -28,6 +28,7 @@ pub async fn run_cluster(
 
     let mut millis_until_next_gossip: u32 = 0;
     let mut millis_until_next_heartbeat: u32 = 0;
+    let mut millis_until_next_leader_actions: u32 = 0;
 
     loop {
         sleep(Duration::from_millis(10)).await;
@@ -81,12 +82,32 @@ pub async fn run_cluster(
 
                 config.heartbeat_interval.as_millis() as u32 //TODO make sure it fits into u32
             }
-        }
+        };
 
         //TODO WeaklyUp actions
 
 
-        //TODO leader actions
+        // leader actions
+
+        //TODO 'leader changed' event
+        millis_until_next_leader_actions = match millis_until_next_leader_actions.checked_sub(elapsed_millis) {
+            Some(millis) => millis,
+            None => {
+                let leader = cluster_state.read().await.get_leader_candidate();
+                if leader == Some(messaging.get_self_addr())
+                    && cluster_state.read().await.is_converged()
+                {
+
+                    //TODO promote to 'up'
+                    //TODO promote to 'Exiting'
+                    //TODO promote to 'Removed'
+
+                    todo!()
+                }
+
+                config.leader_action_interval.as_millis() as u32
+            }
+        };
     }
 }
 

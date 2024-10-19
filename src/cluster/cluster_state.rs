@@ -39,6 +39,24 @@ impl ClusterState {
         self.nodes_with_state.get(addr)
     }
 
+    /// returns the node that is the leader in the current topology once state converges (which
+    ///  can only happen if all nodes are reachable)
+    pub fn get_leader_candidate(&self) -> Option<NodeAddr> {
+        self.nodes_with_state.values()
+            .filter(|s| s.membership_state.is_leader_eligible())
+            .map(|s| s.addr)
+            .min()
+    }
+
+    pub fn is_converged(&self) -> bool {
+        let num_convergence_nodes = self.nodes_with_state.values()
+            .filter(|s| s.membership_state.is_gossip_partner())
+            .count();
+
+        self.nodes_with_state.values()
+            .all(|s| s.seen_by.len() == num_convergence_nodes)
+    }
+
     //TODO API for accessing state
 
     pub async fn merge_node_state(&mut self, state: NodeState) {
@@ -222,6 +240,10 @@ pub enum MembershipState {
 }
 impl MembershipState {
     pub fn is_gossip_partner(&self) -> bool {
+        todo!()
+    }
+
+    pub fn is_leader_eligible(&self) -> bool {
         todo!()
     }
 }
