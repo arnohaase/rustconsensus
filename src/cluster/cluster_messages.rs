@@ -159,31 +159,37 @@ impl ClusterMessage {
 
     fn ser_gossip_differing_and_missing_nodes(data: &GossipDifferingAndMissingNodesData, buf: &mut BytesMut) {
         let mut addr_pool = NodeAddrPoolSerializer::new(buf);
+        let mut string_pool = StringPoolSerializer::new(buf);
 
         buf.put_usize_varint(data.differing.len());
         for s in &data.differing {
             addr_pool.put_node_addr(buf, s.addr);
             buf.put_u8(s.membership_state.into());
+            string_pool.put_string_set(buf, s.roles.iter());
             Self::ser_reachability(&s.reachability, buf, &mut addr_pool);
             addr_pool.put_addr_set(buf, s.seen_by.iter());
         }
 
         addr_pool.put_addr_set(buf, data.missing.iter());
         addr_pool.finalize(buf);
+        string_pool.finalize(buf);
     }
 
     fn ser_gossip_nodes(data: &GossipNodesData, buf: &mut BytesMut) {
         let mut addr_pool = NodeAddrPoolSerializer::new(buf);
+        let mut string_pool = StringPoolSerializer::new(buf);
 
         buf.put_usize_varint(data.nodes.len());
         for s in &data.nodes {
             addr_pool.put_node_addr(buf, s.addr);
             buf.put_u8(s.membership_state.into());
+            string_pool.put_string_set(buf, s.roles.iter());
             Self::ser_reachability(&s.reachability, buf, &mut addr_pool);
             addr_pool.put_addr_set(buf, s.seen_by.iter());
         }
 
         addr_pool.finalize(buf);
+        string_pool.finalize(buf);
     }
 
     fn ser_heartbeat(data: &HeartbeatData, buf: &mut impl BufMut) {
@@ -271,18 +277,21 @@ impl ClusterMessage {
 
     fn deser_gossip_differing_and_missing_nodes(mut buf: &[u8]) -> anyhow::Result<ClusterMessage> {
         let addr_pool = NodeAddrPoolDeserializer::new(&mut buf)?;
+        let string_pool = StringPoolDeserializer::new(&mut buf)?;
 
         let num_differing = buf.try_get_usize_varint()?;
         let mut differing = Vec::with_capacity(num_differing);
         for _ in 0..num_differing {
             let addr = NodeAddr::try_deser(&mut buf)?;
             let membership_state = MembershipState::try_from_primitive(buf.try_get_u8()?)?;
+            let roles = string_pool.try_get_string_set(&mut buf)?;
             let reachability= Self::try_deser_reachability(&mut buf, &addr_pool)?;
             let seen_by = addr_pool.try_get_addr_set(&mut buf)?;
 
             differing.push(NodeState {
                 addr,
                 membership_state,
+                roles,
                 reachability,
                 seen_by,
             })
@@ -298,18 +307,21 @@ impl ClusterMessage {
 
     fn deser_gossip_nodes(mut buf: &[u8]) -> anyhow::Result<ClusterMessage> {
         let addr_pool = NodeAddrPoolDeserializer::new(&mut buf)?;
+        let string_pool = StringPoolDeserializer::new(&mut buf)?;
 
         let num_nodes = buf.try_get_usize_varint()?;
         let mut nodes = Vec::with_capacity(num_nodes);
         for _ in 0..num_nodes {
             let addr = NodeAddr::try_deser(&mut buf)?;
             let membership_state = MembershipState::try_from_primitive(buf.try_get_u8()?)?;
+            let roles = string_pool.try_get_string_set(&mut buf)?;
             let reachability= Self::try_deser_reachability(&mut buf, &addr_pool)?;
             let seen_by = addr_pool.try_get_addr_set(&mut buf)?;
 
             nodes.push(NodeState {
                 addr,
                 membership_state,
+                roles,
                 reachability,
                 seen_by,
             })
@@ -412,8 +424,8 @@ impl NodeAddrPoolSerializer {
         //TODO represent as a bit set
         buf.put_usize_varint(addrs.len());
 
-        for a in addrs {
-            a.ser(buf);
+        for &a in addrs {
+            self.put_node_addr(buf, a);
         }
     }
 
@@ -476,9 +488,113 @@ impl NodeAddrPoolDeserializer {
 
         let mut addrs = Vec::with_capacity(len);
         for _ in 0..len {
-            addrs.push(NodeAddr::try_deser(buf)?);
+            addrs.push(self.try_get_node_addr(buf)?);
         }
         Ok(addrs.into_iter().collect())
     }
 }
 
+
+struct StringPoolSerializer<'a> {
+    offs_for_offs: usize,
+    resolution_table: FxHashMap<&'a str, usize>,
+    reverse_resolution_table: Vec<&'a str>,
+}
+impl <'a> StringPoolSerializer<'a> {
+    pub fn new<'b>(buf: &'b mut BytesMut) -> StringPoolSerializer<'a> {
+        let offs_for_offs = buf.len();
+        buf.put_u32_le(0); // placeholder for the offset of the resolution table we write at the end
+        StringPoolSerializer {
+            offs_for_offs,
+            resolution_table: Default::default(),
+            reverse_resolution_table: Vec::new(),
+        }
+    }
+
+    pub fn put_string(&mut self, buf: &mut BytesMut, s: &'a str) {
+        let prev_len = self.resolution_table.len();
+
+        let s_id = match self.resolution_table.entry(s) {
+            Entry::Occupied(e) => {
+                *e.get()
+            }
+            Entry::Vacant(mut e) => {
+                let id = prev_len;
+                self.reverse_resolution_table.push(s);
+                *e.insert(id)
+            }
+        };
+        buf.put_u64_varint(s_id as u64); //TODO add support for put_usize_varint
+    }
+
+    pub fn put_string_set(&mut self, buf: &mut BytesMut, strings: impl ExactSizeIterator<Item = &'a String>) {
+        buf.put_usize_varint(strings.len());
+        for s in strings {
+            self.put_string(buf, s);
+        }
+    }
+
+    pub fn finalize(self, buf: &mut BytesMut) {
+        // overwrite the placeholder with the actual offset of the resolution table
+        let offs_resolution_table = buf.len() as u32; //TODO overflow
+        (&mut buf[self.offs_for_offs..]).put_u32_le(offs_resolution_table);
+
+        // write the resolution table
+        buf.put_u64_varint(self.resolution_table.len() as u64); //TODO add support for put_usize_varint
+        for s in self.reverse_resolution_table {
+            // strings are serialized in the order of their ids, so there is no need to store the id explicitly
+            buf.put_string(s);
+        }
+    }
+}
+
+struct StringPoolDeserializer {
+    resolution_table: Vec<String>,
+}
+impl StringPoolDeserializer {
+    pub fn new(mut buf: &mut impl Buf) -> anyhow::Result<StringPoolDeserializer> {
+        let initial = buf.remaining();
+        let offs_resolution_table = buf.get_u64_varint().a()? as usize; //TODO get_usize_varint()
+        let len_of_offset = initial - buf.remaining();
+
+        let offs_resolution_table = offs_resolution_table.checked_sub(len_of_offset)
+            .ok_or(anyhow!("offset must point after the offset itself"))?;
+
+        //NB: We want to consume the offset to the resolution table, but not the resolution table
+        //     itself since it comes after the actual message
+        let raw = buf.chunk();
+        if offs_resolution_table >= raw.len() {
+            return Err(anyhow!("offset of resolution table points after the end of the buffer"));
+        }
+
+        let mut buf_resolution_table = &raw[offs_resolution_table..];
+        let num_entries = buf_resolution_table.get_u64_varint().a()? as usize; //TODO get_usize_varint()
+
+        let mut resolution_table = Vec::with_capacity(num_entries);
+        for _ in 0..num_entries {
+            resolution_table.push(buf_resolution_table.try_get_string()?);
+        }
+
+        Ok(StringPoolDeserializer {
+            resolution_table,
+        })
+    }
+
+    pub fn try_get_string(&self, buf: &mut impl Buf) -> anyhow::Result<String> {
+        let id = buf.get_u64_varint().a()? as usize; //TODO get_usize_varint
+        if let Some(s) = self.resolution_table.get(id) {
+            return Ok(s.clone());
+        }
+        return Err(anyhow!("index out of bounds"));
+    }
+
+    pub fn try_get_string_set<T: FromIterator<String>>(&self, buf: &mut impl Buf) -> anyhow::Result<T> {
+        let len = buf.try_get_usize_varint()?;
+
+        let mut strings = Vec::with_capacity(len);
+        for _ in 0..len {
+            strings.push(self.try_get_string(buf)?);
+        }
+        Ok(strings.into_iter().collect())
+    }
+}

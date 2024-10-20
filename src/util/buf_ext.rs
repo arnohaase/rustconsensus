@@ -1,4 +1,5 @@
 use anyhow::anyhow;
+use bytes::BufMut;
 use bytes_varint::*;
 
 
@@ -36,6 +37,15 @@ pub trait BufExt: bytes::Buf + bytes_varint::VarIntSupport {
     get_try_impl!(try_get_i16_le, i16, get_i16_le);
     get_try_impl!(try_get_i32_le, i32, get_i32_le);
     get_try_impl!(try_get_i64_le, i64, get_i64_le);
+
+    fn try_get_string(&mut self) -> anyhow::Result<String> {
+        let len = self.try_get_usize_varint()?;
+        let mut buf = Vec::new();
+        for _ in 0..len {
+            buf.push(self.try_get_u8()?);
+        }
+        Ok(String::from_utf8(buf)?)
+    }
 }
 
 pub trait BufMutExt: bytes::BufMut + bytes_varint::VarIntSupportMut {
@@ -44,6 +54,11 @@ pub trait BufMutExt: bytes::BufMut + bytes_varint::VarIntSupportMut {
     }
     fn put_isize_varint(&mut self, v: isize) {
         self.put_i64_varint(v as i64); //TODO make independent of bit width
+    }
+
+    fn put_string(&mut self, s: &str) {
+        self.put_usize_varint(s.len());
+        self.put_slice(s.as_bytes());
     }
 }
 

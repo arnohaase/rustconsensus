@@ -224,7 +224,7 @@ impl ClusterState {
 pub struct NodeState {
     pub addr: NodeAddr,
     pub membership_state: MembershipState,
-    //TODO roles
+    pub roles: FxHashSet<String>,
     pub reachability: FxHashMap<NodeAddr, NodeReachability>, //TODO when to clean up 'is_reachable == true' entries
     pub seen_by: FxHashSet<NodeAddr>,
 }

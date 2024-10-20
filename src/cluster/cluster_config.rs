@@ -1,5 +1,4 @@
 use std::time::Duration;
-use crate::messaging::node_addr::NodeAddr;
 
 pub struct ClusterConfig {
     pub num_gossip_partners: usize,
