@@ -150,75 +150,128 @@ impl ClusterState {
         }
     }
 
-    fn next_counter(&mut self) -> u32 {
-        self.version_counter += 1;
+    //TODO unit test
+    pub async fn update_current_reachability(&mut self, reachability: &FxHashMap<NodeAddr, bool>) {
+        let mut lazy_version_counter = LazyCounterVersion::new(self);
+
+        {
+            let mut updated_nodes = Vec::new();
+            let mut reachablility_changed_nodes = Vec::new();
+
+            for s in self.nodes_with_state.values_mut()
+                .filter(|s| !reachability.contains_key(&s.addr))
+            {
+                // mark nodes as 'reachable' that were previously tracked for reachability by this node
+                //  but are not tracked anymore (due to a node joining or unreachable nodes in between
+                //  becoming reachable)
+                if let Some(r) = s.reachability.get_mut(&self.myself) {
+                    if !r.is_reachable {
+                        r.is_reachable = true;
+                        r.counter_of_reporter = lazy_version_counter.get_version();
+
+                        //TODO refactor - extract shared code with the loop below
+
+                        s.seen_by.clear();
+                        s.seen_by.insert(self.myself);
+
+                        updated_nodes.push(s.addr);
+                    }
+
+                    if s.is_reachable() {
+                        // it was not reachable previously, so this means the reachability changed
+                        reachablility_changed_nodes.push(s.addr);
+                    }
+                }
+            }
+
+            for addr in updated_nodes {
+                self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr })).await;
+            }
+            for addr in reachablility_changed_nodes {
+                self.send_event(ClusterEvent::ReachabilityChanged(ReachabilityChangedData {
+                    addr,
+                    old_is_reachable: false,
+                    new_is_reachable: true,
+                })).await;
+            }
+        }
+
+        for (&addr, &reachable) in reachability {
+            if let Some(node) = self.nodes_with_state.get_mut(&addr) {
+                let old_is_reachable = node.is_reachable();
+
+                let was_updated = match node.reachability.entry(self.myself) {
+                    Entry::Occupied(mut e) => {
+                        if e.get().is_reachable != reachable {
+                            e.get_mut().is_reachable = reachable;
+                            e.get_mut().counter_of_reporter = lazy_version_counter.get_version();
+                            true
+                        }
+                        else {
+                            false
+                        }
+                    }
+                    Entry::Vacant(e) => {
+                        e.insert(NodeReachability {
+                            counter_of_reporter: lazy_version_counter.get_version(),
+                            is_reachable: reachable,
+                        });
+                        true
+                    }
+                };
+                let new_is_reachable = node.is_reachable();
+
+                if was_updated {
+                    // we changed the node's reachability information as seen from self, so there
+                    //  is a new version of the node's data that was not seen by any other nodes
+                    //  yet and that must be spread by gossip
+                    node.seen_by.clear();
+                    node.seen_by.insert(self.myself);
+
+                    self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr })).await;
+                }
+
+                if old_is_reachable != new_is_reachable {
+                    self.send_event(ClusterEvent::ReachabilityChanged(ReachabilityChangedData {
+                        addr,
+                        old_is_reachable,
+                        new_is_reachable,
+                    })).await;
+                }
+            }
+            else {
+                warn!("reachability data for node {:?} which is not part of the cluster's known state - ignoring", addr);
+            }
+        }
+
+        lazy_version_counter.finalize(self);
+    }
+}
+
+struct LazyCounterVersion {
+    version_counter: u32,
+    has_change: bool,
+}
+impl LazyCounterVersion {
+    pub fn new(cluster_state: &ClusterState) -> LazyCounterVersion {
+        LazyCounterVersion {
+            version_counter: cluster_state.version_counter + 1,
+            has_change: false,
+        }
+    }
+
+    pub fn get_version(&mut self) -> u32 {
+        self.has_change = true;
         self.version_counter
     }
 
-    //TODO unit test
-    pub async fn update_current_reachability(&mut self, reachability: &FxHashMap<NodeAddr, bool>) {
-        //TODO handle added / removed reachability keys since last call
-
-
-        let has_change = reachability.iter()
-            .any(|(addr, &reachable)| match self.nodes_with_state.get(addr) {
-                None => true,
-                Some(s) => {
-                    match s.reachability.get(&self.myself) {
-                        None => true,
-                        Some(r) => r.is_reachable != reachable,
-                    }
-                }
-            });
-
-        if has_change {
-            let new_counter_version = self.next_counter();
-
-            for (&addr, &reachable) in reachability {
-                if let Some(node) = self.nodes_with_state.get_mut(&addr) {
-                    let old_is_reachable = node.is_reachable();
-
-                    let was_updated = match node.reachability.entry(self.myself) {
-                        Entry::Occupied(mut e) => {
-                            if e.get().is_reachable != reachable {
-                                e.get_mut().is_reachable = reachable;
-                                e.get_mut().counter_of_reporter = new_counter_version;
-                                true
-                            }
-                            else {
-                                false
-                            }
-                        }
-                        Entry::Vacant(e) => {
-                            e.insert(NodeReachability {
-                                counter_of_reporter: new_counter_version,
-                                is_reachable: reachable,
-                            });
-                            true
-                        }
-                    };
-                    let new_is_reachable = node.is_reachable();
-
-                    if was_updated {
-                        self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr })).await;
-                    }
-
-                    if old_is_reachable != new_is_reachable {
-                        self.send_event(ClusterEvent::ReachabilityChanged(ReachabilityChangedData {
-                            addr,
-                            old_is_reachable,
-                            new_is_reachable,
-                        })).await;
-                    }
-
-                }
-                else {
-                    warn!("reachability data for node {:?} which is not part of the cluster's known state - ignoring", addr);
-                }
-            }
+    pub fn finalize(self, cluster_state: &mut ClusterState) {
+        if self.has_change {
+            cluster_state.version_counter = self.version_counter;
         }
     }
 }
+
 
 #[derive(Clone, Debug)]
 pub struct NodeState {

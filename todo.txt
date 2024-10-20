@@ -3,16 +3,15 @@ todo
 * cluster join
 * ser / deser NodeAddr
 * MembershipState::is_gossip_partner
+  * and remove from 'seen by' if not gossip partner anymore
 * merge NodeState
 * calculate gossip summary digest (SHA-1)
 * convergence
-* leader change event
 * cleanup; removal of converged 'is_reachable=true'
 * weakly up
 * increased gossip frequency when not converged
 * termination / shutdown
 * extract stuff to varint crate
-* update_current_reachability: handle additional / removed nodes since last call
 * hashcode / checksum in envelope
 * downing
 * event sender without first queue

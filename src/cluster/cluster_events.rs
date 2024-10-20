@@ -12,7 +12,7 @@ use crate::messaging::node_addr::NodeAddr;
 #[derive(Clone, Debug)]
 pub enum ClusterEvent {
     /// low-level event, sent redundantly to higher-level events - should be uninteresting for
-    ///  typical consumers
+    ///  typical consumers.
     NodeUpdated(NodeUpdatedData),
     NodeAdded(NodeAddedData),
     NodeRemoved(NodeRemovedData),
