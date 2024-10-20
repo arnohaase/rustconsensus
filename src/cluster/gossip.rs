@@ -13,7 +13,7 @@ use crate::messaging::node_addr::NodeAddr;
 pub struct Gossip {
     config: Arc<ClusterConfig>,
     myself: NodeAddr,
-    cluster_state: Arc<RwLock<ClusterState>>, //TODO extract as ClusterStateHandle?
+    cluster_state: Arc<RwLock<ClusterState>>,
 }
 impl  Gossip {
     pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>) -> Gossip {

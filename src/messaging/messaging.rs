@@ -15,7 +15,7 @@ use crate::messaging::transport::{MessageHandler, Transport, UdpTransport};
 use crate::messaging::node_addr::NodeAddr;
 
 
-pub const MAX_MSG_SIZE: usize = 16384; //TODO make this configurable
+pub const MAX_MSG_SIZE: usize = 256*1024; //TODO make this configurable
 
 pub struct Messaging {
     myself: NodeAddr,
