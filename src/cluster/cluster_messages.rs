@@ -143,8 +143,8 @@ impl ClusterMessage {
     }
 
     fn ser_gossip_summary_digest(data: &GossipSummaryDigestData, buf: &mut impl BufMut) {
-        for i in 0..data.full_sha1_digest.len() {
-            buf.put_u8(data.full_sha1_digest[i]);
+        for i in 0..data.full_sha256_digest.len() {
+            buf.put_u8(data.full_sha256_digest[i]);
         }
     }
 
@@ -248,13 +248,13 @@ impl ClusterMessage {
     }
 
     fn deser_gossip_summary_digest(mut buf: &[u8]) -> anyhow::Result<ClusterMessage> {
-        let mut full_sha1_digest = [0u8; 20];
-        for i in 0..full_sha1_digest.len() {
-            full_sha1_digest[i] = buf.try_get_u8()?;
+        let mut full_sha256_digest = [0u8; 32];
+        for i in 0..full_sha256_digest.len() {
+            full_sha256_digest[i] = buf.try_get_u8()?;
         }
 
         Ok(ClusterMessage::GossipSummaryDigest(GossipSummaryDigestData {
-            full_sha1_digest,
+            full_sha256_digest,
         }))
     }
 
@@ -355,7 +355,7 @@ impl ClusterMessage {
 
 
 pub struct GossipSummaryDigestData {
-    pub full_sha1_digest: [u8;20],
+    pub full_sha256_digest: [u8;32],
 }
 
 pub struct GossipDetailedDigestData {

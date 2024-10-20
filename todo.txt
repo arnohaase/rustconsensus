@@ -5,7 +5,6 @@ todo
 * MembershipState::is_gossip_partner
   * and remove from 'seen by' if not gossip partner anymore
 * merge NodeState
-* calculate gossip summary digest (SHA-1)
 * convergence
 * cleanup; removal of converged 'is_reachable=true'
 * weakly up

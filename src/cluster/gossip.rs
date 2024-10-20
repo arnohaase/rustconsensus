@@ -1,6 +1,8 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use rand::{Rng, RngCore};
+use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
 use crate::cluster::cluster_config::ClusterConfig;
@@ -49,7 +51,51 @@ impl  Gossip {
     }
 
     async fn gossip_summary_digest(&self) -> GossipSummaryDigestData {
-        todo!()
+        let mut sha256 = Sha256::default();
+
+        {
+            fn hash_node_addr(sha256: &mut Sha256, addr: NodeAddr) {
+                sha256.update(addr.unique.to_le_bytes());
+                match addr.addr {
+                    SocketAddr::V4(data) => {
+                        sha256.update(data.ip().to_bits().to_le_bytes());
+                        sha256.update(data.port().to_le_bytes());
+                    }
+                    SocketAddr::V6(data) => {
+                        sha256.update(data.ip().to_bits().to_le_bytes());
+                        sha256.update(data.port().to_le_bytes());
+                    }
+                }
+            }
+
+            let cluster_state = self.cluster_state.read().await;
+
+            // NB: This relies on the map to have same iteration order on all nodes (which is true
+            //      for FxHashMap)
+            for s in cluster_state.node_states() {
+                hash_node_addr(&mut sha256, s.addr);
+                sha256.update(&[s.membership_state.into()]);
+
+                for role in &s.roles {
+                    sha256.update((role.len() as u64).to_le_bytes());
+                    sha256.update(role.as_bytes());
+                }
+
+                for (&addr, r) in &s.reachability {
+                    hash_node_addr(&mut sha256, addr);
+                    sha256.update(r.counter_of_reporter.to_le_bytes());
+                    sha256.update(if r.is_reachable { &[1u8] } else { &[0u8] });
+                }
+
+                for &addr in &s.seen_by {
+                    hash_node_addr(&mut sha256, addr);
+                }
+            }
+        }
+
+        GossipSummaryDigestData {
+            full_sha256_digest: sha256.finalize().into(),
+        }
     }
 
     //TODO unit test
@@ -124,7 +170,7 @@ impl  Gossip {
     //TODO unit test
     pub async fn on_summary_digest(&self, other_digest: &GossipSummaryDigestData) -> Option<GossipDetailedDigestData> {
         let own_digest = self.gossip_summary_digest().await;
-        if own_digest.full_sha1_digest == other_digest.full_sha1_digest {
+        if own_digest.full_sha256_digest == other_digest.full_sha256_digest {
             return None;
         }
 
