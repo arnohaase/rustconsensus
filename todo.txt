@@ -1,17 +1,21 @@
 todo
 ----
-* cluster join
+* extract stuff to varint crate
+
 * ser / deser NodeAddr
+
+* cluster join
+* termination / shutdown
+* downing
+* weakly up
+
 * MembershipState::is_gossip_partner
   * and remove from 'seen by' if not gossip partner anymore
 * merge NodeState
 * convergence
 * cleanup; removal of converged 'is_reachable=true'
-* weakly up
+
 * increased gossip frequency when not converged
-* termination / shutdown
-* extract stuff to varint crate
-* downing
 
 ideas
 -----
