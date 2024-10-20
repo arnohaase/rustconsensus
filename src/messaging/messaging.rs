@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace, warn};
 
-use crate::messaging::envelope::Envelope;
+use crate::messaging::envelope::{Checksum, Envelope};
 use crate::messaging::message_module::{MessageModule, MessageModuleId};
 use crate::messaging::transport::{MessageHandler, Transport, UdpTransport};
 use crate::messaging::node_addr::NodeAddr;
@@ -74,8 +74,10 @@ impl Messaging {
     async fn _send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
         debug!(from=?self.myself, ?to, "sending message");
 
+        let checksum = Checksum::new(msg);
+
         let mut buf = BytesMut::new();
-        Envelope::write(self.myself, to, msg_module_id, &mut buf);
+        Envelope::write(self.myself, to, checksum, msg_module_id, &mut buf);
 
         buf.extend_from_slice(msg);
 
@@ -134,6 +136,12 @@ impl MessageHandler for ReceivedMessageHandler {
                 // NB: JOIN messages are the only messages that are accepted regardless of target node address' unique part
                 if envelope.to.unique != self.myself.unique && envelope.message_module_id != JOIN_MESSAGE_MODULE_ID {
                     warn!("received a message for {:?}: wrong unique part - was a node restarted without rejoining? Ignoring the message", envelope.to);
+                    return;
+                }
+
+                let actual_checksum = Checksum::new(msg_buf);
+                if envelope.checksum != actual_checksum {
+                    warn!("checksum error in message - skipping");
                     return;
                 }
 
