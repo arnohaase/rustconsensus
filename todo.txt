@@ -14,9 +14,6 @@ todo
 * extract stuff to varint crate
 * hashcode / checksum in envelope
 * downing
-* event sender without first queue
-* clear 'seen by'
-* role based leadership eligibility
 
 ideas
 -----

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use rustc_hash::FxHashMap;
 use tokio::spawn;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::cluster::cluster_state::MembershipState;
@@ -90,21 +90,14 @@ impl ClusterEventNotifier {
         }
     }
 
-    pub async fn run_loop(&self, mut recv: mpsc::Receiver<ClusterEvent>) {
-        loop {
-            if let Some(event) = recv.recv().await {
-                let listeners = self.listeners.read().await
-                    .values()
-                    .cloned()
-                    .collect::<Vec<_>>();
-                for l in listeners {
-                    let evt = event.clone();
-                    spawn(async move { l.on_cluster_event(evt.clone()).await });
-                }
-            }
-            else {
-                break;
-            }
+    pub async fn send_event(&self, event: ClusterEvent) {
+        let listeners = self.listeners.read().await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for l in listeners {
+            let evt = event.clone();
+            spawn(async move { l.on_cluster_event(evt.clone()).await });
         }
     }
 }

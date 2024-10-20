@@ -1,4 +1,5 @@
 use std::time::Duration;
+use rustc_hash::FxHashSet;
 
 pub struct ClusterConfig {
     pub num_gossip_partners: usize,
@@ -21,6 +22,7 @@ pub struct ClusterConfig {
     pub reachability_phi_threshold: f64,
 
     pub leader_action_interval: Duration,
+    pub leader_eligible_roles: Option<FxHashSet<String>>,
 
     pub internal_event_queue_size: usize,
 }

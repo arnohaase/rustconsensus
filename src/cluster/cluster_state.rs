@@ -1,19 +1,19 @@
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
+
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::{FxHashMap, FxHashSet};
-use tokio::sync::mpsc;
-use tracing::{error, warn};
-use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_events::{ClusterEvent, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
-use crate::messaging::node_addr::NodeAddr;
+use tracing::warn;
 
+use crate::cluster::cluster_config::ClusterConfig;
+use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
+use crate::messaging::node_addr::NodeAddr;
 
 pub struct ClusterState {
     myself: NodeAddr,
     config: Arc<ClusterConfig>,
     nodes_with_state: FxHashMap<NodeAddr, NodeState>,
-    cluster_event_queue: mpsc::Sender<ClusterEvent>,
+    cluster_event_queue: Arc<ClusterEventNotifier>,
     version_counter: u32,
     /// we track the 'leader' even if there is no convergence (e.g. if it is unreachable) for convenience
     ///  of applications built on top of the cluster. Leader actions of the cluster are performed only
@@ -21,7 +21,7 @@ pub struct ClusterState {
     leader: Option<NodeAddr>,
 }
 impl ClusterState {
-    pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_event_queue: mpsc::Sender<ClusterEvent>) -> ClusterState {
+    pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_event_queue: Arc<ClusterEventNotifier>) -> ClusterState {
         ClusterState {
             myself,
             config,
@@ -44,6 +44,7 @@ impl ClusterState {
         self.nodes_with_state.get(addr)
     }
 
+    //TODO unit test
     /// returns the node that is the leader in the current topology once state converges (which
     ///  can only happen if all nodes are reachable)
     async fn recalc_leader_candidate(&mut self) {
@@ -52,6 +53,15 @@ impl ClusterState {
 
         let new_leader = self.nodes_with_state.values()
             .filter(|s| s.membership_state.is_leader_eligible())
+            .filter(|s| {
+                if let Some(leader_eligible_roles) = &self.config.leader_eligible_roles {
+                    leader_eligible_roles.iter()
+                        .any(|role| s.roles.contains(role))
+                }
+                else {
+                    true
+                }
+            })
             .map(|s| s.addr)
             .min();
 
@@ -63,6 +73,8 @@ impl ClusterState {
             self.leader = new_leader;
         }
     }
+
+    //TODO logging / handling if there is no leader candidate (e.g. because no node has one of the leader roles)
 
     pub fn get_leader(&self) -> Option<NodeAddr> {
         self.leader
@@ -145,9 +157,7 @@ impl ClusterState {
     }
 
     async fn send_event(&self, event: ClusterEvent) {
-        if let Err(e) = self.cluster_event_queue.send(event).await {
-            error!("error sending cluster event (queue overflow?): {}", e);
-        }
+        self.cluster_event_queue.send_event(event).await;
     }
 
     //TODO unit test
