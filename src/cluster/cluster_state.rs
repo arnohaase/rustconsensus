@@ -5,16 +5,20 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
 use tracing::{error, warn};
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_events::{ClusterEvent, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
+use crate::cluster::cluster_events::{ClusterEvent, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
 use crate::messaging::node_addr::NodeAddr;
 
 
-pub struct ClusterState { //todo  move to ../cluster_state?
+pub struct ClusterState {
     myself: NodeAddr,
     config: Arc<ClusterConfig>,
     nodes_with_state: FxHashMap<NodeAddr, NodeState>,
     cluster_event_queue: mpsc::Sender<ClusterEvent>,
     version_counter: u32,
+    /// we track the 'leader' even if there is no convergence (e.g. if it is unreachable) for convenience
+    ///  of applications built on top of the cluster. Leader actions of the cluster are performed only
+    ///  when convergence is reached.
+    leader: Option<NodeAddr>,
 }
 impl ClusterState {
     pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_event_queue: mpsc::Sender<ClusterEvent>) -> ClusterState {
@@ -24,6 +28,7 @@ impl ClusterState {
             nodes_with_state: Default::default(),
             cluster_event_queue,
             version_counter: 0,
+            leader: None,
         }
     }
 
@@ -41,12 +46,32 @@ impl ClusterState {
 
     /// returns the node that is the leader in the current topology once state converges (which
     ///  can only happen if all nodes are reachable)
-    pub fn get_leader_candidate(&self) -> Option<NodeAddr> {
-        self.nodes_with_state.values()
+    async fn recalc_leader_candidate(&mut self) {
+        //TODO does this require more sophisticated handling? Give preference to some states
+        // over others? Or does the timestamp of joining take care of that well enough?
+
+        let new_leader = self.nodes_with_state.values()
             .filter(|s| s.membership_state.is_leader_eligible())
             .map(|s| s.addr)
-            .min()
+            .min();
+
+        if new_leader != self.leader {
+            self.send_event(ClusterEvent::LeaderChanged(LeaderChangedData {
+                old_leader: self.leader,
+                new_leader,
+            })).await;
+            self.leader = new_leader;
+        }
     }
+
+    pub fn get_leader(&self) -> Option<NodeAddr> {
+        self.leader
+    }
+
+    pub fn am_i_leader(&self) -> bool {
+        self.leader == Some(self.myself)
+    }
+
 
     pub fn is_converged(&self) -> bool {
         let num_convergence_nodes = self.nodes_with_state.values()
@@ -57,7 +82,36 @@ impl ClusterState {
             .all(|s| s.seen_by.len() == num_convergence_nodes)
     }
 
-    //TODO API for accessing state
+    //TODO external API for accessing state
+
+    /// This function is meant to be called at regular intervals on all nodes - it checks who is
+    ///  currently the leader, ensures convergence and then performs leader actions if this
+    ///  is actually the leader node
+    pub async fn leader_actions(&mut self) {
+        use MembershipState::*;
+
+        self.recalc_leader_candidate().await;
+
+        if self.am_i_leader() && self.is_converged() {
+            fn change_state(s: &mut NodeState, new_state: MembershipState, myself: NodeAddr) {
+                s.membership_state = new_state;
+                s.seen_by.clear();
+                s.seen_by.insert(myself);
+            }
+
+            for s in self.nodes_with_state.values_mut() {
+                match s.membership_state {
+                    Joining | WeaklyUp => change_state(s, Up, self.myself),
+                    Leaving => change_state(s, Exiting, self.myself), //TODO wait for 'ok' from higher-up abstractions
+                    Exiting => change_state(s, Removed, self.myself), //NB: This happens in a separate round of convergence
+                    Down => change_state(s, Removed, self.myself),
+                    _ => {}
+                }
+            }
+
+            //TODO unreachable -> Down --> split brain handling etc.
+        }
+    }
 
     pub async fn merge_node_state(&mut self, state: NodeState) {
         //TODO events, notifications
@@ -239,11 +293,18 @@ pub enum MembershipState {
     Removed = 7,
 }
 impl MembershipState {
+
     pub fn is_gossip_partner(&self) -> bool {
         todo!()
     }
 
     pub fn is_leader_eligible(&self) -> bool {
-        todo!()
+        use MembershipState::*;
+
+        match self {
+            // NB: We allow a leader to be 'Exiting' to allow promotion to 'Removed' reliably during shutdown
+            Joining | WeaklyUp | Up | Leaving | Exiting => true,
+            Down | Removed => false,
+        }
     }
 }

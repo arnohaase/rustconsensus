@@ -88,23 +88,10 @@ pub async fn run_cluster(
 
 
         // leader actions
-
-        //TODO 'leader changed' event
         millis_until_next_leader_actions = match millis_until_next_leader_actions.checked_sub(elapsed_millis) {
             Some(millis) => millis,
             None => {
-                let leader = cluster_state.read().await.get_leader_candidate();
-                if leader == Some(messaging.get_self_addr())
-                    && cluster_state.read().await.is_converged()
-                {
-
-                    //TODO promote to 'up'
-                    //TODO promote to 'Exiting'
-                    //TODO promote to 'Removed'
-
-                    todo!()
-                }
-
+                cluster_state.write().await.leader_actions().await;
                 config.leader_action_interval.as_millis() as u32
             }
         };

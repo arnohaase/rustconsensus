@@ -40,7 +40,8 @@ pub struct NodeRemovedData {
 
 #[derive(Clone, Debug)]
 pub struct LeaderChangedData {
-    //TODO
+    pub old_leader: Option<NodeAddr>,
+    pub new_leader: Option<NodeAddr>,
 }
 
 #[derive(Clone, Debug)]

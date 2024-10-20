@@ -5,7 +5,6 @@ todo
 * MembershipState::is_gossip_partner
 * merge NodeState
 * calculate gossip summary digest (SHA-1)
-* leader actions
 * convergence
 * leader change event
 * cleanup; removal of converged 'is_reachable=true'
@@ -19,3 +18,8 @@ todo
 * downing
 * event sender without first queue
 * clear 'seen by'
+
+ideas
+-----
+* more relaxed convergence model per node - this might work if we add the requirement that new nodes must come 'after'
+   the current leader, but it requires serious thought
