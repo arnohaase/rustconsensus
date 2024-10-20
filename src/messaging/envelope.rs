@@ -16,10 +16,17 @@ impl Debug for Checksum {
     }
 }
 impl Checksum {
-    pub fn new(buf: &[u8]) -> Checksum {
+    pub fn new(from: NodeAddr, to: NodeAddr, message_module_id: MessageModuleId, msg: &[u8]) -> Checksum {
+        let hasher = Crc::<u64>::new(&crc::CRC_64_REDIS);
+        let mut digest = hasher.digest();
+
+        digest.update(&from.unique.to_le_bytes());
+        digest.update(&to.unique.to_le_bytes());
+        digest.update(&message_module_id.0.to_le_bytes());
+        digest.update(msg);
+
         Checksum(
-            Crc::<u64>::new(&crc::CRC_64_REDIS)
-                .checksum(buf)
+            digest.finalize()
         )
     }
 }

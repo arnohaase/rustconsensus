@@ -74,7 +74,7 @@ impl Messaging {
     async fn _send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
         debug!(from=?self.myself, ?to, "sending message");
 
-        let checksum = Checksum::new(msg);
+        let checksum = Checksum::new(self.myself, to, msg_module_id, msg);
 
         let mut buf = BytesMut::new();
         Envelope::write(self.myself, to, checksum, msg_module_id, &mut buf);
@@ -139,7 +139,7 @@ impl MessageHandler for ReceivedMessageHandler {
                     return;
                 }
 
-                let actual_checksum = Checksum::new(msg_buf);
+                let actual_checksum = Checksum::new(envelope.from, envelope.to, envelope.message_module_id, msg_buf);
                 if envelope.checksum != actual_checksum {
                     warn!("checksum error in message - skipping");
                     return;
