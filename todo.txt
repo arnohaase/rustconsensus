@@ -11,7 +11,6 @@ todo
 * increased gossip frequency when not converged
 * termination / shutdown
 * extract stuff to varint crate
-* hashcode / checksum in envelope
 * downing
 
 ideas
