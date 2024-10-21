@@ -42,4 +42,6 @@ impl Cluster {
     pub async fn remove_listener(&self, id: &Uuid) -> anyhow::Result<()> {
         self.event_notifier.try_remove_listener(id).await
     }
+
+    //TODO external API for accessing state
 }

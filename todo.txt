@@ -1,5 +1,6 @@
 todo
 ----
+* initial start-up; seed nodes etc.
 * cluster join
 * termination / shutdown
 * downing
@@ -8,7 +9,6 @@ todo
 * calculate detailed gossip digest
 * MembershipState::is_gossip_partner
   * and remove from 'seen by' if not gossip partner anymore
-* merge NodeState
 * convergence
 * cleanup; removal of converged 'is_reachable=true'
 

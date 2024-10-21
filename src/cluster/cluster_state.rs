@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
@@ -8,12 +9,13 @@ use tracing::warn;
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
 use crate::messaging::node_addr::NodeAddr;
+use crate::util::crdt::{Crdt, CrdtOrdering};
 
 pub struct ClusterState {
     myself: NodeAddr,
     config: Arc<ClusterConfig>,
     nodes_with_state: FxHashMap<NodeAddr, NodeState>,
-    cluster_event_queue: Arc<ClusterEventNotifier>,
+    event_notifier: Arc<ClusterEventNotifier>,
     version_counter: u32,
     /// we track the 'leader' even if there is no convergence (e.g. if it is unreachable) for convenience
     ///  of applications built on top of the cluster. Leader actions of the cluster are performed only
@@ -26,7 +28,7 @@ impl ClusterState {
             myself,
             config,
             nodes_with_state: Default::default(),
-            cluster_event_queue,
+            event_notifier: cluster_event_queue,
             version_counter: 0,
             leader: None,
         }
@@ -94,7 +96,41 @@ impl ClusterState {
             .all(|s| s.seen_by.len() == num_convergence_nodes)
     }
 
-    //TODO external API for accessing state
+    /// This is the internal handler for all changes to a given node state. It updates the 'seen by'
+    ///  set and sends change events.
+    async fn state_changed(myself: NodeAddr, old_state: Option<MembershipState>, s: &mut NodeState, crdt_ordering: CrdtOrdering, other_seen_by: &FxHashSet<NodeAddr>, event_notifier: Arc<ClusterEventNotifier>) {
+        use CrdtOrdering::*;
+
+        if crdt_ordering == Equal || crdt_ordering == SelfWasBigger {
+            s.seen_by.insert(myself);
+            return;
+        }
+
+        s.seen_by.clear();
+        s.seen_by.insert(myself);
+        if crdt_ordering == OtherWasBigger {
+            for &addr in other_seen_by {
+                s.seen_by.insert(addr);
+            }
+        }
+
+        event_notifier.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr: s.addr })).await;
+        if let Some(old_state) = old_state {
+            if old_state != s.membership_state {
+                event_notifier.send_event(ClusterEvent::NodeStateChanged(NodeStateChangedData {
+                    addr: s.addr,
+                    old_state,
+                    new_state: s.membership_state,
+                })).await;
+            }
+        }
+        else {
+            event_notifier.send_event(ClusterEvent::NodeAdded(NodeAddedData {
+                addr: s.addr,
+                state: s.membership_state
+            })).await;
+        }
+    }
 
     /// This function is meant to be called at regular intervals on all nodes - it checks who is
     ///  currently the leader, ensures convergence and then performs leader actions if this
@@ -105,19 +141,16 @@ impl ClusterState {
         self.recalc_leader_candidate().await;
 
         if self.am_i_leader() && self.is_converged() {
-            fn change_state(s: &mut NodeState, new_state: MembershipState, myself: NodeAddr) {
-                s.membership_state = new_state;
-                s.seen_by.clear();
-                s.seen_by.insert(myself);
-            }
-
             for s in self.nodes_with_state.values_mut() {
-                match s.membership_state {
-                    Joining | WeaklyUp => change_state(s, Up, self.myself),
-                    Leaving => change_state(s, Exiting, self.myself), //TODO wait for 'ok' from higher-up abstractions
-                    Exiting => change_state(s, Removed, self.myself), //NB: This happens in a separate round of convergence
-                    Down => change_state(s, Removed, self.myself),
-                    _ => {}
+                let old_state = s.membership_state;
+                if let Some(new_state) = match old_state {
+                    Joining | WeaklyUp => Some(Up),
+                    Leaving => Some(Exiting),
+                    Exiting | Down => Some(Removed),
+                    _ => None
+                } {
+                    s.membership_state = new_state;
+                    Self::state_changed(self.myself, Some(old_state), s, CrdtOrdering::NeitherWasBigger, &Default::default(), self.event_notifier.clone()).await;
                 }
             }
 
@@ -125,39 +158,28 @@ impl ClusterState {
         }
     }
 
-    pub async fn merge_node_state(&mut self, state: NodeState) {
-        //TODO events, notifications
+    pub async fn merge_node_state(&mut self, mut state: NodeState) {
         let addr = state.addr;
 
         match self.nodes_with_state.entry(state.addr) {
             Entry::Occupied(mut e) => {
                 let old_state = e.get().membership_state;
-                let new_state = state.membership_state;
-                let was_changed = e.get_mut().merge(state);
-
-                if was_changed {
-                    self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr })).await;
-                    self.send_event(ClusterEvent::NodeStateChanged(NodeStateChangedData {
-                        addr,
-                        old_state,
-                        new_state,
-                    })).await;
-                }
+                let crdt_ordering = e.get_mut().merge(&state);
+                Self::state_changed(self.myself, Some(old_state), e.get_mut(), crdt_ordering, &state.seen_by, self.event_notifier.clone()).await;
             }
             Entry::Vacant(e) => {
-                e.insert(state.clone());
+                let other_seen_by = state.seen_by;
+                state.seen_by = Default::default();
 
-                self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr })).await;
-                self.send_event(ClusterEvent::NodeAdded(NodeAddedData {
-                    addr,
-                    state: state.membership_state,
-                })).await;
+                Self::state_changed(self.myself, None, &mut state, CrdtOrdering::OtherWasBigger, &other_seen_by, self.event_notifier.clone()).await;
+
+                e.insert(state.clone());
             }
         }
     }
 
     async fn send_event(&self, event: ClusterEvent) {
-        self.cluster_event_queue.send_event(event).await;
+        self.event_notifier.send_event(event).await;
     }
 
     //TODO unit test
@@ -298,9 +320,54 @@ impl NodeState {
             .all(|r| r.is_reachable)
     }
 
-    /// returns true iff self wos modified
-    pub fn merge(&mut self, other: NodeState) -> bool {
-        todo!()
+    pub fn merge(&mut self, other: &NodeState) -> CrdtOrdering {
+        assert_eq!(self.addr, other.addr);
+
+        let mut result = CrdtOrdering::Equal;
+
+        let membership_state_result = self.membership_state.merge_from(&other.membership_state);
+        result = result.merge(membership_state_result);
+
+        let roles_result = self.roles.merge_from(&other.roles);
+        if roles_result != CrdtOrdering::Equal {
+            warn!("different roles when merging gossip state for node {:?} - merged and proceeding, but this is a bug", self.addr);
+        }
+        result = result.merge(roles_result);
+
+        for (addr, r_self) in self.reachability.iter_mut() {
+            if let Some(r_other) = other.reachability.get(addr) {
+                match Ord::cmp(&r_self.counter_of_reporter, &r_other.counter_of_reporter) {
+                    Ordering::Less => {
+                        r_self.counter_of_reporter = r_other.counter_of_reporter;
+                        r_self.is_reachable = r_other.is_reachable;
+                        result.merge(CrdtOrdering::OtherWasBigger);
+                    }
+                    Ordering::Equal => {
+                        if r_self.is_reachable != r_other.is_reachable {
+                            warn!("gossip inconsistency for reachability of node {:?} as seen from {:?}@{}: ", self.addr, addr, r_self.counter_of_reporter);
+                        }
+                    }
+                    Ordering::Greater => {
+                        result.merge(CrdtOrdering::SelfWasBigger);
+                    }
+                }
+            }
+            else {
+                result.merge(CrdtOrdering::SelfWasBigger);
+            }
+        }
+
+        let reporters_only_in_other = other.reachability.iter()
+            .filter(|(a, r)| !self.reachability.contains_key(a))
+            .map(|(a, r)| (*a, r.clone()))
+            .collect::<Vec<_>>();
+
+        for (addr, r) in reporters_only_in_other {
+            let _ = self.reachability.insert(addr, r);
+            result.merge(CrdtOrdering::OtherWasBigger);
+        }
+
+        result
     }
 }
 
@@ -368,6 +435,20 @@ impl MembershipState {
             // NB: We allow a leader to be 'Exiting' to allow promotion to 'Removed' reliably during shutdown
             Joining | WeaklyUp | Up | Leaving | Exiting => true,
             Down | Removed => false,
+        }
+    }
+}
+impl Crdt for MembershipState {
+    fn merge_from(&mut self, other: &MembershipState) -> CrdtOrdering {
+        match Ord::cmp(self, other) {
+            Ordering::Equal => CrdtOrdering::Equal,
+            Ordering::Less => {
+                *self = *other;
+                CrdtOrdering::OtherWasBigger
+            }
+            Ordering::Greater => {
+                CrdtOrdering::SelfWasBigger
+            }
         }
     }
 }
