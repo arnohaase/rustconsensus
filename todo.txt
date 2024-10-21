@@ -1,7 +1,5 @@
 todo
 ----
-* ser / deser NodeAddr
-
 * cluster join
 * termination / shutdown
 * downing
