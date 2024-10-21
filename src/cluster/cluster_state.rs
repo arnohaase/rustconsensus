@@ -371,7 +371,7 @@ impl NodeState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash)]
 pub struct NodeReachability {
     /// a node reporting a change in reachability for a node attaches a strictly monotonous
     ///  counter so that reachability can be merged in a coordination-free fashion

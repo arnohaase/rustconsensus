@@ -1,7 +1,9 @@
+use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use rand::{Rng, RngCore};
+use rustc_hash::{FxHasher, FxHashMap};
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
@@ -105,7 +107,32 @@ impl  Gossip {
     }
 
     fn gossip_detailed_digest_with_given_nonce(cluster_state: &ClusterState, nonce: u32) -> GossipDetailedDigestData {
-        todo!()
+        let mut nodes: FxHashMap<NodeAddr, u64> = Default::default();
+
+        for s in cluster_state.node_states() {
+            let mut hasher = FxHasher::with_seed(nonce as usize); //TODO we assume at least 32-bit architecture - how to ensure it once and for all?
+
+            // no need to add the node address to the hash (it's the key in the returned map of
+            //  hashes), or the roles (they're supposed to be immutable anyway)
+
+            Into::<u8>::into(s.membership_state).hash(&mut hasher);
+
+            for (a, r) in &s.reachability {
+                a.hash(&mut hasher);
+                r.hash(&mut hasher);
+            }
+
+            for sb in &s.seen_by {
+                sb.hash(&mut hasher);
+            }
+
+            let _ = nodes.insert(s.addr, hasher.finish());
+        }
+
+        GossipDetailedDigestData {
+            nonce,
+            nodes,
+        }
     }
 
     //TODO unit test
