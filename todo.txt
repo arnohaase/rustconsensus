@@ -1,7 +1,5 @@
 todo
 ----
-* extract stuff to varint crate
-
 * ser / deser NodeAddr
 
 * cluster join

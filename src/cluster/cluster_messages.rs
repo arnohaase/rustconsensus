@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use bytes::{Buf, BufMut, BytesMut};
 use bytes_varint::{VarIntSupport, VarIntSupportMut};
+use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use num_enum::TryFromPrimitive;
 use rustc_hash::FxHashMap;
 use tokio::sync::RwLock;
@@ -16,7 +17,6 @@ use crate::messaging::envelope::Envelope;
 use crate::messaging::message_module::{MessageModule, MessageModuleId};
 use crate::messaging::messaging::Messaging;
 use crate::messaging::node_addr::NodeAddr;
-use crate::util::buf_ext::{BufExt, BufMutExt, DummyErrorAdapter};
 
 pub const CLUSTER_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"Cluster\0");
 
@@ -411,7 +411,7 @@ impl NodeAddrPoolSerializer {
             Entry::Occupied(e) => {
                 *e.get()
             }
-            Entry::Vacant(mut e) => {
+            Entry::Vacant(e) => {
                 let id = prev_len;
                 self.reverse_resolution_table.push(addr.clone());
                 *e.insert(id)
@@ -447,9 +447,9 @@ struct NodeAddrPoolDeserializer {
     resolution_table: Vec<NodeAddr>,
 }
 impl NodeAddrPoolDeserializer {
-    pub fn new(mut buf: &mut impl Buf) -> anyhow::Result<NodeAddrPoolDeserializer> {
+    pub fn new(buf: &mut impl Buf) -> anyhow::Result<NodeAddrPoolDeserializer> {
         let initial = buf.remaining();
-        let offs_resolution_table = buf.get_u64_varint().a()? as usize; //TODO get_usize_varint()
+        let offs_resolution_table = buf.try_get_usize_varint()?;
         let len_of_offset = initial - buf.remaining();
 
         let offs_resolution_table = offs_resolution_table.checked_sub(len_of_offset)
@@ -463,7 +463,7 @@ impl NodeAddrPoolDeserializer {
         }
 
         let mut buf_resolution_table = &raw[offs_resolution_table..];
-        let num_addresses = buf_resolution_table.get_u64_varint().a()? as usize; //TODO get_usize_varint()
+        let num_addresses = buf_resolution_table.try_get_usize_varint()?;
 
         let mut resolution_table = Vec::with_capacity(num_addresses);
         for _ in 0..num_addresses {
@@ -476,7 +476,7 @@ impl NodeAddrPoolDeserializer {
     }
 
     pub fn try_get_node_addr(&self, buf: &mut impl Buf) -> anyhow::Result<NodeAddr> {
-        let id = buf.get_u64_varint().a()? as usize; //TODO get_usize_varint
+        let id = buf.try_get_usize_varint()?;
         if let Some(node_addr) = self.resolution_table.get(id) {
             return Ok(node_addr.clone());
         }
@@ -518,7 +518,7 @@ impl <'a> StringPoolSerializer<'a> {
             Entry::Occupied(e) => {
                 *e.get()
             }
-            Entry::Vacant(mut e) => {
+            Entry::Vacant(e) => {
                 let id = prev_len;
                 self.reverse_resolution_table.push(s);
                 *e.insert(id)
@@ -543,7 +543,7 @@ impl <'a> StringPoolSerializer<'a> {
         buf.put_u64_varint(self.resolution_table.len() as u64); //TODO add support for put_usize_varint
         for s in self.reverse_resolution_table {
             // strings are serialized in the order of their ids, so there is no need to store the id explicitly
-            buf.put_string(s);
+            put_string_raw(buf, s);
         }
     }
 }
@@ -552,9 +552,9 @@ struct StringPoolDeserializer {
     resolution_table: Vec<String>,
 }
 impl StringPoolDeserializer {
-    pub fn new(mut buf: &mut impl Buf) -> anyhow::Result<StringPoolDeserializer> {
+    pub fn new(buf: &mut impl Buf) -> anyhow::Result<StringPoolDeserializer> {
         let initial = buf.remaining();
-        let offs_resolution_table = buf.get_u64_varint().a()? as usize; //TODO get_usize_varint()
+        let offs_resolution_table = buf.try_get_usize_varint()?;
         let len_of_offset = initial - buf.remaining();
 
         let offs_resolution_table = offs_resolution_table.checked_sub(len_of_offset)
@@ -568,11 +568,11 @@ impl StringPoolDeserializer {
         }
 
         let mut buf_resolution_table = &raw[offs_resolution_table..];
-        let num_entries = buf_resolution_table.get_u64_varint().a()? as usize; //TODO get_usize_varint()
+        let num_entries = buf_resolution_table.try_get_usize_varint()?;
 
         let mut resolution_table = Vec::with_capacity(num_entries);
         for _ in 0..num_entries {
-            resolution_table.push(buf_resolution_table.try_get_string()?);
+            resolution_table.push(try_get_string_raw(&mut buf_resolution_table)?);
         }
 
         Ok(StringPoolDeserializer {
@@ -581,7 +581,7 @@ impl StringPoolDeserializer {
     }
 
     pub fn try_get_string(&self, buf: &mut impl Buf) -> anyhow::Result<String> {
-        let id = buf.get_u64_varint().a()? as usize; //TODO get_usize_varint
+        let id = buf.try_get_usize_varint()?;
         if let Some(s) = self.resolution_table.get(id) {
             return Ok(s.clone());
         }
@@ -597,4 +597,20 @@ impl StringPoolDeserializer {
         }
         Ok(strings.into_iter().collect())
     }
+}
+
+fn put_string_raw(buf: &mut BytesMut, s: &str) {
+    buf.put_usize_varint(s.len());
+    buf.put_slice(s.as_bytes());
+}
+
+fn try_get_string_raw(buf: &mut impl Buf) -> anyhow::Result<String> {
+    let len = buf.try_get_usize_varint()?;
+    let mut result = Vec::new();
+    for _ in 0..len {
+        result.push(buf.try_get_u8()?);
+    }
+
+    let s = String::from_utf8(result)?;
+    Ok(s)
 }
