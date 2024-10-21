@@ -101,8 +101,23 @@ impl ClusterState {
     async fn state_changed(myself: NodeAddr, old_state: Option<MembershipState>, s: &mut NodeState, crdt_ordering: CrdtOrdering, other_seen_by: &FxHashSet<NodeAddr>, event_notifier: Arc<ClusterEventNotifier>) {
         use CrdtOrdering::*;
 
-        if crdt_ordering == Equal || crdt_ordering == SelfWasBigger {
-            s.seen_by.insert(myself);
+        if crdt_ordering == SelfWasBigger {
+            // the gossip partner has an older version of this node's data, so we ignore its 'seen
+            //  by' set
+            return;
+        }
+
+        if crdt_ordering == Equal {
+            // both nodes share the same view on a node's data, so we merge their 'seen by' sets
+            let seen_by_size_before = s.seen_by.len();
+            for &addr in other_seen_by {
+                let _ = s.seen_by.insert(addr);
+            }
+            if s.seen_by.len() > seen_by_size_before {
+                // we send out events only when the 'seen by' set increased - there is no other
+                //  change after all
+                event_notifier.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr: s.addr })).await;
+            }
             return;
         }
 
@@ -141,6 +156,8 @@ impl ClusterState {
         self.recalc_leader_candidate().await;
 
         if self.am_i_leader() && self.is_converged() {
+            let mut nodes_removed_from_gossip = Vec::new();
+
             for s in self.nodes_with_state.values_mut() {
                 let old_state = s.membership_state;
                 if let Some(new_state) = match old_state {
@@ -151,21 +168,37 @@ impl ClusterState {
                 } {
                     s.membership_state = new_state;
                     Self::state_changed(self.myself, Some(old_state), s, CrdtOrdering::NeitherWasBigger, &Default::default(), self.event_notifier.clone()).await;
+                    if !new_state.is_gossip_partner() {
+                        nodes_removed_from_gossip.push(s.addr);
+                    }
                 }
+            }
+
+            for addr in nodes_removed_from_gossip {
+                self.on_node_removed_from_gossip(&addr);
             }
 
             //TODO unreachable -> Down --> split brain handling etc.
         }
     }
 
-    pub async fn merge_node_state(&mut self, mut state: NodeState) {
-        let addr = state.addr;
+    /// when a node is removed from gossip (i.e. it becomes 'Down' or 'Removed'), it needs to be
+    ///  removed from all 'seen by' sets
+    fn on_node_removed_from_gossip(&mut self, addr: &NodeAddr) {
+        for s in self.nodes_with_state.values_mut() {
+            s.seen_by.remove(addr);
+        }
+    }
 
+    pub async fn merge_node_state(&mut self, mut state: NodeState) {
         match self.nodes_with_state.entry(state.addr) {
             Entry::Occupied(mut e) => {
                 let old_state = e.get().membership_state;
                 let crdt_ordering = e.get_mut().merge(&state);
                 Self::state_changed(self.myself, Some(old_state), e.get_mut(), crdt_ordering, &state.seen_by, self.event_notifier.clone()).await;
+                if old_state.is_gossip_partner() && !state.membership_state.is_gossip_partner() {
+                    self.on_node_removed_from_gossip(&state.addr);
+                }
             }
             Entry::Vacant(e) => {
                 let other_seen_by = state.seen_by;
@@ -173,7 +206,12 @@ impl ClusterState {
 
                 Self::state_changed(self.myself, None, &mut state, CrdtOrdering::OtherWasBigger, &other_seen_by, self.event_notifier.clone()).await;
 
-                e.insert(state.clone());
+                let new_state = state.membership_state;
+                let addr = state.addr;
+                e.insert(state);
+                if !new_state.is_gossip_partner() {
+                    self.on_node_removed_from_gossip(&addr);
+                }
             }
         }
     }
@@ -358,7 +396,7 @@ impl NodeState {
         }
 
         let reporters_only_in_other = other.reachability.iter()
-            .filter(|(a, r)| !self.reachability.contains_key(a))
+            .filter(|(a, _)| !self.reachability.contains_key(a))
             .map(|(a, r)| (*a, r.clone()))
             .collect::<Vec<_>>();
 
@@ -425,7 +463,12 @@ pub enum MembershipState {
 impl MembershipState {
 
     pub fn is_gossip_partner(&self) -> bool {
-        todo!()
+        use MembershipState::*;
+
+        match self {
+            Joining | WeaklyUp | Up | Leaving | Exiting => true,
+            Down | Removed => false,
+        }
     }
 
     pub fn is_leader_eligible(&self) -> bool {
