@@ -5,6 +5,7 @@ todo
 * downing
 * weakly up
 
+* calculate detailed gossip digest
 * MembershipState::is_gossip_partner
   * and remove from 'seen by' if not gossip partner anymore
 * merge NodeState

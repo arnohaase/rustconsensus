@@ -417,7 +417,7 @@ impl NodeAddrPoolSerializer {
                 *e.insert(id)
             }
         };
-        buf.put_u64_varint(addr_id as u64); //TODO add support for put_usize_varint
+        buf.put_usize_varint(addr_id);
     }
 
     pub fn put_addr_set<'a>(&mut self, buf: &mut BytesMut, addrs: impl ExactSizeIterator<Item = &'a NodeAddr>) {
@@ -435,7 +435,7 @@ impl NodeAddrPoolSerializer {
         (&mut buf[self.offs_for_offs..]).put_u32_le(offs_resolution_table);
 
         // write the resolution table
-        buf.put_u64_varint(self.resolution_table.len() as u64); //TODO add support for put_usize_varint
+        buf.put_usize_varint(self.resolution_table.len());
         for addr in self.reverse_resolution_table {
             // nodes are serialized in the order of their ids, so there is no need to store the id explicitly
             addr.ser(buf);
@@ -524,7 +524,7 @@ impl <'a> StringPoolSerializer<'a> {
                 *e.insert(id)
             }
         };
-        buf.put_u64_varint(s_id as u64); //TODO add support for put_usize_varint
+        buf.put_usize_varint(s_id);
     }
 
     pub fn put_string_set(&mut self, buf: &mut BytesMut, strings: impl ExactSizeIterator<Item = &'a String>) {
@@ -540,7 +540,7 @@ impl <'a> StringPoolSerializer<'a> {
         (&mut buf[self.offs_for_offs..]).put_u32_le(offs_resolution_table);
 
         // write the resolution table
-        buf.put_u64_varint(self.resolution_table.len() as u64); //TODO add support for put_usize_varint
+        buf.put_usize_varint(self.resolution_table.len());
         for s in self.reverse_resolution_table {
             // strings are serialized in the order of their ids, so there is no need to store the id explicitly
             put_string_raw(buf, s);
