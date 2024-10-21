@@ -16,7 +16,7 @@ pub enum ClusterEvent {
     NodeUpdated(NodeUpdatedData),
     NodeAdded(NodeAddedData),
     NodeRemoved(NodeRemovedData),
-    LeaderChanged(LeaderChangedData), //TODO fire this event
+    LeaderChanged(LeaderChangedData),
     ReachabilityChanged(ReachabilityChangedData),
     NodeStateChanged(NodeStateChangedData),
 }
