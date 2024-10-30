@@ -22,15 +22,24 @@ pub const CLUSTER_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"Cl
 
 pub struct ClusterMessageModule {
     gossip: Arc<RwLock<Gossip>>,
-    messaging: Arc<RwLock<Messaging>>,
+    messaging: Arc<Messaging>,
     heart_beat: Arc<RwLock<HeartBeat>>,
 }
 impl ClusterMessageModule {
+    pub fn new(gossip: Arc<RwLock<Gossip>>, messaging: Arc<Messaging>, heart_beat: Arc<RwLock<HeartBeat>>) -> Arc<ClusterMessageModule> {
+        Arc::new({
+            ClusterMessageModule {
+                gossip,
+                messaging,
+                heart_beat,
+            }
+        })
+    }
+
     async fn reply(&self, envelope: &Envelope, message: ClusterMessage) {
         let mut buf = BytesMut::new();
         message.ser(&mut buf);
-        let _ = self.messaging.read().await
-            .send(envelope.from, CLUSTER_MESSAGE_MODULE_ID, &buf).await;
+        let _ = self.messaging.send(envelope.from, CLUSTER_MESSAGE_MODULE_ID, &buf).await;
     }
 
     async fn _on_message(&self, envelope: &Envelope, buf: &[u8]) -> anyhow::Result<()> {

@@ -52,6 +52,15 @@ impl Messaging {
         }
     }
 
+    pub async fn deregister_module(&self, id: MessageModuleId) -> anyhow::Result<()> {
+        let prev = self.message_modules.write().await
+            .remove(&id);
+        if prev.is_none() {
+            return Err(anyhow!("deregistering a module that was not previously registered: {:?}", id));
+        }
+        Ok(())
+    }
+
     pub fn get_self_addr(&self) -> NodeAddr {
         self.myself
     }

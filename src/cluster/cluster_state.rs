@@ -174,11 +174,12 @@ impl ClusterState {
                 }
             }
 
+            //TODO unreachable -> Down --> split brain handling etc.
+
+
             for addr in nodes_removed_from_gossip {
                 self.on_node_removed_from_gossip(&addr);
             }
-
-            //TODO unreachable -> Down --> split brain handling etc.
         }
     }
 
@@ -348,7 +349,7 @@ pub struct NodeState {
     pub addr: NodeAddr,
     pub membership_state: MembershipState,
     pub roles: FxHashSet<String>,
-    pub reachability: FxHashMap<NodeAddr, NodeReachability>, //TODO when to clean up 'is_reachable == true' entries
+    pub reachability: FxHashMap<NodeAddr, NodeReachability>, //TODO clean up 'is_reachable == true' entries
     pub seen_by: FxHashSet<NodeAddr>,
 }
 impl NodeState {

@@ -39,20 +39,20 @@ fn init_logging() {
         .ok();
 }
 
-async fn create_transport(addr: &str) -> anyhow::Result<Arc<Messaging>> {
+async fn create_messaging(addr: &str) -> anyhow::Result<Arc<Messaging>> {
     let addr = NodeAddr::from(SocketAddr::from_str(addr).unwrap());
-    let transport = Messaging::new(addr).await?;
-    transport.register_module(Arc::new(TestMessageModule{})).await?;
+    let messaging = Messaging::new(addr).await?;
+    messaging.register_module(Arc::new(TestMessageModule{})).await?;
 
-    Ok(Arc::new(transport))
+    Ok(Arc::new(messaging))
 }
 
 #[tokio::main]
 pub async fn main() -> anyhow::Result<()> {
     init_logging();
 
-    let t1 = create_transport("127.0.0.1:9810").await?;
-    let t2 = create_transport("127.0.0.1:9811").await?;
+    let t1 = create_messaging("127.0.0.1:9810").await?;
+    let t2 = create_messaging("127.0.0.1:9811").await?;
 
     let m = TestMessageModule{};
 

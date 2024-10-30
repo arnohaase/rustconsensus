@@ -1,8 +1,8 @@
+pub mod cluster;
+pub mod cluster_config;
+pub mod cluster_driver;
+pub mod cluster_events;
 pub mod cluster_state;
-mod cluster_config;
 pub mod cluster_messages;
 pub mod gossip;
 pub mod heartbeat;
-mod cluster_driver;
-mod cluster_events;
-mod cluster;

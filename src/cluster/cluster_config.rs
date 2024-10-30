@@ -23,6 +23,24 @@ pub struct ClusterConfig {
 
     pub leader_action_interval: Duration,
     pub leader_eligible_roles: Option<FxHashSet<String>>,
+}
 
-    pub internal_event_queue_size: usize,
+impl Default for ClusterConfig {
+    fn default() -> Self { //TODO default values
+        ClusterConfig {
+            num_gossip_partners: 3,
+            gossip_with_differing_state_probability: 0.8,
+            regular_gossip_interval: Duration::from_secs(1),
+            num_heartbeat_partners_per_node: 9,
+            ignore_heartbeat_response_after_n_counter_increments: 4,
+            ignore_heartbeat_response_after_n_seconds: 4,
+            rtt_moving_avg_new_weight: 0.95,
+            rtt_min_std_dev: Duration::from_millis(20),
+            heartbeat_interval: Duration::from_secs(1),
+            heartbeat_grace_period: Duration::from_secs(1),
+            reachability_phi_threshold: 8.0,
+            leader_action_interval: Duration::from_secs(1),
+            leader_eligible_roles: None,
+        }
+    }
 }
