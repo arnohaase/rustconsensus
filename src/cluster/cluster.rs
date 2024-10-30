@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::cluster::cluster_config::ClusterConfig;
@@ -34,11 +35,13 @@ impl Cluster {
         let heart_beat = Arc::new(RwLock::new(HeartBeat::new(myself, self.config.clone())));
         let gossip = Arc::new(RwLock::new(Gossip::new(myself, self.config.clone(), cluster_state.clone())));
 
+        debug!("registering clutser message module");
         let cluster_messaging = ClusterMessageModule::new(gossip.clone(), self.messaging.clone(), heart_beat.clone());
         self.messaging.register_module(cluster_messaging.clone()).await?;
 
         run_cluster(self.config.clone(), cluster_state, heart_beat, gossip, self.messaging.clone()).await;
 
+        debug!("deregistering clutser message module");
         self.messaging.deregister_module(cluster_messaging.id()).await
     }
 

@@ -4,7 +4,7 @@ use bytes::BytesMut;
 
 use tokio::sync::RwLock;
 use tokio::time::{Instant, sleep};
-use tracing::error;
+use tracing::{debug, error, info};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_messages::{CLUSTER_MESSAGE_MODULE_ID, ClusterMessage};
@@ -30,6 +30,8 @@ pub async fn run_cluster(
     let mut millis_until_next_heartbeat: u32 = 0;
     let mut millis_until_next_leader_actions: u32 = 0;
 
+    info!("starting cluster on {:?}", cluster_state.read().await.myself());
+
     loop {
         sleep(Duration::from_millis(10)).await;
         let new_time = Instant::now();
@@ -51,9 +53,11 @@ pub async fn run_cluster(
         millis_until_next_gossip = match millis_until_next_gossip.checked_sub(elapsed_millis) {
             Some(millis) => millis,
             None => {
+                debug!("periodic gossip");
                 let gossip_partners = gossip.read().await
                     .gossip_partners().await;
                 for (addr, msg) in gossip_partners {
+                    debug!("sending gossip message to {:?}", addr);
                     let mut buf = BytesMut::new();
                     msg.ser(&mut buf);
                     let _ = messaging.send(addr, CLUSTER_MESSAGE_MODULE_ID, &buf).await;
@@ -69,11 +73,13 @@ pub async fn run_cluster(
         millis_until_next_heartbeat = match millis_until_next_heartbeat.checked_sub(elapsed_millis) {
             Some(millis) => millis,
             None => {
+                debug!("periodic heartbeat");
                 let msg = heart_beat.write().await
                     .new_heartbeat_message();
                 let msg = ClusterMessage::Heartbeat(msg);
                 let recipients = heart_beat.write().await
                     .heartbeat_recipients(&*cluster_state.read().await);
+                debug!("sending heartbeat message to {:?}", recipients);
                 for recipient in recipients {
                     let mut buf = BytesMut::new();
                     msg.ser(&mut buf);
@@ -91,6 +97,7 @@ pub async fn run_cluster(
         millis_until_next_leader_actions = match millis_until_next_leader_actions.checked_sub(elapsed_millis) {
             Some(millis) => millis,
             None => {
+                debug!("periodic leader actions");
                 cluster_state.write().await.leader_actions().await;
                 config.leader_action_interval.as_millis() as u32
             }
