@@ -6,3 +6,4 @@ pub mod cluster_state;
 pub mod cluster_messages;
 pub mod gossip;
 pub mod heartbeat;
+mod join_messages;

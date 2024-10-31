@@ -46,6 +46,18 @@ impl ClusterState {
         self.nodes_with_state.get(addr)
     }
 
+    pub fn add_joiner(&mut self, addr: NodeAddr, roles: FxHashSet<String>) {
+        let node_state = NodeState {
+            addr,
+            membership_state: MembershipState::Joining,
+            roles,
+            reachability: Default::default(),
+            seen_by: vec![self.myself].into_iter().collect(),
+        };
+
+        let _ = self.nodes_with_state.insert(addr, node_state);
+    }
+
     //TODO unit test
     /// returns the node that is the leader in the current topology once state converges (which
     ///  can only happen if all nodes are reachable)

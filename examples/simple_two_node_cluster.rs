@@ -1,7 +1,9 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::select;
+use tokio::time::sleep;
 
 use tracing::Level;
 
@@ -25,6 +27,11 @@ async fn create_messaging(addr: &str) -> anyhow::Result<Arc<Messaging>> {
     Ok(Arc::new(messaging))
 }
 
+async fn run_and_join(cluster: Cluster, other: &str) -> anyhow::Result<()> {
+    sleep(Duration::from_millis(100)).await;
+    cluster.run(Some(other)).await
+}
+
 
 #[tokio::main]
 pub async fn main() -> anyhow::Result<()> {
@@ -39,8 +46,8 @@ pub async fn main() -> anyhow::Result<()> {
     let cluster2 = Cluster::new(Arc::new(config2), messaging2.clone());
 
     select! {
-        _ = cluster1.run() => {}
-        _ = cluster2.run() => {}
+        _ = cluster1.run(None::<&str>) => {} //TODO type annotation should not be necessary
+        _ = run_and_join(cluster2, "127.0.0.1:9810") => {}
     }
 
     Ok(())

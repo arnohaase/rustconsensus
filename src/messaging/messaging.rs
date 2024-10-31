@@ -131,8 +131,7 @@ impl MessageHandler for ReceivedMessageHandler {
     async fn handle_message(&self, msg_buf: &[u8], sender: SocketAddr) {
         //TODO safeguard against panics
 
-        debug!("received message");
-        trace!(?msg_buf);
+        trace!("received message {:?}", msg_buf);
 
         if msg_buf.len() == MAX_MSG_SIZE {
             warn!("received a message exceeding max message size of {} bytes - skipping", MAX_MSG_SIZE);
