@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::{FxHashMap, FxHashSet};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
@@ -47,6 +47,8 @@ impl ClusterState {
     }
 
     pub fn add_joiner(&mut self, addr: NodeAddr, roles: FxHashSet<String>) {
+        debug!("adding joining node {:?}", addr);
+
         let node_state = NodeState {
             addr,
             membership_state: MembershipState::Joining,

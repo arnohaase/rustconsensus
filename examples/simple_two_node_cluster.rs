@@ -27,6 +27,7 @@ async fn create_messaging(addr: &str) -> anyhow::Result<Arc<Messaging>> {
     Ok(Arc::new(messaging))
 }
 
+#[tracing::instrument(name="BBB", skip_all)]
 async fn run_and_join(cluster: Cluster, other: &str) -> anyhow::Result<()> {
     sleep(Duration::from_millis(100)).await;
     cluster.run(Some(other)).await

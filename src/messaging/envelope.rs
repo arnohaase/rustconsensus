@@ -1,8 +1,8 @@
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 
-use anyhow::anyhow;
 use bytes::{Buf, BufMut, BytesMut};
+use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use crc::Crc;
 
 use crate::messaging::message_module::MessageModuleId;
@@ -41,18 +41,13 @@ pub struct Envelope {
 }
 impl Envelope {
     const ADDR_SIZE: usize = size_of::<u32>();
-    const ENVELOPE_SIZE: usize = 2*Self::ADDR_SIZE + size_of::<MessageModuleId>();
 
-    pub fn try_read(buf: &mut impl Buf, from: SocketAddr, to: SocketAddr) -> anyhow::Result<Envelope> {
-        if buf.remaining() < Self::ENVELOPE_SIZE {
-            return Err(anyhow!("message is shorter than envelope size: {} < {} bytes", buf.remaining(), Self::ENVELOPE_SIZE));
-        }
+    pub fn try_read(buf: &mut impl Buf, to: SocketAddr) -> anyhow::Result<Envelope> {
+        let from = NodeAddr::try_deser(buf)?;
+        let to = Self::try_read_to_addr(buf, to)?;
+        let checksum = Checksum(buf.try_get_u64()?);
 
-        let from = Self::read_addr(buf, from);
-        let to = Self::read_addr(buf, to);
-        let checksum = Checksum(buf.get_u64_le());
-
-        let message_module_id = buf.get_u64_le();
+        let message_module_id = buf.try_get_u64()?;
 
         Ok(Envelope {
             from,
@@ -62,19 +57,19 @@ impl Envelope {
         })
     }
 
-    fn read_addr(buf: &mut impl Buf, socket_addr: SocketAddr) -> NodeAddr {
-        let unique = buf.get_u32_le();
-        NodeAddr {
+    fn try_read_to_addr(buf: &mut impl Buf, socket_addr: SocketAddr) -> anyhow::Result<NodeAddr> {
+        let unique = buf.try_get_u32()?; //TODO change all number ser / deser from _le to network byte order
+        Ok(NodeAddr {
             unique,
             addr: socket_addr,
-        }
+        })
     }
 
     pub fn write(from: NodeAddr, to: NodeAddr, checksum: Checksum, message_module_id: MessageModuleId, buf: &mut BytesMut) {
-        buf.put_u32_le(from.unique);
-        buf.put_u32_le(to.unique);
-        buf.put_u64_le(checksum.0);
-        buf.put_u64_le(message_module_id.0);
+        from.ser(buf);
+        buf.put_u32(to.unique);
+        buf.put_u64(checksum.0);
+        buf.put_u64(message_module_id.0);
     }
 }
 

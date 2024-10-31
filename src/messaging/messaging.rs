@@ -96,8 +96,6 @@ impl Messaging {
 
     #[tracing::instrument]
     pub async fn recv(&self) -> anyhow::Result<()> {
-        info!("starting receive loop");
-
         let handler = ReceivedMessageHandler {
             myself: self.myself,
             message_modules: self.message_modules.clone(),
@@ -128,7 +126,7 @@ struct ReceivedMessageHandler {
 
 #[async_trait::async_trait]
 impl MessageHandler for ReceivedMessageHandler {
-    async fn handle_message(&self, msg_buf: &[u8], sender: SocketAddr) {
+    async fn handle_message(&self, msg_buf: &[u8], _sender: SocketAddr) {
         //TODO safeguard against panics
 
         trace!("received message {:?}", msg_buf);
@@ -139,8 +137,10 @@ impl MessageHandler for ReceivedMessageHandler {
         }
 
         let mut msg_buf = msg_buf;
-        match Envelope::try_read(&mut msg_buf, sender, self.myself.addr) {
+        match Envelope::try_read(&mut msg_buf, self.myself.addr) {
             Ok(envelope) => {
+                trace!("message is from {:?}", envelope.from);
+
                 // NB: JOIN messages are the only messages that are accepted regardless of target node address' unique part
                 if envelope.to.unique != self.myself.unique && envelope.message_module_id != JOIN_MESSAGE_MODULE_ID {
                     warn!("received a message for {:?}: wrong unique part - was a node restarted without rejoining? Ignoring the message", envelope.to);

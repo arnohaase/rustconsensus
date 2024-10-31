@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use rustc_hash::FxHashMap;
 use tokio::spawn;
 use tokio::sync::RwLock;
+use tracing::trace;
 use uuid::Uuid;
 
 use crate::cluster::cluster_state::MembershipState;
@@ -91,6 +92,8 @@ impl ClusterEventNotifier {
     }
 
     pub async fn send_event(&self, event: ClusterEvent) {
+        trace!("event: {:?}", event);
+
         let listeners = self.listeners.read().await
             .values()
             .cloned()
