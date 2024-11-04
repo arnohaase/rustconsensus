@@ -19,7 +19,7 @@ impl MessageModuleId {
 
 impl Debug for MessageModuleId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let bytes = self.0.to_le_bytes();
+        let bytes = self.0.to_be_bytes();
         let used = bytes.iter()
             .position(|&b| b == 0)
             .map(|len| &bytes[..len])
@@ -67,7 +67,7 @@ mod test {
     use super::*;
 
     #[rstest]
-    #[case::abc(MessageModuleId::new(b"abc\0\0\0\0\0"), "0x0000000000636261(\"abc\")")]
+    #[case::abc(MessageModuleId::new(b"abc\0\0\0\0\0"), "0x6162630000000000(\"abc\")")]
     #[case::empty(MessageModuleId::new(b"\0\0\0\0\0\0\0\0"), "0x0000000000000000(\"\")")]
     fn test_id_debug(#[case] id: MessageModuleId, #[case] expected: &str) {
         let formatted = format!("{:?}", id);
