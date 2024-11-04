@@ -127,7 +127,7 @@ pub enum ClusterMessage {
     HeartbeatResponse(HeartbeatResponseData),
 }
 impl ClusterMessage {
-    fn id(&self) -> u8 {
+    pub fn id(&self) -> u8 {
         match self {
             ClusterMessage::GossipSummaryDigest(_) => ID_GOSSIP_SUMMARY_DIGEST,
             ClusterMessage::GossipDetailedDigest(_) => ID_GOSSIP_DETAILED_DIGEST,
@@ -622,4 +622,17 @@ fn try_get_string_raw(buf: &mut impl Buf) -> anyhow::Result<String> {
 
     let s = String::from_utf8(result)?;
     Ok(s)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use rstest::*;
+    use ClusterMessage::*;
+
+    #[rstest]
+    #[case(GossipSummaryDigest(GossipSummaryDigestData { full_sha256_digest: [0u8; 32] }), ID_GOSSIP_SUMMARY_DIGEST)]
+    fn test_id(#[case] msg: ClusterMessage, #[case] expected_id: u8) {
+        assert_eq!(msg.id(), expected_id);
+    }
 }

@@ -13,7 +13,7 @@ pub struct MessageModuleId(pub u64);
 
 impl MessageModuleId {
     pub const fn new(value: &[u8; 8]) -> MessageModuleId {
-        Self(u64::from_le_bytes(*value))
+        Self(u64::from_be_bytes(*value))
     }
 }
 

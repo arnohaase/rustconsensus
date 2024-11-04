@@ -30,7 +30,7 @@ impl Debug for NodeAddr {
 impl NodeAddr {
     #[cfg(test)]
     pub fn localhost(unique: u32) -> NodeAddr {
-        let addr: SocketAddr = std::str::FromStr::from_str("127.0.0.1:8888").unwrap();
+        let addr: SocketAddr = std::str::FromStr::from_str("127.0.0.1:16385").unwrap();
 
         NodeAddr {
             unique,

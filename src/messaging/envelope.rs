@@ -103,7 +103,7 @@ mod test {
     fn test_envelope_try_read(#[case] mut buf: &[u8], #[case] buf_after: &[u8], #[case] from: &str, #[case] to: &str, #[case] expected: Option<Envelope>) {
         let from = SocketAddr::from_str(from).unwrap();
         let to = SocketAddr::from_str(to).unwrap();
-        match Envelope::try_read(&mut buf, from, to) {
+        match Envelope::try_read(&mut buf, to) {
             Ok(actual) => {
                 assert_eq!(actual, expected.unwrap());
                 assert_eq!(buf, buf_after);
@@ -117,20 +117,19 @@ mod test {
 
     #[rstest]
     #[case::complete(b"\0\0\0\0", b"", "127.0.0.1:8888", 0)]
-    #[case::remainder(b"\x04\0\0\0\x01", b"\x01", "127.0.2.3:8765", 4)]
-    fn test_envelope_read_addr(#[case] mut buf: &[u8], #[case] buf_after: &[u8], #[case] addr: &str, #[case] unique: u32) {
+    #[case::remainder(b"\0\0\0\x04\x01", b"\x01", "127.0.2.3:8765", 4)]
+    fn test_envelope_read_to_addr(#[case] mut buf: &[u8], #[case] buf_after: &[u8], #[case] addr: &str, #[case] unique: u32) {
         let addr = SocketAddr::from_str(addr).unwrap();
-        let actual = Envelope::read_addr(&mut buf, addr.clone());
+        let actual = Envelope::try_read_to_addr(&mut buf, addr.clone()).unwrap();
         assert_eq!(actual, NodeAddr { unique, addr, });
         assert_eq!(buf, buf_after);
     }
 
     #[rstest]
-    #[case(1, 2, b"abc\0\0\0\0\0", b"\x01\0\0\0\x02\0\0\0\x54\x76\x98\x90\x78\x56\x34\x12abc\0\0\0\0\0")]
+    #[case(1, 2, b"abc\0\0\0\0\0", b"\0\0\0\x01\x04\x7f\0\0\x01\x40\x01\0\0\0\x02\x12\x34\x56\x78\x90\x98\x76\x54abc\0\0\0\0\0")]
     fn test_envelope_write(#[case] from: u32, #[case] to: u32, #[case] module_id: &[u8;8], #[case] expected: &[u8]) {
         let mut buf = BytesMut::new();
         Envelope::write(NodeAddr::localhost(from), NodeAddr::localhost(to), Checksum(0x1234567890987654), MessageModuleId::new(module_id), &mut buf);
         assert_eq!(&buf, expected);
     }
-
 }
