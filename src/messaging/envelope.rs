@@ -87,17 +87,17 @@ mod test {
     use super::*;
 
     #[rstest]
-    #[case::just_envelope(b"1\0\0\04\0\0\0\x01\0\0\0\0\0\0\0abcdefgh", b"", "1.2.3.4:5678", "9.8.7.6:1234", Some(Envelope {
-    from: NodeAddr { unique: 0x31, addr: SocketAddr::from_str("1.2.3.4:5678").unwrap() },
-    to:   NodeAddr { unique: 0x34, addr: SocketAddr::from_str("9.8.7.6:1234").unwrap() },
-    checksum: Checksum(1),
-    message_module_id: MessageModuleId::new(b"abcdefgh")
+    #[case::just_envelope(b"\0\0\01\x04\x01\x02\x03\x04\x16\x2e\0\0\04\0\0\0\0\0\0\0\x01abcdefgh", b"", "1.2.3.4:5678", "9.8.7.6:1234", Some(Envelope {
+        from: NodeAddr { unique: 0x31, addr: SocketAddr::from_str("1.2.3.4:5678").unwrap() },
+        to:   NodeAddr { unique: 0x34, addr: SocketAddr::from_str("9.8.7.6:1234").unwrap() },
+        checksum: Checksum(1),
+        message_module_id: MessageModuleId::new(b"abcdefgh")
     }))]
-    #[case::remainder(b"2\0\0\03\0\0\0\x01\0\0\0\0\0\0\012345678abc", b"abc", "4.3.2.1:5678", "1.2.3.4:1234", Some(Envelope {
-    from: NodeAddr { unique: 0x32, addr: SocketAddr::from_str("4.3.2.1:5678").unwrap() },
-    to:   NodeAddr { unique: 0x33, addr: SocketAddr::from_str("1.2.3.4:1234").unwrap() },
-    checksum: Checksum(1),
-    message_module_id: MessageModuleId::new(b"12345678")
+    #[case::remainder(b"\0\0\02\x04\x04\x03\x02\x01\x16\x2e\0\0\03\0\0\0\0\0\0\0\x0112345678abc", b"abc", "4.3.2.1:5678", "1.2.3.4:1234", Some(Envelope {
+        from: NodeAddr { unique: 0x32, addr: SocketAddr::from_str("4.3.2.1:5678").unwrap() },
+        to:   NodeAddr { unique: 0x33, addr: SocketAddr::from_str("1.2.3.4:1234").unwrap() },
+        checksum: Checksum(1),
+        message_module_id: MessageModuleId::new(b"12345678")
     }))]
     #[case::too_short(b"123412341234567", b"", "1.2.3.4:5678", "9.8.7.6:1234", None)]
     fn test_envelope_try_read(#[case] mut buf: &[u8], #[case] buf_after: &[u8], #[case] from: &str, #[case] to: &str, #[case] expected: Option<Envelope>) {
