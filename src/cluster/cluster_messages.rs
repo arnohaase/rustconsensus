@@ -58,19 +58,19 @@ impl ClusterMessageModule {
                 if let Some(response) = self.gossip.read().await
                     .on_detailed_digest(&digest).await
                 {
-                    Ok(self.reply(envelope, GossipDifferingAndMissingNodesData(response)).await)
+                    Ok(self.reply(envelope, GossipDifferingAndMissingNodes(response)).await)
                 }
                 else { Ok(()) }
             }
-            GossipDifferingAndMissingNodesData(data) => {
+            GossipDifferingAndMissingNodes(data) => {
                 if let Some(response) = self.gossip.read().await
                     .on_differing_and_missing_nodes(data).await
                 {
-                    Ok(self.reply(envelope, GossipNodesData(response)).await)
+                    Ok(self.reply(envelope, GossipNodes(response)).await)
                 }
                 else { Ok(()) }
             }
-            GossipNodesData(data) => {
+            GossipNodes(data) => {
                 Ok(
                     self.gossip.read().await
                         .on_nodes(data).await
@@ -118,11 +118,12 @@ const ID_GOSSIP_NODES: u8 = 4;
 const ID_HEARTBEAT: u8 = 5;
 const ID_HEARTBEAT_RESPONSE: u8 = 6;
 
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub enum ClusterMessage {
     GossipSummaryDigest(GossipSummaryDigestData),
     GossipDetailedDigest(GossipDetailedDigestData),
-    GossipDifferingAndMissingNodesData(GossipDifferingAndMissingNodesData),
-    GossipNodesData(GossipNodesData),
+    GossipDifferingAndMissingNodes(GossipDifferingAndMissingNodesData),
+    GossipNodes(GossipNodesData),
     Heartbeat(HeartbeatData),
     HeartbeatResponse(HeartbeatResponseData),
 }
@@ -131,8 +132,8 @@ impl ClusterMessage {
         match self {
             ClusterMessage::GossipSummaryDigest(_) => ID_GOSSIP_SUMMARY_DIGEST,
             ClusterMessage::GossipDetailedDigest(_) => ID_GOSSIP_DETAILED_DIGEST,
-            ClusterMessage::GossipDifferingAndMissingNodesData(_) => ID_GOSSIP_DIFFERING_AND_MISSING_NODES,
-            ClusterMessage::GossipNodesData(_) => ID_GOSSIP_NODES,
+            ClusterMessage::GossipDifferingAndMissingNodes(_) => ID_GOSSIP_DIFFERING_AND_MISSING_NODES,
+            ClusterMessage::GossipNodes(_) => ID_GOSSIP_NODES,
             ClusterMessage::Heartbeat(_) => ID_HEARTBEAT,
             ClusterMessage::HeartbeatResponse(_) => ID_HEARTBEAT_RESPONSE,
         }
@@ -144,8 +145,8 @@ impl ClusterMessage {
         match self {
             ClusterMessage::GossipSummaryDigest(data) => Self::ser_gossip_summary_digest(data, buf),
             ClusterMessage::GossipDetailedDigest(data) => Self::ser_gossip_detailed_digest(data, buf),
-            ClusterMessage::GossipDifferingAndMissingNodesData(data) => Self::ser_gossip_differing_and_missing_nodes(data, buf),
-            ClusterMessage::GossipNodesData(data) => Self::ser_gossip_nodes(data, buf),
+            ClusterMessage::GossipDifferingAndMissingNodes(data) => Self::ser_gossip_differing_and_missing_nodes(data, buf),
+            ClusterMessage::GossipNodes(data) => Self::ser_gossip_nodes(data, buf),
             ClusterMessage::Heartbeat(data) => Self::ser_heartbeat(data, buf),
             ClusterMessage::HeartbeatResponse(data) => Self::ser_heartbeat_response(data, buf),
         }
@@ -308,7 +309,7 @@ impl ClusterMessage {
 
         let missing = addr_pool.try_get_addr_set(&mut buf)?;
 
-        Ok(ClusterMessage::GossipDifferingAndMissingNodesData(GossipDifferingAndMissingNodesData {
+        Ok(ClusterMessage::GossipDifferingAndMissingNodes(GossipDifferingAndMissingNodesData {
             differing,
             missing,
         }))
@@ -336,7 +337,7 @@ impl ClusterMessage {
             })
         }
 
-        Ok(ClusterMessage::GossipNodesData(GossipNodesData {
+        Ok(ClusterMessage::GossipNodes(GossipNodesData {
             nodes,
         }))
     }
@@ -363,29 +364,35 @@ impl ClusterMessage {
 }
 
 
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct GossipSummaryDigestData {
     pub full_sha256_digest: [u8;32],
 }
 
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct GossipDetailedDigestData {
     pub nonce: u32,
     pub nodes: FxHashMap<NodeAddr, u64>,
 }
 
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct GossipDifferingAndMissingNodesData {
     pub differing: Vec<NodeState>,
     pub missing: Vec<NodeAddr>,
 }
 
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct GossipNodesData {
     pub nodes: Vec<NodeState>,
 }
 
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct HeartbeatData {
     pub counter: u32,
     pub timestamp_nanos: u64,
 }
 
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct HeartbeatResponseData {
     pub counter: u32,
     pub timestamp_nanos: u64,
@@ -405,7 +412,10 @@ struct NodeAddrPoolSerializer {
 impl NodeAddrPoolSerializer {
     pub fn new(buf: &mut BytesMut) -> NodeAddrPoolSerializer {
         let offs_for_offs = buf.len();
-        buf.put_u32_le(0); // placeholder for the offset of the resolution table we write at the end
+        buf.put_u32(0); // placeholder for the offset of the resolution table we write at the end
+
+        println!("ser offs resolution table: {}", offs_for_offs);
+
         NodeAddrPoolSerializer {
             offs_for_offs,
             resolution_table: Default::default(),
@@ -440,8 +450,8 @@ impl NodeAddrPoolSerializer {
 
     pub fn finalize(self, buf: &mut BytesMut) {
         // overwrite the placeholder with the actual offset of the resolution table
-        let offs_resolution_table = buf.len() as u32; //TODO overflow
-        (&mut buf[self.offs_for_offs..]).put_u32_le(offs_resolution_table);
+        let offs_resolution_table = (buf.len() - self.offs_for_offs) as u32; //TODO overflow
+        (&mut buf[self.offs_for_offs..]).put_u32(offs_resolution_table);
 
         // write the resolution table
         buf.put_usize_varint(self.resolution_table.len());
@@ -458,17 +468,17 @@ struct NodeAddrPoolDeserializer {
 impl NodeAddrPoolDeserializer {
     pub fn new(buf: &mut impl Buf) -> anyhow::Result<NodeAddrPoolDeserializer> {
         let initial = buf.remaining();
-        let offs_resolution_table = buf.try_get_usize_varint()?;
+        let offs_resolution_table = buf.try_get_u32()? as usize; //TODO overflow?
         let len_of_offset = initial - buf.remaining();
 
         let offs_resolution_table = offs_resolution_table.checked_sub(len_of_offset)
-            .ok_or(anyhow!("offset must point after the offset itself"))?;
+            .ok_or(anyhow!("node addr offset must point after the offset itself"))?;
 
         //NB: We want to consume the offset to the resolution table, but not the resolution table
         //     itself since it comes after the actual message
         let raw = buf.chunk();
         if offs_resolution_table >= raw.len() {
-            return Err(anyhow!("offset of resolution table points after the end of the buffer"));
+            return Err(anyhow!("offset of node addr resolution table points after the end of the buffer"));
         }
 
         let mut buf_resolution_table = &raw[offs_resolution_table..];
@@ -512,7 +522,7 @@ struct StringPoolSerializer<'a> {
 impl <'a> StringPoolSerializer<'a> {
     pub fn new<'b>(buf: &'b mut BytesMut) -> StringPoolSerializer<'a> {
         let offs_for_offs = buf.len();
-        buf.put_u32_le(0); // placeholder for the offset of the resolution table we write at the end
+        buf.put_u32(0); // placeholder for the offset of the resolution table we write at the end
         StringPoolSerializer {
             offs_for_offs,
             resolution_table: Default::default(),
@@ -545,8 +555,8 @@ impl <'a> StringPoolSerializer<'a> {
 
     pub fn finalize(self, buf: &mut BytesMut) {
         // overwrite the placeholder with the actual offset of the resolution table
-        let offs_resolution_table = buf.len() as u32; //TODO overflow
-        (&mut buf[self.offs_for_offs..]).put_u32_le(offs_resolution_table);
+        let offs_resolution_table = (buf.len() - self.offs_for_offs) as u32; //TODO overflow
+        (&mut buf[self.offs_for_offs..]).put_u32(offs_resolution_table);
 
         // write the resolution table
         buf.put_usize_varint(self.resolution_table.len());
@@ -563,17 +573,17 @@ struct StringPoolDeserializer {
 impl StringPoolDeserializer {
     pub fn new(buf: &mut impl Buf) -> anyhow::Result<StringPoolDeserializer> {
         let initial = buf.remaining();
-        let offs_resolution_table = buf.try_get_usize_varint()?;
+        let offs_resolution_table = buf.try_get_u32()? as usize; //TODO overflow?
         let len_of_offset = initial - buf.remaining();
 
         let offs_resolution_table = offs_resolution_table.checked_sub(len_of_offset)
-            .ok_or(anyhow!("offset must point after the offset itself"))?;
+            .ok_or(anyhow!("string pool offset must point after the offset itself"))?;
 
         //NB: We want to consume the offset to the resolution table, but not the resolution table
         //     itself since it comes after the actual message
         let raw = buf.chunk();
         if offs_resolution_table >= raw.len() {
-            return Err(anyhow!("offset of resolution table points after the end of the buffer"));
+            return Err(anyhow!("offset of string pool resolution table points after the end of the buffer"));
         }
 
         let mut buf_resolution_table = &raw[offs_resolution_table..];
@@ -631,8 +641,18 @@ mod test {
     use ClusterMessage::*;
 
     #[rstest]
-    #[case(GossipSummaryDigest(GossipSummaryDigestData { full_sha256_digest: [0u8; 32] }), ID_GOSSIP_SUMMARY_DIGEST)]
-    fn test_id(#[case] msg: ClusterMessage, #[case] expected_id: u8) {
-        assert_eq!(msg.id(), expected_id);
+    #[case::gossip_summary(GossipSummaryDigest(GossipSummaryDigestData { full_sha256_digest: [0u8; 32] }), ID_GOSSIP_SUMMARY_DIGEST)]
+    #[case::gossip_detail_empty(GossipDetailedDigest(GossipDetailedDigestData { nonce: 8, nodes: Default::default() }), ID_GOSSIP_DETAILED_DIGEST)]
+    #[case::gossip_detail_nodes(GossipDetailedDigest(GossipDetailedDigestData { nonce: 8, nodes: FxHashMap::from_iter([(NodeAddr::localhost(123), 989)]) }), ID_GOSSIP_DETAILED_DIGEST)]
+    #[case::gossip_differing_empty(GossipDifferingAndMissingNodes(GossipDifferingAndMissingNodesData { differing: Default::default(), missing: Default::default() }), ID_GOSSIP_DIFFERING_AND_MISSING_NODES)]
+    fn test_ser_cluster_message(#[case] msg: ClusterMessage, #[case] msg_id: u8) {
+        assert_eq!(msg.id(), msg_id);
+
+        let mut buf = BytesMut::new();
+        msg.ser(&mut buf);
+        println!("{:?}", buf);
+        let deser_msg = ClusterMessage::deser(&buf).unwrap();
+        assert_eq!(msg, deser_msg);
     }
+
 }

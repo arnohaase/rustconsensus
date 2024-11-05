@@ -358,7 +358,7 @@ impl LazyCounterVersion {
 }
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NodeState {
     pub addr: NodeAddr,
     pub membership_state: MembershipState,
@@ -424,7 +424,7 @@ impl NodeState {
     }
 }
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub struct NodeReachability {
     /// a node reporting a change in reachability for a node attaches a strictly monotonous
     ///  counter so that reachability can be merged in a coordination-free fashion
