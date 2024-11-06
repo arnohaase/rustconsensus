@@ -244,7 +244,7 @@ impl ClusterState {
 
         if ! is_converged_before {
             if self.is_converged() {
-                info!("cluster state fully converged");
+                debug!("cluster state fully converged");
                 //TODO send an event for full convergence?
             }
         }
