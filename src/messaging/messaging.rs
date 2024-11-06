@@ -81,7 +81,7 @@ impl Messaging {
     }
 
     async fn _send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
-        debug!(from=?self.myself, ?to, "sending message");
+        trace!(from=?self.myself, ?to, "sending message");
 
         let checksum = Checksum::new(self.myself, to, msg_module_id, msg);
 
@@ -94,7 +94,7 @@ impl Messaging {
         Ok(())
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument] //TODO instrument with some unique message id instead of this generic sig
     pub async fn recv(&self) -> anyhow::Result<()> {
         let handler = ReceivedMessageHandler {
             myself: self.myself,

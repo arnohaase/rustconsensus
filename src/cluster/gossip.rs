@@ -6,6 +6,7 @@ use rand::{Rng, RngCore};
 use rustc_hash::{FxHasher, FxHashMap};
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
+use tracing::{debug, trace};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_messages::{ClusterMessage, GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipNodesData, GossipSummaryDigestData};
@@ -242,6 +243,10 @@ impl  Gossip {
         let differing_keys = other_data.differing.iter()
             .map(|n| n.addr)
             .collect::<Vec<_>>();
+
+        debug!("received gossip with differing / missing nodes: {:?} / {:?}",
+            differing_keys,
+            other_data.missing);
 
         let mut cluster_state = self.cluster_state.write().await;
         for s in other_data.differing {

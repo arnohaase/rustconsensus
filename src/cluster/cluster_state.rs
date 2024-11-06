@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::{FxHashMap, FxHashSet};
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
@@ -24,10 +24,18 @@ pub struct ClusterState {
 }
 impl ClusterState {
     pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_event_queue: Arc<ClusterEventNotifier>) -> ClusterState {
+        let nodes_with_state = FxHashMap::from_iter([(myself, NodeState {
+            addr: myself,
+            membership_state: MembershipState::Joining,
+            roles: Default::default(), //TODO roles!
+            reachability: Default::default(), //TODO is every node reachable from itself?
+            seen_by: FxHashSet::from_iter([myself]),
+        })]);
+
         ClusterState {
             myself,
             config,
-            nodes_with_state: Default::default(),
+            nodes_with_state,
             event_notifier: cluster_event_queue,
             version_counter: 0,
             leader: None,
@@ -208,6 +216,7 @@ impl ClusterState {
     pub async fn merge_node_state(&mut self, mut state: NodeState) {
         match self.nodes_with_state.entry(state.addr) {
             Entry::Occupied(mut e) => {
+                trace!("merging external node state for {:?} into existing state", state.addr);
                 let old_state = e.get().membership_state;
                 let crdt_ordering = e.get_mut().merge(&state);
                 Self::state_changed(self.myself, Some(old_state), e.get_mut(), crdt_ordering, &state.seen_by, self.event_notifier.clone()).await;
@@ -216,6 +225,7 @@ impl ClusterState {
                 }
             }
             Entry::Vacant(e) => {
+                trace!("merging external node state for {:?}: registering previously unknown node locally", state.addr);
                 let other_seen_by = state.seen_by;
                 state.seen_by = Default::default();
 

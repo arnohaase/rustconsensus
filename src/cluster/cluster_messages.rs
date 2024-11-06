@@ -8,7 +8,7 @@ use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use num_enum::TryFromPrimitive;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::RwLock;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::cluster::cluster_state::{MembershipState, NodeReachability, NodeState};
 use crate::cluster::gossip::Gossip;
@@ -47,6 +47,7 @@ impl ClusterMessageModule {
 
         match ClusterMessage::deser(buf)? {
             GossipSummaryDigest(digest) => {
+                debug!("received gossip summary digest message");
                 if let Some(response) = self.gossip.read().await
                     .on_summary_digest(&digest).await
                 {
@@ -55,6 +56,7 @@ impl ClusterMessageModule {
                 else { Ok(()) }
             }
             GossipDetailedDigest(digest) => {
+                debug!("received gossip detailed digest message");
                 if let Some(response) = self.gossip.read().await
                     .on_detailed_digest(&digest).await
                 {
@@ -71,12 +73,14 @@ impl ClusterMessageModule {
                 else { Ok(()) }
             }
             GossipNodes(data) => {
+                debug!("received gossip nodes message");
                 Ok(
                     self.gossip.read().await
                         .on_nodes(data).await
                 )
             }
             Heartbeat(data) => {
+                debug!("received heartbeat message");
                 //TODO document heartbeat protocol
                 //TODO documentation here
                 Ok(
@@ -87,6 +91,7 @@ impl ClusterMessageModule {
                 )
             }
             HeartbeatResponse(data) => {
+                debug!("received heartbeat response message");
                 Ok(
                     self.heart_beat.write().await
                         .on_heartbeat_response(&data, envelope.from)
@@ -221,7 +226,6 @@ impl ClusterMessage {
             addr_pool.put_node_addr(buf, addr);
             buf.put_u32_varint(node_reachability.counter_of_reporter);
             buf.put_u8(if node_reachability.is_reachable { 1 } else { 0 });
-            println!("after reachability {:?}", buf);
         }
     }
 
