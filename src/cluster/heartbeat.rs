@@ -1,13 +1,15 @@
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
-use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
+use std::collections::btree_map::Entry;
 use std::f64::consts::PI;
 use std::hash::{Hash, Hasher};
 use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::Arc;
-use rustc_hash::{FxHasher, FxHashMap};
+
+use rustc_hash::FxHasher;
 use tokio::time::Instant;
 use tracing::{debug, error, warn};
+
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_messages::{HeartbeatData, HeartbeatResponseData};
 use crate::cluster::cluster_state::ClusterState;
@@ -119,7 +121,7 @@ impl HeartBeat {
         };
     }
 
-    pub fn get_current_reachability(&self) -> FxHashMap<NodeAddr, bool> {
+    pub fn get_current_reachability(&self) -> BTreeMap<NodeAddr, bool> {
         self.registry.trackers.iter()
             .map(|(addr, tracker)| (addr, tracker.is_reachable()))
             .map(|(addr, b)| (addr.clone(), b))
@@ -130,7 +132,7 @@ impl HeartBeat {
 
 struct HeartbeatRegistry {
     config: Arc<ClusterConfig>,
-    trackers: FxHashMap<NodeAddr, HeartbeatTracker>,
+    trackers: BTreeMap<NodeAddr, HeartbeatTracker>,
 }
 impl HeartbeatRegistry {
     //TODO clean up untracked remotes

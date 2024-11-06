@@ -1,9 +1,10 @@
+use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use rand::{Rng, RngCore};
-use rustc_hash::{FxHasher, FxHashMap};
+use rustc_hash::FxHasher;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 use tracing::{debug, trace};
@@ -73,8 +74,6 @@ impl  Gossip {
 
             let cluster_state = self.cluster_state.read().await;
 
-            // NB: This relies on the map to have same iteration order on all nodes (which is true
-            //      for FxHashMap)
             for s in cluster_state.node_states() {
                 hash_node_addr(&mut sha256, s.addr);
                 sha256.update(&[s.membership_state.into()]);
@@ -108,7 +107,7 @@ impl  Gossip {
     }
 
     fn gossip_detailed_digest_with_given_nonce(cluster_state: &ClusterState, nonce: u32) -> GossipDetailedDigestData {
-        let mut nodes: FxHashMap<NodeAddr, u64> = Default::default();
+        let mut nodes: BTreeMap<NodeAddr, u64> = Default::default();
 
         for s in cluster_state.node_states() {
             let mut hasher = FxHasher::with_seed(nonce as usize); //TODO we assume at least 32-bit architecture - how to ensure it once and for all?
@@ -128,6 +127,7 @@ impl  Gossip {
             }
 
             let _ = nodes.insert(s.addr, hasher.finish());
+            trace!("hashing {:?} with nonce {}: {}", s, nonce, nodes.get(&s.addr).unwrap());
         }
 
         GossipDetailedDigestData {
@@ -209,6 +209,7 @@ impl  Gossip {
 
     //TODO unit test
     pub async fn on_detailed_digest(&self, other_digest: &GossipDetailedDigestData) -> Option<GossipDifferingAndMissingNodesData> {
+        debug!("received gossip detailed digest message");
         let cluster_state = self.cluster_state.read().await;
 
         //NB: we don't want anyone else to change state between hashing and comparing the hashes, so we get the lock once at

@@ -1,4 +1,5 @@
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::anyhow;
@@ -16,11 +17,22 @@ use bytes_varint::try_get_fixed::TryGetFixedSupport;
 ///       etc. It is purely in the interest of a rejoining node to have a different value from
 ///       previous join attempts from the same network address. Using the seconds since epoch is
 ///       just a convenient way of ensuring this in typical environments
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub struct NodeAddr {
     pub unique: u32,
     pub addr: SocketAddr,
 }
+impl Hash for NodeAddr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.unique.hash(state);
+        match self.addr {
+            SocketAddr::V4(s) => s.ip().to_bits().hash(state),
+            SocketAddr::V6(s) => s.ip().to_bits().hash(state),
+        };
+        self.addr.port().hash(state);
+    }
+}
+
 impl Debug for NodeAddr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "[{:?}@{}]", self.addr, self.unique)

@@ -2,8 +2,9 @@
 //!  and we reason about them in terms of the partial order they define on their state. In these
 //!  terms, a merge operation returns the smallest value that is bigger than both initial values.
 
+use std::collections::BTreeSet;
 use std::hash::Hash;
-use rustc_hash::FxHashSet;
+use std::iter::Extend;
 
 pub trait Crdt {
     /// Merges 'other' into 'self', modifying 'self' in place. The function returns the
@@ -50,7 +51,7 @@ impl CrdtOrdering {
 /// Convenience implementation of Crdt for a set.
 ///
 /// NB: merging is O(N)
-impl <T: Clone + Hash + Eq + PartialEq> Crdt for FxHashSet<T> {
+impl <T: Clone + Ord + PartialOrd + Eq + PartialEq> Crdt for BTreeSet<T> {
     fn merge_from(&mut self, other: &Self) -> CrdtOrdering {
         let initial_self_len = self.len();
 
@@ -113,8 +114,8 @@ mod test {
     #[case(vec![1], vec![1, 2], vec![1, 2], OtherWasBigger)]
     #[case(vec![1, 2], vec![1], vec![1, 2], SelfWasBigger)]
     fn test_crdt_hashset(#[case] a: Vec<u32>, #[case] b: Vec<u32>, #[case] merged: Vec<u32>, #[case] ordering: CrdtOrdering) {
-        let mut a = a.iter().collect::<FxHashSet<_>>();
-        let b = b.iter().collect::<FxHashSet<_>>();
+        let mut a = a.iter().collect::<BTreeSet<_>>();
+        let b = b.iter().collect::<BTreeSet<_>>();
 
         let actual_ordering = a.merge_from(&b);
 

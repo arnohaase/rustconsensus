@@ -1,4 +1,5 @@
-use std::collections::hash_map::Entry;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -6,7 +7,6 @@ use bytes::{Buf, BufMut, BytesMut};
 use bytes_varint::{VarIntSupport, VarIntSupportMut};
 use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use num_enum::TryFromPrimitive;
-use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::RwLock;
 use tracing::{debug, error};
 
@@ -56,7 +56,6 @@ impl ClusterMessageModule {
                 else { Ok(()) }
             }
             GossipDetailedDigest(digest) => {
-                debug!("received gossip detailed digest message");
                 if let Some(response) = self.gossip.read().await
                     .on_detailed_digest(&digest).await
                 {
@@ -219,7 +218,7 @@ impl ClusterMessage {
         buf.put_u64(data.timestamp_nanos);
     }
 
-    fn ser_reachability(reachability: &FxHashMap<NodeAddr, NodeReachability>, buf: &mut BytesMut, addr_pool: &mut NodeAddrPoolSerializer) {
+    fn ser_reachability(reachability: &BTreeMap<NodeAddr, NodeReachability>, buf: &mut BytesMut, addr_pool: &mut NodeAddrPoolSerializer) {
         buf.put_usize_varint(reachability.len());
 
         for (&addr, node_reachability) in reachability {
@@ -229,10 +228,10 @@ impl ClusterMessage {
         }
     }
 
-    fn try_deser_reachability(buf: &mut impl Buf, addr_pool: &NodeAddrPoolDeserializer) -> anyhow::Result<FxHashMap<NodeAddr, NodeReachability>> {
+    fn try_deser_reachability(buf: &mut impl Buf, addr_pool: &NodeAddrPoolDeserializer) -> anyhow::Result<BTreeMap<NodeAddr, NodeReachability>> {
         let num_entries = buf.try_get_usize_varint()?;
 
-        let mut reachability = FxHashMap::default();
+        let mut reachability = BTreeMap::default();
         for _ in 0..num_entries {
             let addr = addr_pool.try_get_node_addr(buf)?;
             let counter_of_reporter = buf.try_get_u32_varint()?;
@@ -279,7 +278,7 @@ impl ClusterMessage {
         let nonce = buf.try_get_u32()?;
 
         let num_nodes = buf.try_get_usize_varint()?;
-        let mut nodes = FxHashMap::default();
+        let mut nodes = BTreeMap::default();
         for _ in 0..num_nodes {
             let addr = NodeAddr::try_deser(&mut buf)?;
             let hash = buf.try_get_u64()?;
@@ -366,7 +365,7 @@ pub struct GossipSummaryDigestData {
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub struct GossipDetailedDigestData {
     pub nonce: u32,
-    pub nodes: FxHashMap<NodeAddr, u64>,
+    pub nodes: BTreeMap<NodeAddr, u64>,
 }
 
 #[derive(Eq, PartialEq, Debug, Clone)]
@@ -400,7 +399,7 @@ pub struct HeartbeatResponseData {
 /// TODO bit sets for sets of NodeAddr?
 struct NodeAddrPoolSerializer {
     offs_for_offs: usize,
-    resolution_table: FxHashMap<NodeAddr, usize>,
+    resolution_table: BTreeMap<NodeAddr, usize>,
     reverse_resolution_table: Vec<NodeAddr>,
 }
 impl NodeAddrPoolSerializer {
@@ -508,7 +507,7 @@ impl NodeAddrPoolDeserializer {
 
 struct StringPoolSerializer<'a> {
     offs_for_offs: usize,
-    resolution_table: FxHashMap<&'a str, usize>,
+    resolution_table: BTreeMap<&'a str, usize>,
     reverse_resolution_table: Vec<&'a str>,
 }
 impl <'a> StringPoolSerializer<'a> {
@@ -628,8 +627,9 @@ fn try_get_string_raw(buf: &mut impl Buf) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod test {
+    use std::collections::BTreeSet;
+
     use rstest::*;
-    use rustc_hash::FxHashSet;
 
     use ClusterMessage::*;
 
@@ -638,7 +638,7 @@ mod test {
     #[rstest]
     #[case::gossip_summary(GossipSummaryDigest(GossipSummaryDigestData { full_sha256_digest: [0u8; 32] }), ID_GOSSIP_SUMMARY_DIGEST)]
     #[case::gossip_detail_empty(GossipDetailedDigest(GossipDetailedDigestData { nonce: 8, nodes: Default::default() }), ID_GOSSIP_DETAILED_DIGEST)]
-    #[case::gossip_detail_nodes(GossipDetailedDigest(GossipDetailedDigestData { nonce: 8, nodes: FxHashMap::from_iter([(NodeAddr::localhost(123), 989)]) }), ID_GOSSIP_DETAILED_DIGEST)]
+    #[case::gossip_detail_nodes(GossipDetailedDigest(GossipDetailedDigestData { nonce: 8, nodes: BTreeMap::from_iter([(NodeAddr::localhost(123), 989)]) }), ID_GOSSIP_DETAILED_DIGEST)]
     #[case::gossip_differing_empty(GossipDifferingAndMissingNodes(GossipDifferingAndMissingNodesData {
         differing: Default::default(),
         missing: Default::default(),
@@ -647,9 +647,9 @@ mod test {
         differing: vec![NodeState {
             addr: NodeAddr::localhost(12),
             membership_state: MembershipState::WeaklyUp,
-            reachability: FxHashMap::default(),
-            roles: FxHashSet::default(),
-            seen_by: FxHashSet::default(),
+            reachability: BTreeMap::default(),
+            roles: BTreeSet::default(),
+            seen_by: BTreeSet::default(),
         }],
         missing: Default::default(),
     }), ID_GOSSIP_DIFFERING_AND_MISSING_NODES)]
@@ -657,12 +657,12 @@ mod test {
         differing: vec![NodeState {
             addr: NodeAddr::localhost(12),
             membership_state: MembershipState::WeaklyUp,
-            reachability: FxHashMap::from_iter([
+            reachability: BTreeMap::from_iter([
                 (NodeAddr::localhost(12), NodeReachability { counter_of_reporter: 99, is_reachable: false, }),
                 (NodeAddr::localhost(13), NodeReachability { counter_of_reporter: 0, is_reachable: true, }),
             ]),
-            roles: FxHashSet::default(),
-            seen_by: FxHashSet::default(),
+            roles: BTreeSet::default(),
+            seen_by: BTreeSet::default(),
         }],
         missing: Default::default(),
     }), ID_GOSSIP_DIFFERING_AND_MISSING_NODES)]
@@ -670,9 +670,9 @@ mod test {
         differing: vec![NodeState {
             addr: NodeAddr::localhost(12),
             membership_state: MembershipState::WeaklyUp,
-            reachability: FxHashMap::default(),
-            roles: FxHashSet::from_iter(["abc".to_string(), "xyz".to_string()]),
-            seen_by: FxHashSet::default(),
+            reachability: BTreeMap::default(),
+            roles: BTreeSet::from_iter(["abc".to_string(), "xyz".to_string()]),
+            seen_by: BTreeSet::default(),
         }],
         missing: Default::default(),
     }), ID_GOSSIP_DIFFERING_AND_MISSING_NODES)]
@@ -680,9 +680,9 @@ mod test {
         differing: vec![NodeState {
             addr: NodeAddr::localhost(12),
             membership_state: MembershipState::WeaklyUp,
-            reachability: FxHashMap::default(),
-            roles: FxHashSet::default(),
-            seen_by: FxHashSet::from_iter([NodeAddr::localhost(6), NodeAddr::localhost(12)]),
+            reachability: BTreeMap::default(),
+            roles: BTreeSet::default(),
+            seen_by: BTreeSet::from_iter([NodeAddr::localhost(6), NodeAddr::localhost(12)]),
         }],
         missing: Default::default(),
     }), ID_GOSSIP_DIFFERING_AND_MISSING_NODES)]
@@ -694,12 +694,12 @@ mod test {
         differing: vec![NodeState {
             addr: NodeAddr::localhost(5),
             membership_state: MembershipState::Leaving,
-            reachability: FxHashMap::from_iter([
+            reachability: BTreeMap::from_iter([
                 (NodeAddr::localhost(5), NodeReachability { counter_of_reporter: 99, is_reachable: false, }),
                 (NodeAddr::localhost(6), NodeReachability { counter_of_reporter: 0, is_reachable: true, }),
             ]),
-            roles: FxHashSet::from_iter(["a".to_string(), "bc".to_string(), "".to_string()]),
-            seen_by: FxHashSet::from_iter([NodeAddr::localhost(8), NodeAddr::localhost(5)]),
+            roles: BTreeSet::from_iter(["a".to_string(), "bc".to_string(), "".to_string()]),
+            seen_by: BTreeSet::from_iter([NodeAddr::localhost(8), NodeAddr::localhost(5)]),
         }],
         missing: vec![NodeAddr::localhost(5), NodeAddr::localhost(6)],
     }), ID_GOSSIP_DIFFERING_AND_MISSING_NODES)]
@@ -710,12 +710,12 @@ mod test {
         nodes: vec![NodeState {
             addr: NodeAddr::localhost(5),
             membership_state: MembershipState::Leaving,
-            reachability: FxHashMap::from_iter([
+            reachability: BTreeMap::from_iter([
                 (NodeAddr::localhost(5), NodeReachability { counter_of_reporter: 99, is_reachable: false, }),
                 (NodeAddr::localhost(6), NodeReachability { counter_of_reporter: 0, is_reachable: true, }),
             ]),
-            roles: FxHashSet::from_iter(["a".to_string(), "bc".to_string(), "".to_string()]),
-            seen_by: FxHashSet::from_iter([NodeAddr::localhost(8), NodeAddr::localhost(5)]),
+            roles: BTreeSet::from_iter(["a".to_string(), "bc".to_string(), "".to_string()]),
+            seen_by: BTreeSet::from_iter([NodeAddr::localhost(8), NodeAddr::localhost(5)]),
         }],
     }), ID_GOSSIP_NODES)]
     #[case::heartbeat(Heartbeat(HeartbeatData { counter: 1, timestamp_nanos: 5}), ID_HEARTBEAT)]

@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
-use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
+use std::collections::btree_map::Entry;
 use std::sync::Arc;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
@@ -14,7 +14,7 @@ use crate::util::crdt::{Crdt, CrdtOrdering};
 pub struct ClusterState {
     myself: NodeAddr,
     config: Arc<ClusterConfig>,
-    nodes_with_state: FxHashMap<NodeAddr, NodeState>,
+    nodes_with_state: BTreeMap<NodeAddr, NodeState>,
     event_notifier: Arc<ClusterEventNotifier>,
     version_counter: u32,
     /// we track the 'leader' even if there is no convergence (e.g. if it is unreachable) for convenience
@@ -24,12 +24,12 @@ pub struct ClusterState {
 }
 impl ClusterState {
     pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_event_queue: Arc<ClusterEventNotifier>) -> ClusterState {
-        let nodes_with_state = FxHashMap::from_iter([(myself, NodeState {
+        let nodes_with_state = BTreeMap::from_iter([(myself, NodeState {
             addr: myself,
             membership_state: MembershipState::Joining,
             roles: Default::default(), //TODO roles!
             reachability: Default::default(), //TODO is every node reachable from itself?
-            seen_by: FxHashSet::from_iter([myself]),
+            seen_by: BTreeSet::from_iter([myself]),
         })]);
 
         ClusterState {
@@ -54,7 +54,7 @@ impl ClusterState {
         self.nodes_with_state.get(addr)
     }
 
-    pub fn add_joiner(&mut self, addr: NodeAddr, roles: FxHashSet<String>) {
+    pub fn add_joiner(&mut self, addr: NodeAddr, roles: BTreeSet<String>) {
         debug!("adding joining node {:?}", addr);
 
         let node_state = NodeState {
@@ -120,7 +120,7 @@ impl ClusterState {
 
     /// This is the internal handler for all changes to a given node state. It updates the 'seen by'
     ///  set and sends change events.
-    async fn state_changed(myself: NodeAddr, old_state: Option<MembershipState>, s: &mut NodeState, crdt_ordering: CrdtOrdering, other_seen_by: &FxHashSet<NodeAddr>, event_notifier: Arc<ClusterEventNotifier>) {
+    async fn state_changed(myself: NodeAddr, old_state: Option<MembershipState>, s: &mut NodeState, crdt_ordering: CrdtOrdering, other_seen_by: &BTreeSet<NodeAddr>, event_notifier: Arc<ClusterEventNotifier>) {
         use CrdtOrdering::*;
 
         if crdt_ordering == SelfWasBigger {
@@ -246,7 +246,7 @@ impl ClusterState {
     }
 
     //TODO unit test
-    pub async fn update_current_reachability(&mut self, reachability: &FxHashMap<NodeAddr, bool>) {
+    pub async fn update_current_reachability(&mut self, reachability: &BTreeMap<NodeAddr, bool>) {
         let mut lazy_version_counter = LazyCounterVersion::new(self);
 
         {
@@ -372,9 +372,9 @@ impl LazyCounterVersion {
 pub struct NodeState {
     pub addr: NodeAddr,
     pub membership_state: MembershipState,
-    pub roles: FxHashSet<String>,
-    pub reachability: FxHashMap<NodeAddr, NodeReachability>, //TODO clean up 'is_reachable == true' entries
-    pub seen_by: FxHashSet<NodeAddr>,
+    pub roles: BTreeSet<String>,
+    pub reachability: BTreeMap<NodeAddr, NodeReachability>, //TODO clean up 'is_reachable == true' entries
+    pub seen_by: BTreeSet<NodeAddr>,
 }
 impl NodeState {
     //TODO unit test
