@@ -4,7 +4,7 @@ use std::collections::btree_map::Entry;
 use std::sync::Arc;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
@@ -214,6 +214,8 @@ impl ClusterState {
     }
 
     pub async fn merge_node_state(&mut self, mut state: NodeState) {
+        let is_converged_before = self.is_converged();
+
         match self.nodes_with_state.entry(state.addr) {
             Entry::Occupied(mut e) => {
                 trace!("merging external node state for {:?} into existing state", state.addr);
@@ -237,6 +239,13 @@ impl ClusterState {
                 if !new_state.is_gossip_partner() {
                     self.on_node_removed_from_gossip(&addr);
                 }
+            }
+        }
+
+        if ! is_converged_before {
+            if self.is_converged() {
+                info!("cluster state fully converged");
+                //TODO send an event for full convergence?
             }
         }
     }

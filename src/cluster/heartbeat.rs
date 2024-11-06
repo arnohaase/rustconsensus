@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use rustc_hash::FxHasher;
 use tokio::time::Instant;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_messages::{HeartbeatData, HeartbeatResponseData};
@@ -147,6 +147,14 @@ impl HeartbeatRegistry {
                 let _ = e.insert(tracker);
             }
         }
+
+        trace!("heartbeat response: rtt={}ms, moving avg rtt={}ms, moving stddev rtt={}ms",
+            (rtt_nanos as f64) / 1000000.0,
+            self.trackers.get(&other).unwrap()
+                .moving_mean_rtt_millis.expect("was just set"),
+            self.trackers.get(&other).unwrap()
+                .moving_variance_rtt_millis_squared.sqrt(),
+        );
     }
 
     //TODO unit test
@@ -166,8 +174,8 @@ impl HeartbeatRegistry {
 
 struct HeartbeatTracker {
     tracked_node: NodeAddr,
-    moving_mean_rtt: Option<f64>,
-    moving_variance_rtt: f64, //TODO lower bound during evaluation to avoid anomalies
+    moving_mean_rtt_millis: Option<f64>,
+    moving_variance_rtt_millis_squared: f64, //TODO lower bound during evaluation to avoid anomalies
     last_seen: Instant,
     config: Arc<ClusterConfig>,
 }
@@ -175,8 +183,8 @@ impl HeartbeatTracker {
     fn new(config: Arc<ClusterConfig>, tracked_node: NodeAddr) -> HeartbeatTracker {
         HeartbeatTracker {
             tracked_node,
-            moving_mean_rtt: None,
-            moving_variance_rtt: 0.0,
+            moving_mean_rtt_millis: None,
+            moving_variance_rtt_millis_squared: 0.0,
             last_seen: Instant::now(),
             config,
         }
@@ -186,20 +194,22 @@ impl HeartbeatTracker {
     fn on_heartbeat_roundtrip(&mut self, rtt_nanos: u64) {
         self.last_seen = Instant::now();
 
-        if let Some(prev) = self.moving_mean_rtt {
+        let rtt_millis = (rtt_nanos as f64) / 1000000.0;
+
+        if let Some(prev) = self.moving_mean_rtt_millis {
             // calculate moving avg / variance
             let alpha = self.config.rtt_moving_avg_new_weight;
 
-            let mean = rtt_nanos as f64 * alpha + prev * (1.0 - alpha);
-            self.moving_mean_rtt = Some(mean);
+            let mean = rtt_millis * alpha + prev * (1.0 - alpha);
+            self.moving_mean_rtt_millis = Some(mean);
 
-            let s = (mean - rtt_nanos as f64).powi(2);
-            self.moving_variance_rtt = s * alpha + self.moving_variance_rtt * (1.0 - alpha);
+            let s = (mean - rtt_millis).powi(2);
+            self.moving_variance_rtt_millis_squared = s * alpha + self.moving_variance_rtt_millis_squared * (1.0 - alpha);
         }
         else {
             // first RTT response
-            self.moving_variance_rtt = rtt_nanos as f64;
-            self.moving_variance_rtt = 0.0;
+            self.moving_mean_rtt_millis = Some(rtt_millis);
+            self.moving_variance_rtt_millis_squared = 0.0;
         }
     }
 
@@ -207,23 +217,24 @@ impl HeartbeatTracker {
 
     //TODO unit test
     fn phi(&self) -> f64 {
-        let nanos_since_last_seen = Instant::now().duration_since(self.last_seen).as_nanos() as f64;
+        let nanos_since_last_seen = (Instant::now().duration_since(self.last_seen).as_nanos() as f64);
 
-        let rtt_mean = self.moving_mean_rtt.unwrap_or(0.0);
+        let rtt_mean_nanos = self.moving_mean_rtt_millis.unwrap_or(0.0) * 1000000.0;
 
-        let mut rtt_std_dev = self.moving_variance_rtt.sqrt();
-        let min_std_dev = self.config.rtt_min_std_dev.as_nanos() as f64;
-        if rtt_std_dev < min_std_dev {
-            rtt_std_dev = min_std_dev;
+        let mut rtt_std_dev_millis = self.moving_variance_rtt_millis_squared.sqrt();
+        let min_std_dev_millis = (self.config.rtt_min_std_dev.as_nanos() as f64) / 1000000.0;
+        if rtt_std_dev_millis < min_std_dev_millis {
+            rtt_std_dev_millis = min_std_dev_millis;
         }
 
-        let time_overdue = nanos_since_last_seen
+        let millis_overdue = (
+            nanos_since_last_seen
             - self.config.heartbeat_interval.as_nanos() as f64
             - self.config.heartbeat_grace_period.as_nanos() as f64
-            - rtt_mean
-            ;
+            - rtt_mean_nanos
+        ) / 1000000.0;
 
-        if time_overdue < 0.0 {
+        if millis_overdue < 0.0 {
             return 0.0;
         }
 
@@ -233,7 +244,7 @@ impl HeartbeatTracker {
             coefficient * exponent.exp()
         }
 
-        let g = gaussian(time_overdue, rtt_std_dev);
+        let g = gaussian(millis_overdue, rtt_std_dev_millis);
         if g < 1.0 / Self::MAX_PHI {
             return Self::MAX_PHI;
         }
@@ -241,7 +252,18 @@ impl HeartbeatTracker {
     }
 
     pub fn is_reachable(&self) -> bool {
-        self.phi() < self.config.reachability_phi_threshold
+        let phi = self.phi();
+        let result = phi < self.config.reachability_phi_threshold;
+
+        // trace!("reachability for {:?}: rtt={}ms, variance={}ms, phi={} -> {}",
+        //     self.tracked_node,
+        //     self.moving_mean_rtt.unwrap_or(0.0)/ 1000000.0,
+        //     self.moving_variance_rtt / 1000000.0,
+        //     phi,
+        //     result,
+        // );
+
+        result
     }
 }
 

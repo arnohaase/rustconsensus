@@ -197,6 +197,7 @@ impl  Gossip {
 
     //TODO unit test
     pub async fn on_summary_digest(&self, other_digest: &GossipSummaryDigestData) -> Option<GossipDetailedDigestData> {
+        debug!("received gossip summary digest message");
         let own_digest = self.gossip_summary_digest().await;
         if own_digest.full_sha256_digest == other_digest.full_sha256_digest {
             return None;
@@ -279,6 +280,7 @@ impl  Gossip {
 
     //TODO unit test
     pub async fn on_nodes(&self, other_data: GossipNodesData) {
+        debug!("received gossip nodes message");
         let mut cluster_state = self.cluster_state.write().await;
         for s in other_data.nodes {
             cluster_state.merge_node_state(s).await;

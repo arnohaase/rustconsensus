@@ -47,7 +47,6 @@ impl ClusterMessageModule {
 
         match ClusterMessage::deser(buf)? {
             GossipSummaryDigest(digest) => {
-                debug!("received gossip summary digest message");
                 if let Some(response) = self.gossip.read().await
                     .on_summary_digest(&digest).await
                 {
@@ -72,7 +71,6 @@ impl ClusterMessageModule {
                 else { Ok(()) }
             }
             GossipNodes(data) => {
-                debug!("received gossip nodes message");
                 Ok(
                     self.gossip.read().await
                         .on_nodes(data).await
