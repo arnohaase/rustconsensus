@@ -6,7 +6,7 @@ use bytes::{Buf, BufMut, BytesMut};
 use bytes_varint::{VarIntSupport, VarIntSupportMut};
 use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use num_enum::TryFromPrimitive;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::RwLock;
 use tracing::error;
 
@@ -171,39 +171,34 @@ impl ClusterMessage {
         let mut addr_pool = NodeAddrPoolSerializer::new(buf);
         let mut string_pool = StringPoolSerializer::new(buf);
 
-        println!("a       {:?}", buf);
-
-        buf.put_usize_varint(data.differing.len());
-        for s in &data.differing {
-            addr_pool.put_node_addr(buf, s.addr);
-            println!("b       {:?}", buf);
-            buf.put_u8(s.membership_state.into());
-            println!("c       {:?}", buf);
-            string_pool.put_string_set(buf, s.roles.iter());
-            println!("d       {:?}", buf);
-            Self::ser_reachability(&s.reachability, buf, &mut addr_pool);
-            println!("e       {:?}", buf);
-            addr_pool.put_addr_set(buf, s.seen_by.iter());
-            println!("f       {:?}", buf);
-        }
+        Self::_ser_node_states(&data.differing, &mut addr_pool, &mut string_pool, buf);
 
         addr_pool.put_addr_set(buf, data.missing.iter());
         addr_pool.finalize(buf);
         string_pool.finalize(buf);
     }
 
+    fn _ser_node_states<'a> (
+        nodes: &'a [NodeState],
+        addr_pool: &mut NodeAddrPoolSerializer,
+        string_pool: &mut StringPoolSerializer<'a>,
+        buf: &mut BytesMut)
+    {
+        buf.put_usize_varint(nodes.len());
+        for s in nodes {
+            addr_pool.put_node_addr(buf, s.addr);
+            buf.put_u8(s.membership_state.into());
+            string_pool.put_string_set(buf, s.roles.iter());
+            Self::ser_reachability(&s.reachability, buf, addr_pool);
+            addr_pool.put_addr_set(buf, s.seen_by.iter());
+        }
+    }
+
     fn ser_gossip_nodes(data: &GossipNodesData, buf: &mut BytesMut) {
         let mut addr_pool = NodeAddrPoolSerializer::new(buf);
         let mut string_pool = StringPoolSerializer::new(buf);
 
-        buf.put_usize_varint(data.nodes.len());
-        for s in &data.nodes {
-            addr_pool.put_node_addr(buf, s.addr);
-            buf.put_u8(s.membership_state.into());
-            string_pool.put_string_set(buf, s.roles.iter());
-            Self::ser_reachability(&s.reachability, buf, &mut addr_pool);
-            addr_pool.put_addr_set(buf, s.seen_by.iter());
-        }
+        Self::_ser_node_states(&data.nodes, &mut addr_pool, &mut string_pool, buf);
 
         addr_pool.finalize(buf);
         string_pool.finalize(buf);
@@ -297,26 +292,7 @@ impl ClusterMessage {
         let addr_pool = NodeAddrPoolDeserializer::new(&mut buf)?;
         let string_pool = StringPoolDeserializer::new(&mut buf)?;
 
-        let num_differing = buf.try_get_usize_varint()?;
-        println!("num_differing: {} @ {:?}", num_differing, buf);
-
-        let mut differing = Vec::with_capacity(num_differing);
-        for _ in 0..num_differing {
-            let addr = addr_pool.try_get_node_addr(&mut buf)?;
-            let membership_state = MembershipState::try_from_primitive(buf.try_get_u8()?)?;
-            let roles = string_pool.try_get_string_set(&mut buf)?;
-            let reachability= Self::try_deser_reachability(&mut buf, &addr_pool)?;
-            let seen_by = addr_pool.try_get_addr_set(&mut buf)?;
-
-            differing.push(NodeState {
-                addr,
-                membership_state,
-                roles,
-                reachability,
-                seen_by,
-            })
-        }
-
+        let differing = Self::_deser_node_states(&addr_pool, &string_pool, &mut buf)?;
         let missing = addr_pool.try_get_addr_set(&mut buf)?;
 
         Ok(ClusterMessage::GossipDifferingAndMissingNodes(GossipDifferingAndMissingNodesData {
@@ -325,20 +301,17 @@ impl ClusterMessage {
         }))
     }
 
-    fn deser_gossip_nodes(mut buf: &[u8]) -> anyhow::Result<ClusterMessage> {
-        let addr_pool = NodeAddrPoolDeserializer::new(&mut buf)?;
-        let string_pool = StringPoolDeserializer::new(&mut buf)?;
-
-        let num_nodes = buf.try_get_usize_varint()?;
-        let mut nodes = Vec::with_capacity(num_nodes);
-        for _ in 0..num_nodes {
-            let addr = NodeAddr::try_deser(&mut buf)?;
+    fn _deser_node_states(addr_pool: &NodeAddrPoolDeserializer, string_pool: &StringPoolDeserializer, buf: &mut impl Buf) -> anyhow::Result<Vec<NodeState>> {
+        let num_differing = buf.try_get_usize_varint()?;
+        let mut result = Vec::with_capacity(num_differing);
+        for _ in 0..num_differing {
+            let addr = addr_pool.try_get_node_addr(buf)?;
             let membership_state = MembershipState::try_from_primitive(buf.try_get_u8()?)?;
-            let roles = string_pool.try_get_string_set(&mut buf)?;
-            let reachability= Self::try_deser_reachability(&mut buf, &addr_pool)?;
-            let seen_by = addr_pool.try_get_addr_set(&mut buf)?;
+            let roles = string_pool.try_get_string_set(buf)?;
+            let reachability= Self::try_deser_reachability(buf, &addr_pool)?;
+            let seen_by = addr_pool.try_get_addr_set(buf)?;
 
-            nodes.push(NodeState {
+            result.push(NodeState {
                 addr,
                 membership_state,
                 roles,
@@ -346,7 +319,14 @@ impl ClusterMessage {
                 seen_by,
             })
         }
+        Ok(result)
+    }
 
+    fn deser_gossip_nodes(mut buf: &[u8]) -> anyhow::Result<ClusterMessage> {
+        let addr_pool = NodeAddrPoolDeserializer::new(&mut buf)?;
+        let string_pool = StringPoolDeserializer::new(&mut buf)?;
+
+        let nodes = Self::_deser_node_states(&addr_pool, &string_pool, &mut buf)?;
         Ok(ClusterMessage::GossipNodes(GossipNodesData {
             nodes,
         }))
@@ -719,6 +699,23 @@ mod test {
         }],
         missing: vec![NodeAddr::localhost(5), NodeAddr::localhost(6)],
     }), ID_GOSSIP_DIFFERING_AND_MISSING_NODES)]
+    #[case::gossip_nodes_empty(GossipNodes(GossipNodesData {
+        nodes: vec![],
+    }), ID_GOSSIP_NODES)]
+    #[case::gossip_nodes_data(GossipNodes(GossipNodesData {
+        nodes: vec![NodeState {
+            addr: NodeAddr::localhost(5),
+            membership_state: MembershipState::Leaving,
+            reachability: FxHashMap::from_iter([
+                (NodeAddr::localhost(5), NodeReachability { counter_of_reporter: 99, is_reachable: false, }),
+                (NodeAddr::localhost(6), NodeReachability { counter_of_reporter: 0, is_reachable: true, }),
+            ]),
+            roles: FxHashSet::from_iter(["a".to_string(), "bc".to_string(), "".to_string()]),
+            seen_by: FxHashSet::from_iter([NodeAddr::localhost(8), NodeAddr::localhost(5)]),
+        }],
+    }), ID_GOSSIP_NODES)]
+    #[case::heartbeat(Heartbeat(HeartbeatData { counter: 1, timestamp_nanos: 5}), ID_HEARTBEAT)]
+    #[case::heartbeat_response(HeartbeatResponse(HeartbeatResponseData { counter: 1, timestamp_nanos: 5}), ID_HEARTBEAT_RESPONSE)]
     fn test_ser_cluster_message(#[case] msg: ClusterMessage, #[case] msg_id: u8) {
         assert_eq!(msg.id(), msg_id);
 
