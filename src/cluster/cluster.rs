@@ -35,8 +35,8 @@ impl Cluster {
 
     pub async fn run(&self, to_join: Option<impl ToSocketAddrs>) -> anyhow::Result<()> {
         select! {
-            r = self._run(to_join) => r,
             r = self.messaging.recv() => r,
+            r = self._run(to_join) => r,
         }
     }
 
