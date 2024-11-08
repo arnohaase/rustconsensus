@@ -12,6 +12,7 @@ use crate::cluster::cluster_driver::run_cluster;
 use crate::cluster::cluster_events::{ClusterEventListener, ClusterEventNotifier};
 use crate::cluster::cluster_messages::ClusterMessageModule;
 use crate::cluster::cluster_state::ClusterState;
+use crate::cluster::discovery_strategy::DiscoveryStrategy;
 use crate::cluster::gossip::Gossip;
 use crate::cluster::heartbeat::HeartBeat;
 use crate::cluster::join_messages::{JoinMessage, JoinMessageModule};
@@ -33,14 +34,14 @@ impl Cluster {
         }
     }
 
-    pub async fn run(&self, to_join: Option<impl ToSocketAddrs>) -> anyhow::Result<()> {
+    pub async fn run(&self, discovery_strategy: impl DiscoveryStrategy, to_join: Option<impl ToSocketAddrs>) -> anyhow::Result<()> {
         select! {
             r = self.messaging.recv() => r,
-            r = self._run(to_join) => r,
+            r = self._run(discovery_strategy, to_join) => r,
         }
     }
 
-    async fn _run(&self, to_join: Option<impl ToSocketAddrs>) -> anyhow::Result<()> {
+    async fn _run(&self, discovery_strategy: impl DiscoveryStrategy, to_join: Option<impl ToSocketAddrs>) -> anyhow::Result<()> {
         let myself = self.messaging.get_self_addr();
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, self.config.clone(), self.event_notifier.clone())));
         let heart_beat = Arc::new(RwLock::new(HeartBeat::new(myself, self.config.clone())));
@@ -64,7 +65,7 @@ impl Cluster {
         let join_messaging = JoinMessageModule::new(cluster_state.clone());
         self.messaging.register_module(join_messaging.clone()).await?;
 
-        run_cluster(self.config.clone(), cluster_state, heart_beat, gossip, self.messaging.clone()).await;
+        run_cluster(self.config.clone(), cluster_state, heart_beat, gossip, self.messaging.clone(), discovery_strategy).await;
 
         debug!("deregistering cluster join module");
         self.messaging.deregister_module(join_messaging.id()).await?;

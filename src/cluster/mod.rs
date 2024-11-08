@@ -4,6 +4,7 @@ pub mod cluster_driver;
 pub mod cluster_events;
 pub mod cluster_state;
 pub mod cluster_messages;
+pub mod discovery_strategy;
 pub mod gossip;
 pub mod heartbeat;
 mod join_messages;

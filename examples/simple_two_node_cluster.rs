@@ -2,14 +2,14 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+
 use tokio::select;
 use tokio::time::sleep;
-
 use tracing::Level;
 
 use rustconsensus::cluster::cluster::Cluster;
 use rustconsensus::cluster::cluster_config::ClusterConfig;
-use rustconsensus::cluster::cluster_messages::ClusterMessageModule;
+use rustconsensus::cluster::discovery_strategy::{JoinMyselfDiscoveryStrategy, JoinOthersStrategy};
 use rustconsensus::messaging::messaging::Messaging;
 use rustconsensus::messaging::node_addr::NodeAddr;
 
@@ -32,7 +32,8 @@ async fn create_messaging(addr: &str) -> anyhow::Result<Arc<Messaging>> {
 #[tracing::instrument(name="BBB", skip_all)]
 async fn run_and_join(cluster: Cluster, other: &str) -> anyhow::Result<()> {
     sleep(Duration::from_millis(100)).await;
-    cluster.run(Some(other)).await
+    let discovery_strategy = JoinOthersStrategy::new(other.clone())?;
+    cluster.run(discovery_strategy, Some(other)).await
 }
 
 
@@ -49,7 +50,7 @@ pub async fn main() -> anyhow::Result<()> {
     let cluster2 = Cluster::new(Arc::new(config2), messaging2.clone());
 
     select! {
-        _ = cluster1.run(None::<&str>) => {} //TODO type annotation should not be necessary
+        _ = cluster1.run(JoinMyselfDiscoveryStrategy::new(), None::<&str>) => {} //TODO type annotation should not be necessary
         _ = run_and_join(cluster2, "127.0.0.1:9810") => {}
     }
 

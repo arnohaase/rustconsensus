@@ -7,7 +7,7 @@ use anyhow::anyhow;
 use bytes::BytesMut;
 use rustc_hash::FxHashMap;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{error, info, trace, warn};
 
 use crate::messaging::envelope::{Checksum, Envelope};
 use crate::messaging::message_module::{MessageModule, MessageModuleId};

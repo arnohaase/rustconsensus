@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -4,7 +4,7 @@ use std::collections::btree_map::Entry;
 use std::sync::Arc;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
@@ -68,6 +68,16 @@ impl ClusterState {
         let _ = self.nodes_with_state.insert(addr, node_state);
     }
 
+    pub async fn promote_myself_to_up(&mut self) {
+        self.merge_node_state(NodeState {
+            addr: self.myself,
+            membership_state: MembershipState::Up,
+            roles: Default::default(),
+            reachability: Default::default(),
+            seen_by: Default::default(),
+        }).await
+    }
+
     //TODO unit test
     /// returns the node that is the leader in the current topology once state converges (which
     ///  can only happen if all nodes are reachable)
@@ -107,7 +117,6 @@ impl ClusterState {
     pub fn am_i_leader(&self) -> bool {
         self.leader == Some(self.myself)
     }
-
 
     pub fn is_converged(&self) -> bool {
         let num_convergence_nodes = self.nodes_with_state.values()
@@ -188,6 +197,7 @@ impl ClusterState {
                     Exiting | Down => Some(Removed),
                     _ => None
                 } {
+                    debug!("leader action: promoting {:?} to {:?}", s.addr, new_state);
                     s.membership_state = new_state;
                     Self::state_changed(self.myself, Some(old_state), s, CrdtOrdering::NeitherWasBigger, &Default::default(), self.event_notifier.clone()).await;
                     if !new_state.is_gossip_partner() {
@@ -509,8 +519,13 @@ impl MembershipState {
         use MembershipState::*;
 
         match self {
+            // we require a leader to be at least 'Up' to simplify logic for initial discovery: All
+            //  nodes become 'Joining' right away on startup, and depending on the discovery strategy
+            //  may or may not promote themselves to 'Up'. That logic becomes more involved if e.g.
+            //  single nodes becomes full-blown clusters on their own, promoting themselves to 'Up'.
+            Joining | WeaklyUp => false,
             // NB: We allow a leader to be 'Exiting' to allow promotion to 'Removed' reliably during shutdown
-            Joining | WeaklyUp | Up | Leaving | Exiting => true,
+            Up | Leaving | Exiting => true,
             Down | Removed => false,
         }
     }
