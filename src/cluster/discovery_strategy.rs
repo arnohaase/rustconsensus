@@ -102,6 +102,7 @@ impl DiscoveryStrategy for MyselfIsSeedNodeStrategy {
         }
 
         //TODO retry loop with configurable delay, until configurable timeout
+        //TODO move leader to up once quorum? all? ???
 
         Err(anyhow!("could not reach any seed nodes in 10 seconds"))
     }
@@ -122,7 +123,10 @@ impl JoinOthersStrategy {
 #[async_trait]
 impl DiscoveryStrategy for JoinOthersStrategy {
     async fn do_discovery(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<Messaging>) -> anyhow::Result<()> {
-        //TODO check that myself is not one of the seed nodes
+        let myself = cluster_state.read().await.myself().addr;
+        if self.seed_nodes.contains(&myself) {
+            return Err(anyhow!("this node's address {:?} is listed as one of the seed nodes {:?} although the strategy is meant for cases where it isn't", myself, self.seed_nodes));
+        }
 
         let mut join_msg_buf = BytesMut::new();
         JoinMessage::Join.ser(&mut join_msg_buf);
