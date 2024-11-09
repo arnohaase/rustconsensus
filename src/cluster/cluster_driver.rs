@@ -73,7 +73,7 @@ async fn _run_active_loop(
 
         update_reachability(&cluster_state, &heart_beat).await;
 
-        millis_until_next_gossip = do_gossip(&config, &gossip, &messaging, millis_until_next_gossip, elapsed_millis).await;
+        millis_until_next_gossip = do_gossip(&config, &gossip, &messaging, &cluster_state, millis_until_next_gossip, elapsed_millis).await;
         millis_until_next_heartbeat = do_heartbeat(&config, &cluster_state, &heart_beat, &messaging, millis_until_next_heartbeat, elapsed_millis).await;
 
         //TODO WeaklyUp actions
@@ -124,7 +124,7 @@ async fn do_heartbeat(config: &ClusterConfig, cluster_state: &RwLock<ClusterStat
     }
 }
 
-async fn do_gossip(config: &ClusterConfig, gossip: &RwLock<Gossip>, messaging: &Messaging, millis_until_next_gossip: u32, elapsed_millis: u32) -> u32 {
+async fn do_gossip(config: &ClusterConfig, gossip: &RwLock<Gossip>, messaging: &Messaging, cluster_state: &RwLock<ClusterState>, millis_until_next_gossip: u32, elapsed_millis: u32) -> u32 {
     match millis_until_next_gossip.checked_sub(elapsed_millis) {
         Some(millis) => millis,
         None => {
@@ -138,8 +138,14 @@ async fn do_gossip(config: &ClusterConfig, gossip: &RwLock<Gossip>, messaging: &
                 let _ = messaging.send(addr, CLUSTER_MESSAGE_MODULE_ID, &buf).await;
             }
 
-            //TODO increased gossip frequency if not converged
-            config.regular_gossip_interval.as_millis() as u32 //TODO make sure it fits into u32
+            if cluster_state.read().await
+                .is_converged()
+            {
+                config.regular_gossip_interval.as_millis() as u32 //TODO make sure it fits into u32
+            }
+            else {
+                config.regular_gossip_interval.as_millis() as u32 / 3 //TODO make sure it's not 0, fits into u32; separately configurable?
+            }
         }
     }
 }
