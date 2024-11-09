@@ -1,10 +1,8 @@
-use std::net::ToSocketAddrs;
 use std::sync::Arc;
-use bytes::BytesMut;
 use tokio::select;
 
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::cluster::cluster_config::ClusterConfig;
@@ -15,9 +13,9 @@ use crate::cluster::cluster_state::ClusterState;
 use crate::cluster::discovery_strategy::DiscoveryStrategy;
 use crate::cluster::gossip::Gossip;
 use crate::cluster::heartbeat::HeartBeat;
-use crate::cluster::join_messages::{JoinMessage, JoinMessageModule};
+use crate::cluster::join_messages::JoinMessageModule;
 use crate::messaging::message_module::MessageModule;
-use crate::messaging::messaging::{JOIN_MESSAGE_MODULE_ID, Messaging};
+use crate::messaging::messaging::Messaging;
 
 /// This is the cluster's public API
 pub struct Cluster {

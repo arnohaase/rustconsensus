@@ -142,7 +142,7 @@ impl HeartbeatRegistry {
         match self.trackers.entry(other) {
             Entry::Occupied(mut e) => e.get_mut().on_heartbeat_roundtrip(rtt_nanos),
             Entry::Vacant(e) => {
-                let mut tracker = HeartbeatTracker::new(self.config.clone(), other);
+                let mut tracker = HeartbeatTracker::new(self.config.clone());
                 tracker.on_heartbeat_roundtrip(rtt_nanos);
                 let _ = e.insert(tracker);
             }
@@ -173,16 +173,14 @@ impl HeartbeatRegistry {
 
 
 struct HeartbeatTracker {
-    tracked_node: NodeAddr,
     moving_mean_rtt_millis: Option<f64>,
     moving_variance_rtt_millis_squared: f64, //TODO lower bound during evaluation to avoid anomalies
     last_seen: Instant,
     config: Arc<ClusterConfig>,
 }
 impl HeartbeatTracker {
-    fn new(config: Arc<ClusterConfig>, tracked_node: NodeAddr) -> HeartbeatTracker {
+    fn new(config: Arc<ClusterConfig>) -> HeartbeatTracker {
         HeartbeatTracker {
-            tracked_node,
             moving_mean_rtt_millis: None,
             moving_variance_rtt_millis_squared: 0.0,
             last_seen: Instant::now(),
@@ -217,7 +215,7 @@ impl HeartbeatTracker {
 
     //TODO unit test
     fn phi(&self) -> f64 {
-        let nanos_since_last_seen = (Instant::now().duration_since(self.last_seen).as_nanos() as f64);
+        let nanos_since_last_seen = Instant::now().duration_since(self.last_seen).as_nanos() as f64;
 
         let rtt_mean_nanos = self.moving_mean_rtt_millis.unwrap_or(0.0) * 1000000.0;
 

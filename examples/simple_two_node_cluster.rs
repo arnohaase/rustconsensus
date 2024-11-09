@@ -1,15 +1,13 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::select;
-use tokio::time::sleep;
 use tracing::Level;
 
 use rustconsensus::cluster::cluster::Cluster;
 use rustconsensus::cluster::cluster_config::ClusterConfig;
-use rustconsensus::cluster::discovery_strategy::{StartAsClusterDiscoveryStrategy, JoinOthersStrategy, PartOfSeedNodeStrategy};
+use rustconsensus::cluster::discovery_strategy::PartOfSeedNodeStrategy;
 use rustconsensus::messaging::messaging::Messaging;
 use rustconsensus::messaging::node_addr::NodeAddr;
 

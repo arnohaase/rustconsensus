@@ -3,7 +3,6 @@
 //!  terms, a merge operation returns the smallest value that is bigger than both initial values.
 
 use std::collections::BTreeSet;
-use std::hash::Hash;
 use std::iter::Extend;
 
 pub trait Crdt {

@@ -7,13 +7,11 @@ use async_trait::async_trait;
 use bytes::BytesMut;
 use tokio::select;
 use tokio::sync::RwLock;
-use tokio::time::{Instant, sleep};
-use tracing::{error, info};
+use tokio::time::sleep;
+use tracing::info;
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeState};
-use crate::cluster::gossip::Gossip;
-use crate::cluster::heartbeat::HeartBeat;
 use crate::cluster::join_messages::JoinMessage;
 use crate::messaging::messaging::{JOIN_MESSAGE_MODULE_ID, Messaging};
 use crate::messaging::node_addr::NodeAddr;
@@ -52,7 +50,7 @@ impl StartAsClusterDiscoveryStrategy {
 }
 #[async_trait]
 impl DiscoveryStrategy for StartAsClusterDiscoveryStrategy {
-    async fn do_discovery(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<Messaging>) -> anyhow::Result<()> {
+    async fn do_discovery(&self, _config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, _messaging: Arc<Messaging>) -> anyhow::Result<()> {
         cluster_state.write().await
             .promote_myself_to_up().await;
         Ok(())
@@ -90,7 +88,7 @@ impl DiscoveryStrategy for PartOfSeedNodeStrategy {
         }
 
         select! {
-            _ = send_join_message_loop(other_seed_nodes, messaging.clone(), config.clone()) => { Ok(()) }
+            _ = send_join_message_loop(&other_seed_nodes, messaging.clone(), config.clone()) => { Ok(()) }
             _ = check_joined_as_seed_node(cluster_state.clone(), &self.seed_nodes, &myself) => { Ok(()) }
             _ = sleep(config.discovery_seed_node_give_up_timeout) => { Err(anyhow!("discovery timeout")) } //TODO better message; logging
         }
@@ -120,14 +118,28 @@ async fn check_joined_as_seed_node(cluster_state: Arc<RwLock<ClusterState>>, see
     }
 }
 
-async fn send_join_message_loop(other_seed_nodes: Vec<SocketAddr>, messaging: Arc<Messaging>, config: Arc<ClusterConfig>) {
+async fn check_joined_other_seed_nodes(cluster_state: Arc<RwLock<ClusterState>>, seed_nodes: &[SocketAddr]) {
+    loop {
+        if cluster_state.read().await
+            .node_states()
+            .any(|n| seed_nodes.contains(&n.addr.addr))
+        {
+            info!("discovery successful, joined the cluster");
+            break
+        }
+
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn send_join_message_loop(other_seed_nodes: &[SocketAddr], messaging: Arc<Messaging>, config: Arc<ClusterConfig>) {
     let mut join_msg_buf = BytesMut::new();
     JoinMessage::Join.ser(&mut join_msg_buf);
 
     //NB: This endless loop *must* be in a separate function rather than inlined in the select! block
     //     due to limitations in the select! macro / rewriting of awaits
     loop {
-        for seed_node in &other_seed_nodes {
+        for seed_node in other_seed_nodes {
             info!("trying to join cluster at {}", seed_node); //TODO clearer logging
             let _ = messaging.send(seed_node.clone().into(), JOIN_MESSAGE_MODULE_ID, &join_msg_buf).await;
         }
@@ -139,7 +151,7 @@ fn is_any_node_up<'a>(mut nodes: impl Iterator<Item=&'a NodeState>) -> bool {
     nodes.any(|n| n.membership_state >= MembershipState::Up)
 }
 
-fn seed_node_members<'a>(mut all_nodes: impl Iterator<Item=&'a NodeState>, seed_nodes: &[SocketAddr]) -> Vec<NodeAddr> {
+fn seed_node_members<'a>(all_nodes: impl Iterator<Item=&'a NodeState>, seed_nodes: &[SocketAddr]) -> Vec<NodeAddr> {
     all_nodes
         .filter(|n| seed_nodes.contains(&n.addr.addr))
         .map(|n| n.addr)
@@ -170,30 +182,11 @@ impl DiscoveryStrategy for JoinOthersStrategy {
             return Err(anyhow!("this node's address {:?} is listed as one of the seed nodes {:?} although the strategy is meant for cases where it isn't", myself, self.seed_nodes));
         }
 
-        todo!("rework like the above");
-
-        let mut join_msg_buf = BytesMut::new();
-        JoinMessage::Join.ser(&mut join_msg_buf);
-
-        for _ in 0..10 {
-            if cluster_state.read().await
-                .node_states()
-                .any(|n| self.seed_nodes.contains(&n.addr.addr))
-            {
-                info!("discovery successful");
-                return Ok(())
-            }
-
-            for seed_node in &self.seed_nodes {
-                info!("trying to join cluster at {}", seed_node);
-                let _ = messaging.send(seed_node.clone().into(), JOIN_MESSAGE_MODULE_ID, &join_msg_buf).await;
-            }
-            sleep(Duration::from_secs(1)).await;
+        select! {
+            _ = send_join_message_loop(&self.seed_nodes, messaging.clone(), config.clone()) => { Ok(()) }
+            _ = check_joined_other_seed_nodes(cluster_state.clone(), &self.seed_nodes) => { Ok(()) }
+            _ = sleep(config.discovery_seed_node_give_up_timeout) => { Err(anyhow!("discovery timeout")) } //TODO better message; logging
         }
-
-        //TODO retry loop with configurable delay, until configurable timeout
-
-        Err(anyhow!("could not reach any seed nodes in 10 seconds"))
     }
 }
 
