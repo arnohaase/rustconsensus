@@ -4,7 +4,7 @@ use std::collections::btree_map::Entry;
 use std::sync::Arc;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
@@ -100,6 +100,9 @@ impl ClusterState {
             .min();
 
         if new_leader != self.leader {
+            if let Some(l) = new_leader {
+                info!("new cluster leader: {:?}", l);
+            }
             self.send_event(ClusterEvent::LeaderChanged(LeaderChangedData {
                 old_leader: self.leader,
                 new_leader,

@@ -34,7 +34,7 @@ impl Cluster {
 
     pub async fn run(&self, discovery_strategy: impl DiscoveryStrategy) -> anyhow::Result<()> {
         select! {
-            r = self.messaging.recv() => r,
+            r = self.messaging.recv() => r, //TODO spawn messaging? or at least message handling?
             r = self._run(discovery_strategy) => r,
         }
     }
