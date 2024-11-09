@@ -30,10 +30,8 @@ async fn create_messaging(addr: &str) -> anyhow::Result<Arc<Messaging>> {
 }
 
 #[tracing::instrument(name="BBB", skip_all)]
-async fn run_and_join(cluster: Cluster, other: &str) -> anyhow::Result<()> {
-    sleep(Duration::from_millis(100)).await;
-    let discovery_strategy = JoinOthersStrategy::new(other.clone())?;
-    cluster.run(discovery_strategy).await
+async fn run_and_join(cluster: Cluster) -> anyhow::Result<()> {
+    cluster.run(PartOfSeedNodeStrategy::new(vec!["127.0.0.1:9810", "127.0.0.1:9811"]).unwrap()).await
 }
 
 
@@ -50,8 +48,8 @@ pub async fn main() -> anyhow::Result<()> {
     let cluster2 = Cluster::new(Arc::new(config2), messaging2.clone());
 
     select! {
-        _ = cluster1.run(StartAsClusterDiscoveryStrategy::new()) => {}
-        _ = run_and_join(cluster2, "127.0.0.1:9810") => {}
+        _ = cluster1.run(PartOfSeedNodeStrategy::new(vec!["127.0.0.1:9810", "127.0.0.1:9811"]).unwrap()) => {}
+        _ = run_and_join(cluster2) => {}
     }
 
     Ok(())

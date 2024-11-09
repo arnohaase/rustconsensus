@@ -63,10 +63,15 @@ pub struct PartOfSeedNodeStrategy {
     seed_nodes: Vec<SocketAddr>,
 }
 impl PartOfSeedNodeStrategy {
-    pub fn new(seed_nodes: impl ToSocketAddrs) -> anyhow::Result<PartOfSeedNodeStrategy> {
-        let seed_nodes = seed_nodes.to_socket_addrs()?.collect::<Vec<_>>();
+    pub fn new(seed_nodes: Vec<impl ToSocketAddrs>) -> anyhow::Result<PartOfSeedNodeStrategy> {
+        let mut resolved_nodes = Vec::new();
+        for tsa in seed_nodes {
+            for sa in tsa.to_socket_addrs()? {
+                resolved_nodes.push(sa);
+            }
+        }
         Ok(PartOfSeedNodeStrategy {
-            seed_nodes,
+            seed_nodes: resolved_nodes,
         })
     }
 }
@@ -108,7 +113,7 @@ impl DiscoveryStrategy for PartOfSeedNodeStrategy {
                 info!("trying to join cluster at {}", seed_node);
                 let _ = messaging.send(seed_node.clone().into(), JOIN_MESSAGE_MODULE_ID, &join_msg_buf).await;
             }
-            sleep(Duration::from_secs(1)).await;
+            sleep(Duration::from_secs(1)).await; //TODO configurable
         }
 
         //TODO retry loop with configurable delay, until configurable timeout
@@ -132,10 +137,15 @@ pub struct JoinOthersStrategy {
     seed_nodes: Vec<SocketAddr>,
 }
 impl JoinOthersStrategy {
-    pub fn new(seed_nodes: impl ToSocketAddrs) -> anyhow::Result<JoinOthersStrategy> {
-        let seed_nodes = seed_nodes.to_socket_addrs()?.collect::<Vec<_>>();
+    pub fn new(seed_nodes: Vec<impl ToSocketAddrs>) -> anyhow::Result<JoinOthersStrategy> {
+        let mut resolved_nodes = Vec::new();
+        for tsa in seed_nodes {
+            for sa in tsa.to_socket_addrs()? {
+                resolved_nodes.push(sa);
+            }
+        }
         Ok(JoinOthersStrategy {
-            seed_nodes,
+            seed_nodes: resolved_nodes,
         })
     }
 }
