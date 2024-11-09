@@ -54,7 +54,7 @@ impl StartAsClusterDiscoveryStrategy {
 impl DiscoveryStrategy for StartAsClusterDiscoveryStrategy {
     async fn do_discovery(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<Messaging>) -> anyhow::Result<()> {
         cluster_state.write().await
-            .promote_myself_to_up();
+            .promote_myself_to_up().await;
         Ok(())
     }
 }
@@ -89,62 +89,49 @@ impl DiscoveryStrategy for PartOfSeedNodeStrategy {
             return Err(anyhow!("list of seed nodes {:?} does not contain this node's address {:?}", self.seed_nodes, myself));
         }
 
-        let mut join_msg_buf = BytesMut::new();
-        JoinMessage::Join.ser(&mut join_msg_buf);
-
-        let mut prev_time = Instant::now();
-        let timeout_limit = prev_time + config.discovery_seed_node_give_up_timeout;
-
-        let mut millis_until_resend_join: u32 = 0;
-
-        loop {
-            let new_time = Instant::now();
-            let elapsed_millis: u32 = new_time.saturating_duration_since(prev_time).as_millis().try_into()
-                .unwrap_or_else(|_| {
-                    error!("system clock jumped forward");
-                    10
-                });
-            prev_time = new_time;
-
-            // (re)send join messages
-            millis_until_resend_join = match millis_until_resend_join.checked_sub(elapsed_millis) {
-                Some(millis) => millis,
-                None => {
-                    for seed_node in &other_seed_nodes {
-                        info!("trying to join cluster at {}", seed_node); //TODO clearar logging
-                        let _ = messaging.send(seed_node.clone().into(), JOIN_MESSAGE_MODULE_ID, &join_msg_buf).await;
-                    }
-                    config.discovery_seed_node_retry_interval.as_millis() as u32  //TODO overflow
-                }
-            };
-
-            // check for successful termination: Either we reached a quorum of seed nodes and
-            //  self-promote to leader, or some other node became 'up'
-            if is_any_node_up(cluster_state.read().await.node_states()) {
-                info!("joined a cluster");
-                return Ok(())
-            }
-
-            let seed_node_members = seed_node_members(cluster_state.read().await.node_states(), &self.seed_nodes);
-            let has_quorum = seed_node_members.len() * 2 > self.seed_nodes.len();
-            let i_am_first = seed_node_members.iter().min().unwrap() == &myself;
-
-            //TODO documentation
-            if has_quorum && i_am_first && cluster_state.read().await.is_converged() {
-                cluster_state.write().await
-                    .promote_myself_to_up().await;
-                info!("a quorum of seed nodes joined, promoting myself to leader");
-                return Ok(())
-            }
-
-            // check overall timeout
-            if new_time > timeout_limit {
-                error!("timeout");
-                return Err(anyhow!("timeout")); //TODO clearer message, logging
-            }
-
-            sleep(Duration::from_millis(10)).await;
+        select! {
+            _ = send_join_message_loop(other_seed_nodes, messaging.clone(), config.clone()) => { Ok(()) }
+            _ = check_joined_as_seed_node(cluster_state.clone(), &self.seed_nodes, &myself) => { Ok(()) }
+            _ = sleep(config.discovery_seed_node_give_up_timeout) => { Err(anyhow!("discovery timeout")) } //TODO better message; logging
         }
+    }
+}
+
+async fn check_joined_as_seed_node(cluster_state: Arc<RwLock<ClusterState>>, seed_nodes: &[SocketAddr], myself: &NodeAddr) {
+    loop {
+        if is_any_node_up(cluster_state.read().await.node_states()) {
+            info!("joined a cluster");
+            break;
+        }
+
+        let seed_node_members = seed_node_members(cluster_state.read().await.node_states(), seed_nodes);
+        let has_quorum = seed_node_members.len() * 2 > seed_nodes.len();
+        let i_am_first = seed_node_members.iter().min().unwrap() == myself;
+
+        //TODO documentation
+        if has_quorum && i_am_first && cluster_state.read().await.is_converged() {
+            cluster_state.write().await
+                .promote_myself_to_up().await;
+            info!("a quorum of seed nodes joined, promoting myself to leader");
+            break;
+        }
+
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn send_join_message_loop(other_seed_nodes: Vec<SocketAddr>, messaging: Arc<Messaging>, config: Arc<ClusterConfig>) {
+    let mut join_msg_buf = BytesMut::new();
+    JoinMessage::Join.ser(&mut join_msg_buf);
+
+    //NB: This endless loop *must* be in a separate function rather than inlined in the select! block
+    //     due to limitations in the select! macro / rewriting of awaits
+    loop {
+        for seed_node in &other_seed_nodes {
+            info!("trying to join cluster at {}", seed_node); //TODO clearer logging
+            let _ = messaging.send(seed_node.clone().into(), JOIN_MESSAGE_MODULE_ID, &join_msg_buf).await;
+        }
+        sleep(config.discovery_seed_node_retry_interval).await;
     }
 }
 
