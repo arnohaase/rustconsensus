@@ -34,29 +34,18 @@ impl Cluster {
         }
     }
 
-    pub async fn run(&self, discovery_strategy: impl DiscoveryStrategy, to_join: Option<impl ToSocketAddrs>) -> anyhow::Result<()> {
+    pub async fn run(&self, discovery_strategy: impl DiscoveryStrategy) -> anyhow::Result<()> {
         select! {
             r = self.messaging.recv() => r,
-            r = self._run(discovery_strategy, to_join) => r,
+            r = self._run(discovery_strategy) => r,
         }
     }
 
-    async fn _run(&self, discovery_strategy: impl DiscoveryStrategy, to_join: Option<impl ToSocketAddrs>) -> anyhow::Result<()> {
+    async fn _run(&self, discovery_strategy: impl DiscoveryStrategy) -> anyhow::Result<()> {
         let myself = self.messaging.get_self_addr();
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, self.config.clone(), self.event_notifier.clone())));
         let heart_beat = Arc::new(RwLock::new(HeartBeat::new(myself, self.config.clone())));
         let gossip = Arc::new(RwLock::new(Gossip::new(myself, self.config.clone(), cluster_state.clone())));
-
-        if let Some(to_join) = to_join {
-            let mut join_msg_buf = BytesMut::new();
-            JoinMessage::Join.ser(&mut join_msg_buf);
-
-            for addr in to_join.to_socket_addrs()? {
-                info!("trying to join cluster at {}", addr);
-                self.messaging.send(addr.into(), JOIN_MESSAGE_MODULE_ID, &join_msg_buf).await?;
-            }
-        }
-
 
         debug!("registering cluster message module");
         let cluster_messaging = ClusterMessageModule::new(gossip.clone(), self.messaging.clone(), heart_beat.clone());

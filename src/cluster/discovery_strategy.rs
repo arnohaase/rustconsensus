@@ -10,11 +10,12 @@ use tokio::time::sleep;
 use tracing::info;
 
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_state::ClusterState;
+use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeState};
 use crate::cluster::gossip::Gossip;
 use crate::cluster::heartbeat::HeartBeat;
 use crate::cluster::join_messages::JoinMessage;
 use crate::messaging::messaging::{JOIN_MESSAGE_MODULE_ID, Messaging};
+use crate::messaging::node_addr::NodeAddr;
 
 ///TODO documentation
 
@@ -42,14 +43,14 @@ pub trait DiscoveryStrategy {
 }
 
 
-pub struct JoinMyselfDiscoveryStrategy {}
-impl JoinMyselfDiscoveryStrategy {
-    pub fn new() -> JoinMyselfDiscoveryStrategy {
-        JoinMyselfDiscoveryStrategy{}
+pub struct StartAsClusterDiscoveryStrategy {}
+impl StartAsClusterDiscoveryStrategy {
+    pub fn new() -> StartAsClusterDiscoveryStrategy {
+        StartAsClusterDiscoveryStrategy {}
     }
 }
 #[async_trait]
-impl DiscoveryStrategy for JoinMyselfDiscoveryStrategy {
+impl DiscoveryStrategy for StartAsClusterDiscoveryStrategy {
     async fn do_discovery(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<Messaging>) -> anyhow::Result<()> {
         cluster_state.write().await
             .promote_myself_to_up();
@@ -58,19 +59,19 @@ impl DiscoveryStrategy for JoinMyselfDiscoveryStrategy {
 }
 
 
-pub struct MyselfIsSeedNodeStrategy {
+pub struct PartOfSeedNodeStrategy {
     seed_nodes: Vec<SocketAddr>,
 }
-impl MyselfIsSeedNodeStrategy {
-    pub fn new(seed_nodes: impl ToSocketAddrs) -> anyhow::Result<MyselfIsSeedNodeStrategy> {
+impl PartOfSeedNodeStrategy {
+    pub fn new(seed_nodes: impl ToSocketAddrs) -> anyhow::Result<PartOfSeedNodeStrategy> {
         let seed_nodes = seed_nodes.to_socket_addrs()?.collect::<Vec<_>>();
-        Ok(MyselfIsSeedNodeStrategy {
+        Ok(PartOfSeedNodeStrategy {
             seed_nodes,
         })
     }
 }
 #[async_trait]
-impl DiscoveryStrategy for MyselfIsSeedNodeStrategy {
+impl DiscoveryStrategy for PartOfSeedNodeStrategy {
     async fn do_discovery(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<Messaging>) -> anyhow::Result<()> {
         let myself = cluster_state.read().await.myself();
         let other_seed_nodes = self.seed_nodes.iter()
@@ -86,11 +87,20 @@ impl DiscoveryStrategy for MyselfIsSeedNodeStrategy {
         JoinMessage::Join.ser(&mut join_msg_buf);
 
         for _ in 0..10 {
-            if cluster_state.read().await
-                .node_states()
-                .any(|n| other_seed_nodes.contains(&n.addr.addr))
-            {
-                info!("discovery successful");
+            if is_any_node_up(cluster_state.read().await.node_states()) {
+                info!("joined existing cluster");
+                return Ok(())
+            }
+
+            let seed_node_members = seed_node_members(cluster_state.read().await.node_states(), &self.seed_nodes);
+            let has_quorum = seed_node_members.len() * 2 > self.seed_nodes.len();
+            let i_am_first = seed_node_members.iter().min().unwrap() == &myself;
+
+            //TODO documentation
+            if has_quorum && i_am_first && cluster_state.read().await.is_converged() {
+                cluster_state.write().await
+                    .promote_myself_to_up().await;
+                info!("a quorum of seed nodes joined, promoting myself to leader");
                 return Ok(())
             }
 
@@ -102,12 +112,21 @@ impl DiscoveryStrategy for MyselfIsSeedNodeStrategy {
         }
 
         //TODO retry loop with configurable delay, until configurable timeout
-        //TODO move leader to up once quorum? all? ???
 
         Err(anyhow!("could not reach any seed nodes in 10 seconds"))
     }
 }
 
+fn is_any_node_up<'a>(mut nodes: impl Iterator<Item=&'a NodeState>) -> bool {
+    nodes.any(|n| n.membership_state >= MembershipState::Up)
+}
+
+fn seed_node_members<'a>(mut all_nodes: impl Iterator<Item=&'a NodeState>, seed_nodes: &[SocketAddr]) -> Vec<NodeAddr> {
+    all_nodes
+        .filter(|n| seed_nodes.contains(&n.addr.addr))
+        .map(|n| n.addr)
+        .collect()
+}
 
 pub struct JoinOthersStrategy {
     seed_nodes: Vec<SocketAddr>,
