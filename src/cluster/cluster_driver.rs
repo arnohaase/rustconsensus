@@ -53,7 +53,6 @@ async fn _run_active_loop(
     gossip: Arc<RwLock<Gossip>>,
     messaging: Arc<Messaging>,
 ) {
-
     let mut prev_time = Instant::now();
 
     let mut millis_until_next_gossip: u32 = 0;

@@ -5,9 +5,10 @@ use anyhow::anyhow;
 
 use async_trait::async_trait;
 use bytes::BytesMut;
+use tokio::select;
 use tokio::sync::RwLock;
-use tokio::time::sleep;
-use tracing::info;
+use tokio::time::{Instant, sleep};
+use tracing::{error, info};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeState};
@@ -91,9 +92,36 @@ impl DiscoveryStrategy for PartOfSeedNodeStrategy {
         let mut join_msg_buf = BytesMut::new();
         JoinMessage::Join.ser(&mut join_msg_buf);
 
-        for _ in 0..10 {
+        let mut prev_time = Instant::now();
+        let timeout_limit = prev_time + config.discovery_seed_node_give_up_timeout;
+
+        let mut millis_until_resend_join: u32 = 0;
+
+        loop {
+            let new_time = Instant::now();
+            let elapsed_millis: u32 = new_time.saturating_duration_since(prev_time).as_millis().try_into()
+                .unwrap_or_else(|_| {
+                    error!("system clock jumped forward");
+                    10
+                });
+            prev_time = new_time;
+
+            // (re)send join messages
+            millis_until_resend_join = match millis_until_resend_join.checked_sub(elapsed_millis) {
+                Some(millis) => millis,
+                None => {
+                    for seed_node in &other_seed_nodes {
+                        info!("trying to join cluster at {}", seed_node); //TODO clearar logging
+                        let _ = messaging.send(seed_node.clone().into(), JOIN_MESSAGE_MODULE_ID, &join_msg_buf).await;
+                    }
+                    config.discovery_seed_node_retry_interval.as_millis() as u32  //TODO overflow
+                }
+            };
+
+            // check for successful termination: Either we reached a quorum of seed nodes and
+            //  self-promote to leader, or some other node became 'up'
             if is_any_node_up(cluster_state.read().await.node_states()) {
-                info!("joined existing cluster");
+                info!("joined a cluster");
                 return Ok(())
             }
 
@@ -109,16 +137,14 @@ impl DiscoveryStrategy for PartOfSeedNodeStrategy {
                 return Ok(())
             }
 
-            for seed_node in &other_seed_nodes {
-                info!("trying to join cluster at {}", seed_node);
-                let _ = messaging.send(seed_node.clone().into(), JOIN_MESSAGE_MODULE_ID, &join_msg_buf).await;
+            // check overall timeout
+            if new_time > timeout_limit {
+                error!("timeout");
+                return Err(anyhow!("timeout")); //TODO clearer message, logging
             }
-            sleep(Duration::from_secs(1)).await; //TODO configurable
+
+            sleep(Duration::from_millis(10)).await;
         }
-
-        //TODO retry loop with configurable delay, until configurable timeout
-
-        Err(anyhow!("could not reach any seed nodes in 10 seconds"))
     }
 }
 
@@ -156,6 +182,8 @@ impl DiscoveryStrategy for JoinOthersStrategy {
         if self.seed_nodes.contains(&myself) {
             return Err(anyhow!("this node's address {:?} is listed as one of the seed nodes {:?} although the strategy is meant for cases where it isn't", myself, self.seed_nodes));
         }
+
+        todo!("rework like the above");
 
         let mut join_msg_buf = BytesMut::new();
         JoinMessage::Join.ser(&mut join_msg_buf);
