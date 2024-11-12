@@ -13,6 +13,7 @@ tracing-subscriber = "*"
 #TODO version numbers
 anyhow = "*"
 async-trait = "*"
+bit-set = "*"
 bytes = "*"
 bytes-varint = "*"
 crc = "*"

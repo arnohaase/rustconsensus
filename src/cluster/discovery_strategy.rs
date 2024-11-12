@@ -8,7 +8,7 @@ use bytes::BytesMut;
 use tokio::select;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeState};
@@ -140,7 +140,7 @@ async fn send_join_message_loop(other_seed_nodes: &[SocketAddr], messaging: Arc<
     //     due to limitations in the select! macro / rewriting of awaits
     loop {
         for seed_node in other_seed_nodes {
-            info!("trying to join cluster at {}", seed_node); //TODO clearer logging
+            debug!("trying to join cluster at {}", seed_node); //TODO clearer logging
             let _ = messaging.send(seed_node.clone().into(), JOIN_MESSAGE_MODULE_ID, &join_msg_buf).await;
         }
         sleep(config.discovery_seed_node_retry_interval).await;

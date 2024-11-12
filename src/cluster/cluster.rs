@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tokio::select;
 
 use tokio::sync::RwLock;
+use tokio::task::spawn_blocking;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -34,6 +35,8 @@ impl Cluster {
 
     pub async fn run(&self, discovery_strategy: impl DiscoveryStrategy) -> anyhow::Result<()> {
         select! {
+            //TODO start messaging receive loop only after the cluster is started
+            //TODO and allow registration of application level message handlers before the receive loop is started
             r = self.messaging.recv() => r, //TODO spawn messaging? or at least message handling?
             r = self._run(discovery_strategy) => r,
         }
