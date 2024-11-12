@@ -29,7 +29,7 @@ fn addr(n: usize) -> SocketAddr {
 async fn new_node(num_nodes: usize, n: usize) -> anyhow::Result<()> {
     let messaging = Arc::new(Messaging::new(addr(n).into()).await?);
     let config = Arc::new(ClusterConfig::default());
-    let cluster = Cluster::new(config, messaging);
+    let cluster = Cluster::new(config, messaging).await?;
 
     let discovery_strategy = PartOfSeedNodeStrategy::new((0..num_nodes).map(|n| addr(n)).collect())?;
 
