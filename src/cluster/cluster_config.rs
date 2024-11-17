@@ -7,7 +7,8 @@ pub struct ClusterConfig {
     ///  proven differences from myself (rather than a node that may have an identical perception
     ///  of the cluster's state)
     pub gossip_with_differing_state_probability: f64,
-    pub regular_gossip_interval: Duration,
+    pub converged_gossip_interval: Duration,
+    pub unconverged_gossip_interval: Duration,
 
     pub num_heartbeat_partners_per_node: usize,
     pub ignore_heartbeat_response_after_n_counter_increments: u32,
@@ -33,7 +34,8 @@ impl Default for ClusterConfig {
         ClusterConfig {
             num_gossip_partners: 3,
             gossip_with_differing_state_probability: 0.8,
-            regular_gossip_interval: Duration::from_secs(1),
+            converged_gossip_interval: Duration::from_secs(1),
+            unconverged_gossip_interval: Duration::from_secs(1) / 3,
             num_heartbeat_partners_per_node: 9,
             ignore_heartbeat_response_after_n_counter_increments: 4,
             ignore_heartbeat_response_after_n_seconds: 4,

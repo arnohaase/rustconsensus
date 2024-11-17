@@ -11,7 +11,7 @@ use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_messages::{CLUSTER_MESSAGE_MODULE_ID, ClusterMessage};
 use crate::cluster::cluster_state::ClusterState;
 use crate::cluster::discovery_strategy::DiscoveryStrategy;
-use crate::cluster::gossip::Gossip;
+use crate::cluster::_gossip::Gossip;
 use crate::cluster::heartbeat::HeartBeat;
 use crate::messaging::messaging::Messaging;
 
@@ -141,10 +141,10 @@ async fn do_gossip(config: &ClusterConfig, gossip: &RwLock<Gossip>, messaging: &
             if cluster_state.read().await
                 .is_converged()
             {
-                config.regular_gossip_interval.as_millis() as u32 //TODO make sure it fits into u32
+                config.converged_gossip_interval.as_millis() as u32 //TODO make sure it fits into u32
             }
             else {
-                config.regular_gossip_interval.as_millis() as u32 / 3 //TODO make sure it's not 0, fits into u32; separately configurable?
+                config.converged_gossip_interval.as_millis() as u32 / 3 //TODO make sure it's not 0, fits into u32; separately configurable?
             }
         }
     }

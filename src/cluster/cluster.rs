@@ -2,7 +2,6 @@ use std::sync::Arc;
 use tokio::select;
 
 use tokio::sync::RwLock;
-use tokio::task::spawn_blocking;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -12,10 +11,9 @@ use crate::cluster::cluster_events::{ClusterEventListener, ClusterEventNotifier}
 use crate::cluster::cluster_messages::{CLUSTER_MESSAGE_MODULE_ID, ClusterMessageModule};
 use crate::cluster::cluster_state::ClusterState;
 use crate::cluster::discovery_strategy::DiscoveryStrategy;
-use crate::cluster::gossip::Gossip;
+use crate::cluster::_gossip::Gossip;
 use crate::cluster::heartbeat::HeartBeat;
 use crate::cluster::join_messages::JoinMessageModule;
-use crate::messaging::message_module::MessageModule;
 use crate::messaging::messaging::{JOIN_MESSAGE_MODULE_ID, Messaging};
 
 /// This is the cluster's public API

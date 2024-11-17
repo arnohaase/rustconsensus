@@ -7,101 +7,54 @@ use bytes::{Buf, BufMut, BytesMut};
 use bytes_varint::{VarIntSupport, VarIntSupportMut};
 use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use num_enum::TryFromPrimitive;
+use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tracing::{debug, error};
 
-use crate::cluster::cluster_state::{MembershipState, NodeReachability, NodeState};
 use crate::cluster::_gossip::Gossip;
-use crate::cluster::heartbeat::HeartBeat;
+use crate::cluster::cluster_messages::ClusterMessage;
+use crate::cluster::cluster_state::{MembershipState, NodeReachability, NodeState};
 use crate::messaging::envelope::Envelope;
 use crate::messaging::message_module::{MessageModule, MessageModuleId};
 use crate::messaging::messaging::Messaging;
 use crate::messaging::node_addr::NodeAddr;
 
-pub const CLUSTER_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"Cluster\0");
 
-pub struct ClusterMessageModule {
-    gossip: Arc<RwLock<Gossip>>,
-    messaging: Arc<Messaging>,
-    heart_beat: Arc<RwLock<HeartBeat>>,
+//TODO make non-pub
+pub const GOSSIP_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"CltrGssp");
+
+//TODO make the message module infrastructure reusable
+
+pub struct GossipMessageModule {
+    gossip: mpsc::Sender<(NodeAddr, GossipMessage)>,
 }
-impl ClusterMessageModule {
-    pub fn new(gossip: Arc<RwLock<Gossip>>, messaging: Arc<Messaging>, heart_beat: Arc<RwLock<HeartBeat>>) -> Arc<ClusterMessageModule> {
+impl GossipMessageModule {
+    pub fn new(gossip: mpsc::Sender<(NodeAddr, GossipMessage)>) -> Arc<GossipMessageModule> {
         Arc::new({
-            ClusterMessageModule {
+            GossipMessageModule {
                 gossip,
-                messaging,
-                heart_beat,
             }
         })
     }
 
-    async fn reply(&self, envelope: &Envelope, message: ClusterMessage) {
-        let mut buf = BytesMut::new();
-        message.ser(&mut buf);
-        let _ = self.messaging.send(envelope.from, CLUSTER_MESSAGE_MODULE_ID, &buf).await;
-    }
+    // async fn reply(&self, envelope: &Envelope, message: ClusterMessage) {
+    //     let mut buf = BytesMut::new();
+    //     message.ser(&mut buf);
+    //     let _ = self.messaging.send(envelope.from, GOSSIP_MESSAGE_MODULE_ID, &buf).await;
+    // }
 
     async fn _on_message(&self, envelope: &Envelope, buf: &[u8]) -> anyhow::Result<()> {
-        use ClusterMessage::*;
+        let msg = GossipMessage::deser(buf)?;
+        self.gossip.send((envelope.from, msg)).await?;
 
-        match ClusterMessage::deser(buf)? {
-            GossipSummaryDigest(digest) => {
-                if let Some(response) = self.gossip.read().await
-                    .on_summary_digest(&digest).await
-                {
-                    Ok(self.reply(envelope, GossipDetailedDigest(response)).await)
-                }
-                else { Ok(()) }
-            }
-            GossipDetailedDigest(digest) => {
-                if let Some(response) = self.gossip.read().await
-                    .on_detailed_digest(&digest).await
-                {
-                    Ok(self.reply(envelope, GossipDifferingAndMissingNodes(response)).await)
-                }
-                else { Ok(()) }
-            }
-            GossipDifferingAndMissingNodes(data) => {
-                if let Some(response) = self.gossip.read().await
-                    .on_differing_and_missing_nodes(data).await
-                {
-                    Ok(self.reply(envelope, GossipNodes(response)).await)
-                }
-                else { Ok(()) }
-            }
-            GossipNodes(data) => {
-                Ok(
-                    self.gossip.read().await
-                        .on_nodes(data).await
-                )
-            }
-            Heartbeat(data) => {
-                debug!("received heartbeat message");
-                //TODO document heartbeat protocol
-                //TODO documentation here
-                Ok(
-                    self.reply(envelope, HeartbeatResponse(HeartbeatResponseData {
-                        counter: data.counter,
-                        timestamp_nanos: data.timestamp_nanos,
-                    })).await
-                )
-            }
-            HeartbeatResponse(data) => {
-                debug!("received heartbeat response message");
-                Ok(
-                    self.heart_beat.write().await
-                        .on_heartbeat_response(&data, envelope.from)
-                )
-            }
-        }
+        Ok(())
     }
 }
 
 #[async_trait::async_trait]
-impl MessageModule for ClusterMessageModule {
+impl MessageModule for GossipMessageModule {
     fn id(&self) -> MessageModuleId {
-        CLUSTER_MESSAGE_MODULE_ID
+        crate::cluster::cluster_messages::CLUSTER_MESSAGE_MODULE_ID
     }
 
     async fn on_message(&self, envelope: &Envelope, buf: &[u8]) {
@@ -111,33 +64,27 @@ impl MessageModule for ClusterMessageModule {
     }
 }
 
+#[derive(Eq, PartialEq, Debug, Clone)]
+pub enum GossipMessage {
+    GossipSummaryDigest(GossipSummaryDigestData),
+    GossipDetailedDigest(GossipDetailedDigestData),
+    GossipDifferingAndMissingNodes(GossipDifferingAndMissingNodesData),
+    GossipNodes(GossipNodesData),
 
+}
 
 const ID_GOSSIP_SUMMARY_DIGEST: u8 = 1;
 const ID_GOSSIP_DETAILED_DIGEST: u8 = 2;
 const ID_GOSSIP_DIFFERING_AND_MISSING_NODES: u8 = 3;
 const ID_GOSSIP_NODES: u8 = 4;
-const ID_HEARTBEAT: u8 = 5;
-const ID_HEARTBEAT_RESPONSE: u8 = 6;
 
-#[derive(Eq, PartialEq, Debug, Clone)]
-pub enum ClusterMessage {
-    GossipSummaryDigest(GossipSummaryDigestData),
-    GossipDetailedDigest(GossipDetailedDigestData),
-    GossipDifferingAndMissingNodes(GossipDifferingAndMissingNodesData),
-    GossipNodes(GossipNodesData),
-    Heartbeat(HeartbeatData),
-    HeartbeatResponse(HeartbeatResponseData),
-}
-impl ClusterMessage {
+impl GossipMessage {
     pub fn id(&self) -> u8 {
         match self {
-            ClusterMessage::GossipSummaryDigest(_) => ID_GOSSIP_SUMMARY_DIGEST,
-            ClusterMessage::GossipDetailedDigest(_) => ID_GOSSIP_DETAILED_DIGEST,
-            ClusterMessage::GossipDifferingAndMissingNodes(_) => ID_GOSSIP_DIFFERING_AND_MISSING_NODES,
-            ClusterMessage::GossipNodes(_) => ID_GOSSIP_NODES,
-            ClusterMessage::Heartbeat(_) => ID_HEARTBEAT,
-            ClusterMessage::HeartbeatResponse(_) => ID_HEARTBEAT_RESPONSE,
+            GossipMessage::GossipSummaryDigest(_) => ID_GOSSIP_SUMMARY_DIGEST,
+            GossipMessage::GossipDetailedDigest(_) => ID_GOSSIP_DETAILED_DIGEST,
+            GossipMessage::GossipDifferingAndMissingNodes(_) => ID_GOSSIP_DIFFERING_AND_MISSING_NODES,
+            GossipMessage::GossipNodes(_) => ID_GOSSIP_NODES,
         }
     }
 
@@ -145,12 +92,10 @@ impl ClusterMessage {
     pub fn ser(&self, buf: &mut BytesMut) {
         buf.put_u8(self.id());
         match self {
-            ClusterMessage::GossipSummaryDigest(data) => Self::ser_gossip_summary_digest(data, buf),
-            ClusterMessage::GossipDetailedDigest(data) => Self::ser_gossip_detailed_digest(data, buf),
-            ClusterMessage::GossipDifferingAndMissingNodes(data) => Self::ser_gossip_differing_and_missing_nodes(data, buf),
-            ClusterMessage::GossipNodes(data) => Self::ser_gossip_nodes(data, buf),
-            ClusterMessage::Heartbeat(data) => Self::ser_heartbeat(data, buf),
-            ClusterMessage::HeartbeatResponse(data) => Self::ser_heartbeat_response(data, buf),
+            GossipMessage::GossipSummaryDigest(data) => Self::ser_gossip_summary_digest(data, buf),
+            GossipMessage::GossipDetailedDigest(data) => Self::ser_gossip_detailed_digest(data, buf),
+            GossipMessage::GossipDifferingAndMissingNodes(data) => Self::ser_gossip_differing_and_missing_nodes(data, buf),
+            GossipMessage::GossipNodes(data) => Self::ser_gossip_nodes(data, buf),
         }
     }
 
@@ -206,16 +151,6 @@ impl ClusterMessage {
         string_pool.finalize(buf);
     }
 
-    fn ser_heartbeat(data: &HeartbeatData, buf: &mut impl BufMut) {
-        buf.put_u32(data.counter);
-        buf.put_u64(data.timestamp_nanos);
-    }
-
-    fn ser_heartbeat_response(data: &HeartbeatResponseData, buf: &mut impl BufMut) {
-        buf.put_u32(data.counter);
-        buf.put_u64(data.timestamp_nanos);
-    }
-
     fn ser_reachability(reachability: &BTreeMap<NodeAddr, NodeReachability>, buf: &mut BytesMut, addr_pool: &mut NodeAddrPoolSerializer) {
         buf.put_usize_varint(reachability.len());
 
@@ -248,31 +183,29 @@ impl ClusterMessage {
     }
 
     //TODO &mut impl Buf
-    pub fn deser(buf: &[u8]) -> anyhow::Result<ClusterMessage> {
+    pub fn deser(buf: &[u8]) -> anyhow::Result<GossipMessage> {
         let mut buf = buf;
         match buf.try_get_u8()? {
             ID_GOSSIP_SUMMARY_DIGEST => Self::deser_gossip_summary_digest(buf),
             ID_GOSSIP_DETAILED_DIGEST => Self::deser_gossip_detailed_digest(buf),
             ID_GOSSIP_DIFFERING_AND_MISSING_NODES => Self::deser_gossip_differing_and_missing_nodes(buf),
             ID_GOSSIP_NODES => Self::deser_gossip_nodes(buf),
-            ID_HEARTBEAT => Self::deser_heartbeat(buf),
-            ID_HEARTBEAT_RESPONSE => Self::deser_heartbeat_response(buf),
             id => Err(anyhow!("invalid message discriminator {}", id)),
         }
     }
 
-    fn deser_gossip_summary_digest(mut buf: &[u8]) -> anyhow::Result<ClusterMessage> {
+    fn deser_gossip_summary_digest(mut buf: &[u8]) -> anyhow::Result<GossipMessage> {
         let mut full_sha256_digest = [0u8; 32];
         for i in 0..full_sha256_digest.len() {
             full_sha256_digest[i] = buf.try_get_u8()?;
         }
 
-        Ok(ClusterMessage::GossipSummaryDigest(GossipSummaryDigestData {
+        Ok(GossipMessage::GossipSummaryDigest(GossipSummaryDigestData {
             full_sha256_digest,
         }))
     }
 
-    fn deser_gossip_detailed_digest(mut buf: &[u8]) -> anyhow::Result<ClusterMessage> {
+    fn deser_gossip_detailed_digest(mut buf: &[u8]) -> anyhow::Result<GossipMessage> {
         let nonce = buf.try_get_u32()?;
 
         let num_nodes = buf.try_get_usize_varint()?;
@@ -283,20 +216,20 @@ impl ClusterMessage {
             let _ = nodes.insert(addr, hash);
         }
 
-        Ok(ClusterMessage::GossipDetailedDigest(GossipDetailedDigestData {
+        Ok(GossipMessage::GossipDetailedDigest(GossipDetailedDigestData {
             nonce,
             nodes,
         }))
     }
 
-    fn deser_gossip_differing_and_missing_nodes(mut buf: &[u8]) -> anyhow::Result<ClusterMessage> {
+    fn deser_gossip_differing_and_missing_nodes(mut buf: &[u8]) -> anyhow::Result<GossipMessage> {
         let addr_pool = NodeAddrPoolDeserializer::new(&mut buf)?;
         let string_pool = StringPoolDeserializer::new(&mut buf)?;
 
         let differing = Self::_deser_node_states(&addr_pool, &string_pool, &mut buf)?;
         let missing = addr_pool.try_get_addr_set(&mut buf)?;
 
-        Ok(ClusterMessage::GossipDifferingAndMissingNodes(GossipDifferingAndMissingNodesData {
+        Ok(GossipMessage::GossipDifferingAndMissingNodes(GossipDifferingAndMissingNodesData {
             differing,
             missing,
         }))
@@ -323,35 +256,16 @@ impl ClusterMessage {
         Ok(result)
     }
 
-    fn deser_gossip_nodes(mut buf: &[u8]) -> anyhow::Result<ClusterMessage> {
+    fn deser_gossip_nodes(mut buf: &[u8]) -> anyhow::Result<GossipMessage> {
         let addr_pool = NodeAddrPoolDeserializer::new(&mut buf)?;
         let string_pool = StringPoolDeserializer::new(&mut buf)?;
 
         let nodes = Self::_deser_node_states(&addr_pool, &string_pool, &mut buf)?;
-        Ok(ClusterMessage::GossipNodes(GossipNodesData {
+        Ok(GossipMessage::GossipNodes(GossipNodesData {
             nodes,
         }))
     }
 
-    fn deser_heartbeat(mut buf: &[u8]) -> anyhow::Result<ClusterMessage> {
-        let counter = buf.try_get_u32()?;
-        let timestamp_nanos = buf.try_get_u64()?;
-
-        Ok(ClusterMessage::Heartbeat(HeartbeatData {
-            counter,
-            timestamp_nanos,
-        }))
-    }
-
-    fn deser_heartbeat_response(mut buf: &[u8]) -> anyhow::Result<ClusterMessage> {
-        let counter = buf.try_get_u32()?;
-        let timestamp_nanos = buf.try_get_u64()?;
-
-        Ok(ClusterMessage::HeartbeatResponse(HeartbeatResponseData {
-            counter,
-            timestamp_nanos,
-        }))
-    }
 }
 
 
@@ -377,17 +291,6 @@ pub struct GossipNodesData {
     pub nodes: Vec<NodeState>,
 }
 
-#[derive(Eq, PartialEq, Debug, Clone)]
-pub struct HeartbeatData {
-    pub counter: u32,
-    pub timestamp_nanos: u64,
-}
-
-#[derive(Eq, PartialEq, Debug, Clone)]
-pub struct HeartbeatResponseData {
-    pub counter: u32,
-    pub timestamp_nanos: u64,
-}
 
 
 /// Messages can contain the same NodeAddr values numerous times (e.g. in 'seen by' sets). This
@@ -629,7 +532,7 @@ mod test {
 
     use rstest::*;
 
-    use ClusterMessage::*;
+    use GossipMessage::*;
 
     use super::*;
 
@@ -716,15 +619,15 @@ mod test {
             seen_by: BTreeSet::from_iter([NodeAddr::localhost(8), NodeAddr::localhost(5)]),
         }],
     }), ID_GOSSIP_NODES)]
-    #[case::heartbeat(Heartbeat(HeartbeatData { counter: 1, timestamp_nanos: 5}), ID_HEARTBEAT)]
-    #[case::heartbeat_response(HeartbeatResponse(HeartbeatResponseData { counter: 1, timestamp_nanos: 5}), ID_HEARTBEAT_RESPONSE)]
-    fn test_ser_cluster_message(#[case] msg: ClusterMessage, #[case] msg_id: u8) {
+    fn test_ser_gossip_message(#[case] msg: GossipMessage, #[case] msg_id: u8) {
         assert_eq!(msg.id(), msg_id);
 
         let mut buf = BytesMut::new();
         msg.ser(&mut buf);
         println!("S {:?}", buf);
-        let deser_msg = ClusterMessage::deser(&buf).unwrap();
+        let deser_msg = GossipMessage::deser(&buf).unwrap();
         assert_eq!(msg, deser_msg);
     }
 }
+
+
