@@ -1,21 +1,13 @@
-use std::collections::btree_map::Entry;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use bytes::{Buf, BufMut, BytesMut};
-use bytes_varint::{VarIntSupport, VarIntSupportMut};
+use bytes::{BufMut, BytesMut};
 use bytes_varint::try_get_fixed::TryGetFixedSupport;
-use num_enum::TryFromPrimitive;
 use tokio::sync::mpsc;
-use tokio::sync::RwLock;
-use tracing::{debug, error};
+use tracing::error;
 
-use crate::cluster::cluster_state::{MembershipState, NodeReachability, NodeState};
-use crate::cluster::heartbeat::HeartBeat;
 use crate::messaging::envelope::Envelope;
 use crate::messaging::message_module::{MessageModule, MessageModuleId};
-use crate::messaging::messaging::Messaging;
 use crate::messaging::node_addr::NodeAddr;
 
 pub const HEARTBEAT_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"CtrHeart");
@@ -27,7 +19,7 @@ impl HeartbeatMessageModule {
     pub fn new(channel: mpsc::Sender<(NodeAddr, HeartbeatMessage)>) -> Arc<HeartbeatMessageModule> {
         Arc::new({
             HeartbeatMessageModule {
-                channel: channel,
+                channel,
             }
         })
     }

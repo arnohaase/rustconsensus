@@ -1,5 +1,7 @@
+use std::sync::Arc;
 use rustc_hash::FxHashSet;
 use tokio::time::Instant;
+use crate::cluster::cluster_events::ClusterEventNotifier;
 use crate::messaging::node_addr::NodeAddr;
 
 pub struct UnreachableSet {
@@ -7,7 +9,7 @@ pub struct UnreachableSet {
     unreachable_nodes: FxHashSet<NodeAddr>,
 }
 impl UnreachableSet {
-    pub fn new() -> UnreachableSet {
+    pub fn new(event_notifier: Arc<ClusterEventNotifier>) -> UnreachableSet {
         UnreachableSet {
             stable_since: Instant::now(),
             unreachable_nodes: FxHashSet::default(),

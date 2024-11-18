@@ -19,6 +19,7 @@ pub async fn run_administrative_tasks_loop(config: Arc<ClusterConfig>, cluster_s
 
     //TODO documentation
     if let Some(weakly_up_after) = config.weakly_up_after {
+        let cluster_state = cluster_state.clone();
         spawn(async move {
             time::sleep(weakly_up_after).await;
             cluster_state.write().await
@@ -99,6 +100,7 @@ impl ClusterState {
     }
 
     async fn promote_myself_to_weakly_up(&mut self) {
+        info!("promoting myself to 'weakly up' after configured timeout of {}ms", self.config.weakly_up_after.unwrap().as_millis());
         self.promote_myself(MembershipState::WeaklyUp).await
     }
 
@@ -140,7 +142,7 @@ impl ClusterState {
             self.send_event(ClusterEvent::LeaderChanged(LeaderChangedData {
                 old_leader: self.leader,
                 new_leader,
-            })).await;
+            }));
             self.leader = new_leader;
         }
     }
@@ -184,7 +186,7 @@ impl ClusterState {
             if s.seen_by.len() > seen_by_size_before {
                 // we send out events only when the 'seen by' set increased - there is no other
                 //  change after all
-                event_notifier.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr: s.addr })).await;
+                event_notifier.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr: s.addr }));
             }
             return;
         }
@@ -197,21 +199,21 @@ impl ClusterState {
             }
         }
 
-        event_notifier.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr: s.addr })).await;
+        event_notifier.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr: s.addr }));
         if let Some(old_state) = old_state {
             if old_state != s.membership_state {
                 event_notifier.send_event(ClusterEvent::NodeStateChanged(NodeStateChangedData {
                     addr: s.addr,
                     old_state,
                     new_state: s.membership_state,
-                })).await;
+                }));
             }
         }
         else {
             event_notifier.send_event(ClusterEvent::NodeAdded(NodeAddedData {
                 addr: s.addr,
                 state: s.membership_state
-            })).await;
+            }));
         }
     }
 
@@ -297,8 +299,8 @@ impl ClusterState {
         }
     }
 
-    async fn send_event(&self, event: ClusterEvent) {
-        self.event_notifier.send_event(event).await;
+    fn send_event(&self, event: ClusterEvent) {
+        self.event_notifier.send_event(event);
     }
 
     //TODO unit test
@@ -336,14 +338,14 @@ impl ClusterState {
             }
 
             for addr in updated_nodes {
-                self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr })).await;
+                self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr }));
             }
             for addr in reachablility_changed_nodes {
                 self.send_event(ClusterEvent::ReachabilityChanged(ReachabilityChangedData {
                     addr,
                     old_is_reachable: false,
                     new_is_reachable: true,
-                })).await;
+                }));
             }
         }
 
@@ -379,7 +381,7 @@ impl ClusterState {
                     node.seen_by.clear();
                     node.seen_by.insert(self.myself);
 
-                    self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr })).await;
+                    self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr }));
                 }
 
                 if old_is_reachable != new_is_reachable {
@@ -387,7 +389,7 @@ impl ClusterState {
                         addr,
                         old_is_reachable,
                         new_is_reachable,
-                    })).await;
+                    }));
                 }
             }
             else {

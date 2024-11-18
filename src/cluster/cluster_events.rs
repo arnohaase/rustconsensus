@@ -1,11 +1,5 @@
-use std::sync::Arc;
-
-use anyhow::anyhow;
-use rustc_hash::FxHashMap;
-use tokio::spawn;
-use tokio::sync::RwLock;
+use tokio::sync::broadcast;
 use tracing::trace;
-use uuid::Uuid;
 
 use crate::cluster::cluster_state::MembershipState;
 use crate::messaging::node_addr::NodeAddr;
@@ -59,48 +53,25 @@ pub struct NodeStateChangedData {
     pub new_state: MembershipState,
 }
 
-#[async_trait::async_trait]
-pub trait ClusterEventListener: Sync + Send {
-    async fn on_cluster_event(&self, event: ClusterEvent);
-}
 
 pub struct ClusterEventNotifier {
-    listeners: RwLock<FxHashMap<Uuid, Arc<dyn ClusterEventListener>>>,
+    sender: broadcast::Sender<ClusterEvent>,
 }
 impl ClusterEventNotifier {
     pub fn new() -> ClusterEventNotifier {
+        let (sender, _) = broadcast::channel(128);
+
         ClusterEventNotifier {
-            listeners: Default::default(),
+            sender
         }
     }
 
-    //TODO documentation, especially for key / removal
-    pub async fn add_listener(&self, listener: Arc<dyn ClusterEventListener>) -> Uuid {
-        let id = Uuid::new_v4();
-        self.listeners.write().await
-            .insert(id.clone(), listener);
-        id
+    pub fn subscribe(&self) -> broadcast::Receiver<ClusterEvent> {
+        self.sender.subscribe()
     }
 
-    pub async fn try_remove_listener(&self, listener_id: &Uuid) -> anyhow::Result<()> {
-        match self.listeners.write().await
-            .remove(listener_id)
-        {
-            None => Err(anyhow!("tried to remove a listener that was not (no longer?) registered: {}", listener_id)),
-            Some(_) => Ok(()),
-        }
-    }
-
-    pub async fn send_event(&self, event: ClusterEvent) {
+    pub fn send_event(&self, event: ClusterEvent) {
         trace!("event: {:?}", event);
-
-        let listeners = self.listeners.read().await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        for l in listeners {
-            let evt = event.clone();
-            spawn(async move { l.on_cluster_event(evt.clone()).await });
-        }
+        let _ = self.sender.send(event);
     }
 }

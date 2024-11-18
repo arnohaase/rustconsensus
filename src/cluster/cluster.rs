@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
 use tokio::select;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, error};
-use uuid::Uuid;
 
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_events::{ClusterEventListener, ClusterEventNotifier};
+use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier};
 use crate::cluster::cluster_state::{ClusterState, run_administrative_tasks_loop};
 use crate::cluster::discovery_strategy::{DiscoveryStrategy, run_discovery};
 use crate::cluster::gossip::run_gossip;
@@ -70,12 +69,8 @@ impl Cluster {
         Ok(())
     }
 
-    pub async fn add_listener(&self, listener: Arc<dyn ClusterEventListener>) -> Uuid {
-        self.event_notifier.add_listener(listener).await
-    }
-
-    pub async fn remove_listener(&self, id: &Uuid) -> anyhow::Result<()> {
-        self.event_notifier.try_remove_listener(id).await
+    pub fn subscribe(&self) -> broadcast::Receiver<ClusterEvent> {
+        self.event_notifier.subscribe()
     }
 
     //TODO external API for accessing state

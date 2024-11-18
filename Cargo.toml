@@ -23,4 +23,3 @@ rustc-hash = "*"
 sha2 = "*"
 tokio = { version = "*", features = ["net", "sync", "macros"] } #TODO
 tracing = "*"
-uuid = { version = "*", features = ["v4"] }
