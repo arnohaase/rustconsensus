@@ -278,7 +278,7 @@ impl ClusterState {
             for s in self.nodes_with_state.values_mut()
                 .filter(|s| !reachability.contains_key(&s.addr))
             {
-                // mark nodes as 'reachable' that were previously tracked for reachability by this node
+                // mark nodes as 'reachable' that were previously tracked for heartbeat by this node
                 //  but are not tracked anymore (due to a node joining or unreachable nodes in between
                 //  becoming reachable)
                 if let Some(r) = s.reachability.get_mut(&self.myself) {
@@ -295,7 +295,7 @@ impl ClusterState {
                     }
 
                     if s.is_reachable() {
-                        // it was not reachable previously, so this means the reachability changed
+                        // it was not reachable previously, so this means the heartbeat changed
                         reachablility_changed_nodes.push(s.addr);
                     }
                 }
@@ -339,7 +339,7 @@ impl ClusterState {
                 let new_is_reachable = node.is_reachable();
 
                 if was_updated {
-                    // we changed the node's reachability information as seen from self, so there
+                    // we changed the node's heartbeat information as seen from self, so there
                     //  is a new version of the node's data that was not seen by any other nodes
                     //  yet and that must be spread by gossip
                     node.seen_by.clear();
@@ -357,7 +357,7 @@ impl ClusterState {
                 }
             }
             else {
-                warn!("reachability data for node {:?} which is not part of the cluster's known state - ignoring", addr);
+                warn!("heartbeat data for node {:?} which is not part of the cluster's known state - ignoring", addr);
             }
         }
 
@@ -429,7 +429,7 @@ impl NodeState {
                     }
                     Ordering::Equal => {
                         if r_self.is_reachable != r_other.is_reachable {
-                            warn!("gossip inconsistency for reachability of node {:?} as seen from {:?}@{}: ", self.addr, addr, r_self.counter_of_reporter);
+                            warn!("gossip inconsistency for heartbeat of node {:?} as seen from {:?}@{}: ", self.addr, addr, r_self.counter_of_reporter);
                         }
                     }
                     Ordering::Greater => {
@@ -458,11 +458,11 @@ impl NodeState {
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub struct NodeReachability {
-    /// a node reporting a change in reachability for a node attaches a strictly monotonous
-    ///  counter so that reachability can be merged in a coordination-free fashion
+    /// a node reporting a change in heartbeat for a node attaches a strictly monotonous
+    ///  counter so that heartbeat can be merged in a coordination-free fashion
     pub counter_of_reporter: u32,
-    /// only `reachable=false` is really of interest, reachability being the default. But storing
-    ///  reachability is necessary to spread that information by gossip.
+    /// only `reachable=false` is really of interest, heartbeat being the default. But storing
+    ///  heartbeat is necessary to spread that information by gossip.
     pub is_reachable: bool,
 }
 
@@ -477,7 +477,7 @@ pub enum MembershipState {
     /// todo
     WeaklyUp = 2,
     /// The regular state for a node that is 'up and running', a full member of the _cluster. Note
-    ///  that reachability (or lack thereof) is orthogonal to states, so a node can be 'up' but
+    ///  that heartbeat (or lack thereof) is orthogonal to states, so a node can be 'up' but
     ///  (temporarily) unreachable.
     Up = 3,
     /// A node transitions to 'Leaving' when it starts to leave the _cluster (typically as part of

@@ -11,8 +11,8 @@ use tokio::time::Instant;
 use tracing::{debug, error, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_messages::{HeartbeatData, HeartbeatResponseData};
 use crate::cluster::cluster_state::ClusterState;
+use crate::cluster::heartbeat::heartbeat_messages::{HeartbeatData, HeartbeatResponseData};
 use crate::messaging::node_addr::NodeAddr;
 
 pub struct HeartBeat {
@@ -253,7 +253,7 @@ impl HeartbeatTracker {
         let phi = self.phi();
         let result = phi < self.config.reachability_phi_threshold;
 
-        // trace!("reachability for {:?}: rtt={}ms, variance={}ms, phi={} -> {}",
+        // trace!("heartbeat for {:?}: rtt={}ms, variance={}ms, phi={} -> {}",
         //     self.tracked_node,
         //     self.moving_mean_rtt.unwrap_or(0.0)/ 1000000.0,
         //     self.moving_variance_rtt / 1000000.0,

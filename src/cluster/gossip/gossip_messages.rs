@@ -8,20 +8,15 @@ use bytes_varint::{VarIntSupport, VarIntSupportMut};
 use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use num_enum::TryFromPrimitive;
 use tokio::sync::mpsc;
-use tokio::sync::RwLock;
-use tracing::{debug, error};
+use tracing::error;
 
-use crate::cluster::_gossip::Gossip;
-use crate::cluster::cluster_messages::ClusterMessage;
 use crate::cluster::cluster_state::{MembershipState, NodeReachability, NodeState};
 use crate::messaging::envelope::Envelope;
 use crate::messaging::message_module::{MessageModule, MessageModuleId};
-use crate::messaging::messaging::Messaging;
 use crate::messaging::node_addr::NodeAddr;
 
-
 //TODO make non-pub
-pub const GOSSIP_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"CltrGssp");
+pub const GOSSIP_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"CtrGossp");
 
 //TODO make the message module infrastructure reusable
 
@@ -37,16 +32,9 @@ impl GossipMessageModule {
         })
     }
 
-    // async fn reply(&self, envelope: &Envelope, message: ClusterMessage) {
-    //     let mut buf = BytesMut::new();
-    //     message.ser(&mut buf);
-    //     let _ = self.messaging.send(envelope.from, GOSSIP_MESSAGE_MODULE_ID, &buf).await;
-    // }
-
     async fn _on_message(&self, envelope: &Envelope, buf: &[u8]) -> anyhow::Result<()> {
         let msg = GossipMessage::deser(buf)?;
         self.gossip.send((envelope.from, msg)).await?;
-
         Ok(())
     }
 }
@@ -54,7 +42,7 @@ impl GossipMessageModule {
 #[async_trait::async_trait]
 impl MessageModule for GossipMessageModule {
     fn id(&self) -> MessageModuleId {
-        crate::cluster::cluster_messages::CLUSTER_MESSAGE_MODULE_ID
+        GOSSIP_MESSAGE_MODULE_ID
     }
 
     async fn on_message(&self, envelope: &Envelope, buf: &[u8]) {

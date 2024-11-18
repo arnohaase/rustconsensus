@@ -35,7 +35,7 @@ impl Default for ClusterConfig {
             num_gossip_partners: 3,
             gossip_with_differing_state_probability: 0.8,
             converged_gossip_interval: Duration::from_secs(1),
-            unconverged_gossip_interval: Duration::from_secs(1) / 3,
+            unconverged_gossip_interval: Duration::from_millis(250),
             num_heartbeat_partners_per_node: 9,
             ignore_heartbeat_response_after_n_counter_increments: 4,
             ignore_heartbeat_response_after_n_seconds: 4,

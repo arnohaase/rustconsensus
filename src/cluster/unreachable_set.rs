@@ -14,7 +14,7 @@ impl UnreachableSet {
         }
     }
 
-    //TODO -> notify UnreachableSet when reachability was potentially modified? or as part of 'update reachability' in cluster_driver?
+    //TODO -> notify UnreachableSet when heartbeat was potentially modified? or as part of 'update heartbeat' in cluster_driver?
 
     pub fn update_reachability(&mut self, node: NodeAddr, is_reachable: bool) {
         let modified = if is_reachable {

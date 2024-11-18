@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use bytes::BytesMut;
 use tokio::{select, time};
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error};
+use tracing::debug;
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
@@ -29,7 +28,7 @@ pub async fn run_gossip(config: Arc<ClusterConfig>, messaging: Arc<Messaging>, c
     let mut gossip = Gossip::new(myself, config.clone(), cluster_state.clone());
 
     let mut converged_send_gossip_ticks = time::interval(config.converged_gossip_interval);
-    let mut unconverged_send_gossip_ticks = time::interval(config.converged_gossip_interval);
+    let mut unconverged_send_gossip_ticks = time::interval(config.unconverged_gossip_interval);
 
     loop {
         select! {
