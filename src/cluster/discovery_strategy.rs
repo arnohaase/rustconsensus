@@ -8,7 +8,7 @@ use bytes::BytesMut;
 use tokio::select;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeState};
@@ -17,6 +17,22 @@ use crate::messaging::messaging::{JOIN_MESSAGE_MODULE_ID, Messaging};
 use crate::messaging::node_addr::NodeAddr;
 
 ///TODO documentation
+
+
+pub async fn run_discovery(discovery_strategy: impl DiscoveryStrategy, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<Messaging>) {
+    match discovery_strategy.do_discovery(config, cluster_state, messaging).await {
+        Ok(_) => {
+            // sleep forever, i.e. until the cluster's regular loop terminates
+            loop {
+                sleep(Duration::from_secs(10)).await;
+            }
+        }
+        Err(e) => {
+            error!("discovery unsuccessful, shutting down: {}", e);
+        }
+    }
+
+}
 
 
 

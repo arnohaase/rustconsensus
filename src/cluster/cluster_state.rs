@@ -4,12 +4,38 @@ use std::collections::btree_map::Entry;
 use std::sync::Arc;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use tokio::{select, spawn, time};
+use tokio::sync::RwLock;
 use tracing::{debug, info, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::crdt::{Crdt, CrdtOrdering};
+
+
+pub async fn run_administrative_tasks_loop(config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>) {
+    let mut leader_action_ticks = time::interval(config.leader_action_interval);
+
+    //TODO documentation
+    if let Some(weakly_up_after) = config.weakly_up_after {
+        spawn(async move {
+            time::sleep(weakly_up_after).await;
+            cluster_state.write().await
+                .promote_myself_to_weakly_up().await;
+        });
+    }
+
+    loop {
+        select! {
+            _ = leader_action_ticks.tick() => {
+                debug!("running periodic leader actions");
+                cluster_state.write().await
+                    .do_leader_actions().await
+            }
+        }
+    }
+}
 
 pub struct ClusterState {
     myself: NodeAddr,
@@ -69,9 +95,17 @@ impl ClusterState {
     }
 
     pub async fn promote_myself_to_up(&mut self) {
+        self.promote_myself(MembershipState::Up).await
+    }
+
+    async fn promote_myself_to_weakly_up(&mut self) {
+        self.promote_myself(MembershipState::WeaklyUp).await
+    }
+
+    async fn promote_myself(&mut self, new_state: MembershipState) {
         self.merge_node_state(NodeState {
             addr: self.myself,
-            membership_state: MembershipState::Up,
+            membership_state: new_state,
             roles: Default::default(),
             reachability: Default::default(),
             seen_by: Default::default(),
@@ -184,7 +218,7 @@ impl ClusterState {
     /// This function is meant to be called at regular intervals on all nodes - it checks who is
     ///  currently the leader, ensures convergence and then performs leader actions if this
     ///  is actually the leader node
-    pub async fn leader_actions(&mut self) {
+    async fn do_leader_actions(&mut self) {
         use MembershipState::*;
 
         self.recalc_leader_candidate().await;

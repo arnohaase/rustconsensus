@@ -6,13 +6,14 @@ use tokio::{select, time};
 use tracing::debug;
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
-use crate::cluster::heartbeat::heartbeat::HeartBeat;
+use crate::cluster::heartbeat::heartbeat_logic::HeartBeat;
 use crate::cluster::heartbeat::heartbeat_messages::{HEARTBEAT_MESSAGE_MODULE_ID, HeartbeatMessage, HeartbeatMessageModule, HeartbeatResponseData};
 use crate::messaging::messaging::Messaging;
 use crate::messaging::node_addr::NodeAddr;
 
 mod heartbeat_messages;
-mod heartbeat;
+mod heartbeat_logic;
+pub mod unreachable_set;
 
 
 pub async fn run_heartbeat(config: Arc<ClusterConfig>, messaging: Arc<Messaging>, cluster_state: Arc<RwLock<ClusterState>>) -> anyhow::Result<()> {

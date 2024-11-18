@@ -2,14 +2,15 @@ use std::sync::Arc;
 
 use tokio::select;
 use tokio::sync::RwLock;
-use tracing::debug;
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_driver::run_cluster;
 use crate::cluster::cluster_events::{ClusterEventListener, ClusterEventNotifier};
-use crate::cluster::cluster_state::ClusterState;
-use crate::cluster::discovery_strategy::DiscoveryStrategy;
+use crate::cluster::cluster_state::{ClusterState, run_administrative_tasks_loop};
+use crate::cluster::discovery_strategy::{DiscoveryStrategy, run_discovery};
+use crate::cluster::gossip::run_gossip;
+use crate::cluster::heartbeat::run_heartbeat;
 use crate::cluster::join_messages::JoinMessageModule;
 use crate::messaging::messaging::{JOIN_MESSAGE_MODULE_ID, Messaging};
 
@@ -48,7 +49,20 @@ impl Cluster {
     }
 
     async fn _run(&self, discovery_strategy: impl DiscoveryStrategy) -> anyhow::Result<()> {
-        run_cluster(self.config.clone(), self.cluster_state.clone(), self.messaging.clone(), discovery_strategy).await;
+        select! {
+            _ = run_discovery(discovery_strategy, self.config.clone(), self.cluster_state.clone(), self.messaging.clone()) => { }
+            _ = run_administrative_tasks_loop(self.config.clone(), self.cluster_state.clone()) => {}
+            result = run_gossip(self.config.clone(), self.messaging.clone(), self.cluster_state.clone()) => {
+                if let Err(err) = result {
+                    error!("error running gossip - shutting down: {}", err);
+                }
+            }
+            result = run_heartbeat(self.config.clone(), self.messaging.clone(), self.cluster_state.clone()) => {
+                if let Err(err) = result {
+                    error!("error running heartbeat - shutting down: {}", err);
+                }
+            }
+        }
 
         debug!("deregistering cluster join module");
         self.messaging.deregister_module(JOIN_MESSAGE_MODULE_ID).await?;

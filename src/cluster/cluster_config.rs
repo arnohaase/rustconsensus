@@ -25,6 +25,8 @@ pub struct ClusterConfig {
     pub leader_action_interval: Duration,
     pub leader_eligible_roles: Option<FxHashSet<String>>,
 
+    pub weakly_up_after: Option<Duration>,
+
     pub discovery_seed_node_retry_interval: Duration,
     pub discovery_seed_node_give_up_timeout: Duration,
 }
@@ -46,6 +48,7 @@ impl Default for ClusterConfig {
             reachability_phi_threshold: 8.0,
             leader_action_interval: Duration::from_secs(1),
             leader_eligible_roles: None,
+            weakly_up_after: Some(Duration::from_secs(7)),
             discovery_seed_node_retry_interval: Duration::from_secs(1),
             discovery_seed_node_give_up_timeout: Duration::from_secs(60),
         }
