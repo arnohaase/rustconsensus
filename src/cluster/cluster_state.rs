@@ -105,8 +105,12 @@ impl ClusterState {
     }
 
     async fn promote_myself(&mut self, new_state: MembershipState) {
+        self.promote_node(self.myself, new_state).await
+    }
+
+    async fn promote_node(&mut self, addr: NodeAddr, new_state: MembershipState) {
         self.merge_node_state(NodeState {
-            addr: self.myself,
+            addr,
             membership_state: new_state,
             roles: Default::default(),
             reachability: Default::default(),

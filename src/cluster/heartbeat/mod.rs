@@ -13,7 +13,8 @@ use crate::messaging::node_addr::NodeAddr;
 
 mod heartbeat_messages;
 mod heartbeat_logic;
-pub mod unreachable_set;
+mod unreachable_set;
+mod downing_strategy;
 
 
 pub async fn run_heartbeat(config: Arc<ClusterConfig>, messaging: Arc<Messaging>, cluster_state: Arc<RwLock<ClusterState>>) -> anyhow::Result<()> {
