@@ -22,6 +22,9 @@ pub struct ClusterConfig {
     pub heartbeat_grace_period: Duration,
     pub reachability_phi_threshold: f64,
 
+    pub stability_period_before_downing: Duration,
+    pub unstable_thrashing_timeout: Duration,
+
     pub leader_action_interval: Duration,
     pub leader_eligible_roles: Option<FxHashSet<String>>,
 
@@ -46,6 +49,8 @@ impl Default for ClusterConfig {
             heartbeat_interval: Duration::from_secs(1),
             heartbeat_grace_period: Duration::from_secs(1),
             reachability_phi_threshold: 8.0,
+            stability_period_before_downing: Duration::from_secs(5),
+            unstable_thrashing_timeout: Duration::from_secs(20),
             leader_action_interval: Duration::from_secs(1),
             leader_eligible_roles: None,
             weakly_up_after: Some(Duration::from_secs(7)),
