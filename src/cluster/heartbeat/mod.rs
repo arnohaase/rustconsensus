@@ -1,25 +1,31 @@
 use std::sync::Arc;
 use std::time::Duration;
 use bytes::BytesMut;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio::{select, time};
+use tokio::sync::broadcast::error::RecvError;
 use tracing::debug;
 use crate::cluster::cluster_config::ClusterConfig;
+use crate::cluster::cluster_events::ClusterEvent;
 use crate::cluster::cluster_state::ClusterState;
+use crate::cluster::heartbeat::downing_strategy::DowningStrategy;
 use crate::cluster::heartbeat::heartbeat_logic::HeartBeat;
 use crate::cluster::heartbeat::heartbeat_messages::{HEARTBEAT_MESSAGE_MODULE_ID, HeartbeatMessage, HeartbeatMessageModule, HeartbeatResponseData};
+use crate::cluster::heartbeat::unreachable_tracker::UnreachableTracker;
 use crate::messaging::messaging::Messaging;
 use crate::messaging::node_addr::NodeAddr;
 
 mod heartbeat_messages;
 mod heartbeat_logic;
-mod unreachable_set;
+mod unreachable_tracker;
 pub mod downing_strategy;
 
 
-pub async fn run_heartbeat(config: Arc<ClusterConfig>, messaging: Arc<Messaging>, cluster_state: Arc<RwLock<ClusterState>>) -> anyhow::Result<()> {
+pub async fn run_heartbeat(config: Arc<ClusterConfig>, messaging: Arc<Messaging>, cluster_state: Arc<RwLock<ClusterState>>, mut cluster_events: broadcast::Receiver<ClusterEvent>, downing_strategy: Arc<dyn DowningStrategy>) -> anyhow::Result<()> {
     let myself = messaging.get_self_addr();
     let mut heartbeat = HeartBeat::new(myself, config.clone());
+
+    let mut unreachable_tracker = UnreachableTracker::new(config.clone(), cluster_state.clone(), downing_strategy);
 
     let (send, mut recv) = mpsc::channel(1024);
 
@@ -36,10 +42,21 @@ pub async fn run_heartbeat(config: Arc<ClusterConfig>, messaging: Arc<Messaging>
                 on_heartbeat_message(sender, msg, &mut heartbeat, messaging.as_ref()).await
             }
             _ = update_reachability_ticks.tick() => {
-                update_reachability(cluster_state.as_ref(), &heartbeat).await
+                update_reachability_from_here(cluster_state.as_ref(), &heartbeat).await
             }
             _ = heartbeat_ticks.tick() => {
                 do_heartbeat(cluster_state.as_ref(), &mut heartbeat, messaging.as_ref()).await
+            }
+            evt = cluster_events.recv() => {
+                match evt {
+                    Ok(ClusterEvent::ReachabilityChanged(data)) => {
+                        unreachable_tracker.update_reachability(data.addr, data.new_is_reachable).await;
+                    }
+                    Err(RecvError::Lagged(_)) => {
+                        //TODO re-sync based on cluster state
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -64,7 +81,7 @@ async fn on_heartbeat_message(sender: NodeAddr, msg: HeartbeatMessage, heartbeat
     }
 }
 
-async fn update_reachability(cluster_state: &RwLock<ClusterState>, heart_beat: &HeartBeat) {
+async fn update_reachability_from_here(cluster_state: &RwLock<ClusterState>, heart_beat: &HeartBeat) {
     let current_reachability = heart_beat.get_current_reachability();
     cluster_state.write().await
         .update_current_reachability(&current_reachability)

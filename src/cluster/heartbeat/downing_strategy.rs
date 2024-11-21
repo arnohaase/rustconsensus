@@ -1,10 +1,8 @@
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use tracing::info;
 use crate::cluster::cluster_state::NodeState;
 use crate::cluster::heartbeat::downing_strategy::DowningStrategyDecision::{DownThem, DownUs};
-use crate::messaging::node_addr::NodeAddr;
 
 /// A [DowningStrategy] decides which nodes should continue to run and which nodes should be
 ///  terminated (i.e. promoted to 'down'). It is called when the set of unreachable nodes has
@@ -64,7 +62,7 @@ pub enum DowningStrategyDecision {
 //TODO documentation, unit tests
 #[derive(Debug)]
 pub struct QuorumOfSeedNodesStrategy {
-    seed_nodes: Vec<SocketAddr>,
+    pub seed_nodes: Vec<SocketAddr>,
 }
 impl DowningStrategy for QuorumOfSeedNodesStrategy {
     fn decide(&self, node_states: &[NodeState]) -> DowningStrategyDecision {

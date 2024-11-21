@@ -4,6 +4,7 @@ use rustc_hash::FxHashSet;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time;
+use tracing::info;
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
@@ -61,9 +62,13 @@ impl UnreachableTracker {
             let cluster_state = self.cluster_state.clone();
             let downing_strategy = self.downing_strategy.clone();
 
+            let unreachable_nodes = self.unreachable_nodes.clone();
+
             // there are unreachable nodes, so we start a new timer for stability
             self.stability_period_handle = Some(tokio::spawn(async move {
                 time::sleep(stability_period).await;
+
+                info!("unreachble set {:?} remained stable for {:?}: deferring to downing strategy {:?} for a decision", unreachable_nodes, stability_period, downing_strategy);
 
                 let mut lock = unstable_thrashing_timeout_handle.write().await;
                 if let Some(handle) = lock.as_ref() {

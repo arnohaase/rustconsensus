@@ -8,6 +8,7 @@ use tracing::Level;
 use rustconsensus::cluster::cluster::Cluster;
 use rustconsensus::cluster::cluster_config::ClusterConfig;
 use rustconsensus::cluster::discovery_strategy::PartOfSeedNodeStrategy;
+use rustconsensus::cluster::heartbeat::downing_strategy::QuorumOfSeedNodesStrategy;
 use rustconsensus::messaging::messaging::Messaging;
 use rustconsensus::messaging::node_addr::NodeAddr;
 
@@ -31,9 +32,11 @@ async fn new_node(num_nodes: usize, n: usize) -> anyhow::Result<()> {
     let config = Arc::new(ClusterConfig::default());
     let cluster = Cluster::new(config, messaging).await?;
 
-    let discovery_strategy = PartOfSeedNodeStrategy::new((0..num_nodes).map(|n| addr(n)).collect())?;
+    let seed_nodes = (0..num_nodes).map(|n| addr(n)).collect::<Vec<_>>();
 
-    cluster.run(discovery_strategy).await
+    let discovery_strategy = PartOfSeedNodeStrategy::new(seed_nodes.clone())?;
+
+    cluster.run(discovery_strategy, QuorumOfSeedNodesStrategy { seed_nodes }).await
 }
 
 

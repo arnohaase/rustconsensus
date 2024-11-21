@@ -5,4 +5,4 @@ pub mod cluster_state;
 pub mod discovery_strategy;
 mod gossip;
 mod join_messages;
-mod heartbeat;
+pub mod heartbeat;
