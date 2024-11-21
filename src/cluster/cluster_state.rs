@@ -10,6 +10,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
+use crate::cluster::heartbeat::downing_strategy::DowningStrategyDecision;
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::crdt::{Crdt, CrdtOrdering};
 
@@ -109,13 +110,27 @@ impl ClusterState {
     }
 
     async fn promote_node(&mut self, addr: NodeAddr, new_state: MembershipState) {
-        self.merge_node_state(NodeState {
-            addr,
-            membership_state: new_state,
-            roles: Default::default(),
-            reachability: Default::default(),
-            seen_by: Default::default(),
-        }).await
+        if let Some(state) = self.get_node_state(&addr) {
+            let mut state = state.clone();
+            state.membership_state = new_state;
+            self.merge_node_state(state).await;
+        }
+    }
+
+    pub async fn on_stable_unreachable_set(&mut self, downing_decision: DowningStrategyDecision) {
+        let predicate = match downing_decision {
+            DowningStrategyDecision::DownUs => |s: &&NodeState| s.is_reachable(),
+            DowningStrategyDecision::DownThem => |s: &&NodeState| !s.is_reachable(),
+        };
+        let to_be_downed = self.node_states()
+            .filter(predicate)
+            .map(|s| s.addr)
+            .collect::<Vec<_>>();
+
+        for node in to_be_downed {
+            self.promote_node(node, MembershipState::Down).await;
+        }
+        //TODO shut down this node if state is 'down' or 'Removed' + special handling if this is the last node
     }
 
     //TODO unit test

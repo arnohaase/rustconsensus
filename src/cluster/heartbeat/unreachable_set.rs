@@ -1,25 +1,32 @@
 use std::sync::Arc;
+
 use rustc_hash::FxHashSet;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time;
-use crate::cluster::cluster_config::ClusterConfig;
 
+use crate::cluster::cluster_config::ClusterConfig;
+use crate::cluster::cluster_state::ClusterState;
+use crate::cluster::heartbeat::downing_strategy::DowningStrategy;
 use crate::messaging::node_addr::NodeAddr;
 
 pub struct UnreachableTracker {
     config: Arc<ClusterConfig>,
+    cluster_state: Arc<RwLock<ClusterState>>,
     unreachable_nodes: FxHashSet<NodeAddr>,
     stability_period_handle: Option<JoinHandle<()>>,
     unstable_thrashing_timeout_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
+    downing_strategy: Arc<dyn DowningStrategy>,
 }
 impl UnreachableTracker {
-    pub fn new(config: Arc<ClusterConfig>) -> UnreachableTracker {
+    pub fn new(config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, downing_strategy: Arc<dyn DowningStrategy>) -> UnreachableTracker {
         UnreachableTracker {
             config,
+            cluster_state,
             unreachable_nodes: FxHashSet::default(),
             stability_period_handle: None,
             unstable_thrashing_timeout_handle: Default::default(),
+            downing_strategy,
         }
     }
 
@@ -51,6 +58,8 @@ impl UnreachableTracker {
         if !self.unreachable_nodes.is_empty() {
             let stability_period = self.config.stability_period_before_downing;
             let unstable_thrashing_timeout_handle = self.unstable_thrashing_timeout_handle.clone();
+            let cluster_state = self.cluster_state.clone();
+            let downing_strategy = self.downing_strategy.clone();
 
             // there are unreachable nodes, so we start a new timer for stability
             self.stability_period_handle = Some(tokio::spawn(async move {
@@ -62,7 +71,14 @@ impl UnreachableTracker {
                     *lock = None;
                 }
 
-                //TODO trigger downing provider
+                // NB: There is a miniscule possibility that a change in reachability occurred but
+                //  has not reached this place, but it's not worth checking for: The whole 'stability'
+                //  thing is somewhat racy and heuristic anyway
+                let mut cluster_state = cluster_state.write().await;
+
+                let node_states = cluster_state.node_states().cloned().collect::<Vec<_>>();
+                let downing_decision = downing_strategy.decide(&node_states);
+                cluster_state.on_stable_unreachable_set(downing_decision).await;
             }));
         }
 

@@ -42,17 +42,16 @@ use crate::messaging::node_addr::NodeAddr;
 /// But it is perfectly valid for several or all partitions to vote **DownUs**, causing the entire
 ///  cluster to shut down if none of the partitions are big enough to continue on their own.
 ///
-/// ## TODO
+/// ## TODO documentation
 ///
 /// on every node independently, not by the leader
 ///
 /// inconsistent sets of nodes: no convergence, unreachability can happen during promotion
 /// --> >= Up provides a particularly window of uncertainty because the change requires a leader
-pub trait DowningStrategy: Debug {
+pub trait DowningStrategy: Debug + Send + Sync {
     fn decide(
         &self,
-        node_states: &BTreeMap<NodeAddr, NodeState>,
-        seed_nodes: &[SocketAddr],
+        node_states: &[NodeState],
     ) -> DowningStrategyDecision;
 }
 
@@ -64,22 +63,24 @@ pub enum DowningStrategyDecision {
 
 //TODO documentation, unit tests
 #[derive(Debug)]
-pub struct QuorumOfSeedNodesStrategy {}
+pub struct QuorumOfSeedNodesStrategy {
+    seed_nodes: Vec<SocketAddr>,
+}
 impl DowningStrategy for QuorumOfSeedNodesStrategy {
-    fn decide(&self, node_states: &BTreeMap<NodeAddr, NodeState>, seed_nodes: &[SocketAddr]) -> DowningStrategyDecision {
-        let num_reachable_seed_nodes = node_states.values()
+    fn decide(&self, node_states: &[NodeState]) -> DowningStrategyDecision {
+        let num_reachable_seed_nodes = node_states.iter()
             .filter(|s| s.is_reachable())
-            .filter(|s| seed_nodes.contains(&s.addr.addr))
+            .filter(|s| self.seed_nodes.contains(&s.addr.addr))
             .count();
 
         info!("{} of {} seed nodes are in the cluster, {} of them are reachable",
             num_reachable_seed_nodes,
-            node_states.values()
-                .filter(|s| seed_nodes.contains(&s.addr.addr))
+            node_states.iter()
+                .filter(|s| self.seed_nodes.contains(&s.addr.addr))
                 .count(),
-            seed_nodes.len());
+            self.seed_nodes.len());
 
-        quorum_decision(num_reachable_seed_nodes, seed_nodes.len())
+        quorum_decision(num_reachable_seed_nodes, self.seed_nodes.len())
     }
 }
 
@@ -96,8 +97,8 @@ fn quorum_decision(actual: usize, total: usize) -> DowningStrategyDecision {
 #[derive(Debug)]
 pub struct QuorumOfNodesStrategy {}
 impl DowningStrategy for QuorumOfNodesStrategy {
-    fn decide(&self, node_states: &BTreeMap<NodeAddr, NodeState>, _seed_nodes: &[SocketAddr]) -> DowningStrategyDecision {
-        let num_reachable_nodes = node_states.values()
+    fn decide(&self, node_states: &[NodeState]) -> DowningStrategyDecision {
+        let num_reachable_nodes = node_states.iter()
             .filter(|s| s.is_reachable())
             .count();
 
@@ -116,12 +117,12 @@ pub struct QuorumOfRoleStrategy {
     pub required_role: String,
 }
 impl DowningStrategy for QuorumOfRoleStrategy {
-    fn decide(&self, node_states: &BTreeMap<NodeAddr, NodeState>, _seed_nodes: &[SocketAddr]) -> DowningStrategyDecision {
-        let num_nodes_with_role = node_states.values()
+    fn decide(&self, node_states: &[NodeState]) -> DowningStrategyDecision {
+        let num_nodes_with_role = node_states.iter()
             .filter(|s| s.roles.contains(&self.required_role))
             .count();
 
-        let num_reachable_nodes = node_states.values()
+        let num_reachable_nodes = node_states.iter()
             .filter(|s| s.roles.contains(&self.required_role))
             .filter(|s| s.is_reachable())
             .count();
@@ -142,8 +143,10 @@ impl DowningStrategy for QuorumOfRoleStrategy {
 #[derive(Debug)]
 pub struct LeaderSurvivesStrategy {}
 impl DowningStrategy for LeaderSurvivesStrategy {
-    fn decide(&self, node_states: &BTreeMap<NodeAddr, NodeState>, _seed_nodes: &[SocketAddr]) -> DowningStrategyDecision {
-        let opt_leader_candidate = node_states.values()
+    fn decide(&self, node_states: &[NodeState]) -> DowningStrategyDecision {
+        //TODO role requirements for leader eligibility
+
+        let opt_leader_candidate = node_states.iter()
             .find(|s| s.membership_state.is_leader_eligible());
 
         if let Some(l) = opt_leader_candidate {
