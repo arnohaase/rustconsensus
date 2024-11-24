@@ -35,10 +35,10 @@ impl UnreachableTracker {
         let was_fully_reachable = self.unreachable_nodes.is_empty();
 
         let modified = if is_reachable {
-            self.unreachable_nodes.insert(node)
+            self.unreachable_nodes.remove(&node)
         }
         else {
-            self.unreachable_nodes.remove(&node)
+            self.unreachable_nodes.insert(node)
         };
 
         if !modified {

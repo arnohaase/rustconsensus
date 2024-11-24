@@ -10,6 +10,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
+use crate::cluster::cluster_state::MembershipState::Joining;
 use crate::cluster::heartbeat::downing_strategy::DowningStrategyDecision;
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::crdt::{Crdt, CrdtOrdering};
@@ -101,8 +102,12 @@ impl ClusterState {
     }
 
     async fn promote_myself_to_weakly_up(&mut self) {
-        info!("promoting myself to 'weakly up' after configured timeout of {}ms", self.config.weakly_up_after.unwrap().as_millis());
-        self.promote_myself(MembershipState::WeaklyUp).await
+        if let Some(node) = self.get_node_state(&self.myself) {
+            if node.membership_state == Joining {
+                info!("promoting myself to 'weakly up' after configured timeout of {}ms", self.config.weakly_up_after.unwrap().as_millis());
+                self.promote_myself(MembershipState::WeaklyUp).await
+            }
+        }
     }
 
     async fn promote_myself(&mut self, new_state: MembershipState) {
