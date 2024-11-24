@@ -7,7 +7,7 @@ use anyhow::anyhow;
 use bytes::BytesMut;
 use rustc_hash::FxHashMap;
 use tokio::sync::RwLock;
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::messaging::envelope::{Checksum, Envelope};
 use crate::messaging::message_module::{MessageModule, MessageModuleId};
@@ -116,7 +116,7 @@ impl Messaging {
 
 /// This is a well-known ID: Messaging checks the unique part that a message is addressed to,
 ///  except for JOIN messages
-pub const JOIN_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"ClstJoin");
+pub const JOIN_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"CtrJoin\0");
 
 
 struct ReceivedMessageHandler {
@@ -158,7 +158,7 @@ impl MessageHandler for ReceivedMessageHandler {
                     message_module.on_message(&envelope, msg_buf).await;
                 }
                 else {
-                    warn!("received message for module {:?} for which there is no handler - ignoring. Different nodes may be running different software versions", envelope.message_module_id);
+                    debug!("received message for module {:?} for which there is no handler (yet?) - ignoring.", envelope.message_module_id);
                 }
             }
             Err(e) => {

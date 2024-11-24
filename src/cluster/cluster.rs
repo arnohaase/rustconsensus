@@ -12,7 +12,9 @@ use crate::cluster::gossip::run_gossip;
 use crate::cluster::heartbeat::downing_strategy::DowningStrategy;
 use crate::cluster::heartbeat::run_heartbeat;
 use crate::cluster::join_messages::JoinMessageModule;
+use crate::messaging::message_module::MessageModule;
 use crate::messaging::messaging::{JOIN_MESSAGE_MODULE_ID, Messaging};
+use crate::messaging::node_addr::NodeAddr;
 
 /// This is the cluster's public API
 pub struct Cluster {
@@ -22,8 +24,9 @@ pub struct Cluster {
     cluster_state: Arc<RwLock<ClusterState>>,
 }
 impl Cluster {
-    pub async fn new(config: Arc<ClusterConfig>, messaging: Arc<Messaging>) -> anyhow::Result<Cluster> {
-        let myself = messaging.get_self_addr();
+    pub async fn new(config: Arc<ClusterConfig>) -> anyhow::Result<Cluster> {
+        let myself = NodeAddr::from(config.self_addr);
+        let messaging = Arc::new(Messaging::new(myself).await?);
         let event_notifier = Arc::new(ClusterEventNotifier::new());
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), event_notifier.clone())));
 
@@ -40,6 +43,8 @@ impl Cluster {
     }
 
     pub async fn run(&self, discovery_strategy: impl DiscoveryStrategy, downing_strategy: impl DowningStrategy + 'static) -> anyhow::Result<()> {
+        //TODO make discovery strategy and downing strategy part of the cluster's config - that should include seed nodes
+
         select! {
             //TODO start messaging receive loop only after the cluster is started
             //TODO and allow registration of application level message handlers before the receive loop is started
@@ -68,6 +73,14 @@ impl Cluster {
         self.messaging.deregister_module(JOIN_MESSAGE_MODULE_ID).await?;
 
         Ok(())
+    }
+
+    pub async fn register_module(&self, message_module: Arc<dyn MessageModule>) -> anyhow::Result<()> {
+        self.messaging.register_module(message_module).await
+    }
+
+    pub async fn deregister_module(&self, message_module: Arc<dyn MessageModule>) -> anyhow::Result<()> {
+        self.messaging.deregister_module(message_module.id()).await
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<ClusterEvent> {

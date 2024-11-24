@@ -9,7 +9,6 @@ use rustconsensus::cluster::cluster::Cluster;
 use rustconsensus::cluster::cluster_config::ClusterConfig;
 use rustconsensus::cluster::discovery_strategy::PartOfSeedNodeStrategy;
 use rustconsensus::cluster::heartbeat::downing_strategy::QuorumOfSeedNodesStrategy;
-use rustconsensus::messaging::messaging::Messaging;
 
 fn init_logging() {
     tracing_subscriber::fmt()
@@ -27,9 +26,8 @@ fn addr(n: usize) -> SocketAddr {
 
 #[tracing::instrument(name="Cluster", skip(num_nodes))]
 async fn new_node(num_nodes: usize, n: usize) -> anyhow::Result<()> {
-    let messaging = Arc::new(Messaging::new(addr(n).into()).await?);
-    let config = Arc::new(ClusterConfig::default());
-    let cluster = Cluster::new(config, messaging).await?;
+    let config = ClusterConfig::new(addr(n));
+    let cluster = Cluster::new(Arc::new(config)).await?;
 
     let seed_nodes = (0..num_nodes).map(|n| addr(n)).collect::<Vec<_>>();
 

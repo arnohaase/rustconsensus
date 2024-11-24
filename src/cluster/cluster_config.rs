@@ -1,9 +1,11 @@
 use std::collections::BTreeSet;
+use std::net::SocketAddr;
 use std::time::Duration;
 use rustc_hash::FxHashSet;
 
 #[derive(Debug)]
 pub struct ClusterConfig {
+    pub self_addr: SocketAddr,
     pub roles: BTreeSet<String>,
 
     pub num_gossip_partners: usize,
@@ -38,9 +40,10 @@ pub struct ClusterConfig {
     pub discovery_seed_node_give_up_timeout: Duration,
 }
 
-impl Default for ClusterConfig {
-    fn default() -> Self { //TODO default values
+impl ClusterConfig {
+    pub fn new(self_addr: SocketAddr) -> ClusterConfig {
         ClusterConfig {
+            self_addr,
             roles: Default::default(),
             num_gossip_partners: 3,
             gossip_with_differing_state_probability: 0.8,

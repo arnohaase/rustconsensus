@@ -112,7 +112,8 @@ impl DiscoveryStrategy for PartOfSeedNodeStrategy {
 async fn check_joined_as_seed_node(cluster_state: Arc<RwLock<ClusterState>>, seed_nodes: &[SocketAddr], myself: &NodeAddr) {
     loop {
         if is_any_node_up(cluster_state.read().await.node_states()) {
-            info!("joined a cluster");
+            //TODO add message for 'joining a cluster' (e.g. before  any node is up)
+            info!("joined a cluster"); //TODO better log message - this may be long after the initial 'joining'
             break;
         }
 
