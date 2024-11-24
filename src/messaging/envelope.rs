@@ -40,8 +40,6 @@ pub struct Envelope {
     pub message_module_id: MessageModuleId,
 }
 impl Envelope {
-    const ADDR_SIZE: usize = size_of::<u32>();
-
     pub fn try_read(buf: &mut impl Buf, to: SocketAddr) -> anyhow::Result<Envelope> {
         let from = NodeAddr::try_deser(buf)?;
         let to = Self::try_read_to_addr(buf, to)?;

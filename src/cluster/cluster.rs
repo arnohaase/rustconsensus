@@ -51,7 +51,7 @@ impl Cluster {
     async fn _run(&self, discovery_strategy: impl DiscoveryStrategy, downing_strategy: impl DowningStrategy + 'static) -> anyhow::Result<()> {
         select! {
             _ = run_discovery(discovery_strategy, self.config.clone(), self.cluster_state.clone(), self.messaging.clone()) => { }
-            _ = run_administrative_tasks_loop(self.config.clone(), self.cluster_state.clone()) => {}
+            _ = run_administrative_tasks_loop(self.config.clone(), self.cluster_state.clone(), self.event_notifier.subscribe()) => {}
             result = run_gossip(self.config.clone(), self.messaging.clone(), self.cluster_state.clone()) => {
                 if let Err(err) = result {
                     error!("error running gossip - shutting down: {}", err);

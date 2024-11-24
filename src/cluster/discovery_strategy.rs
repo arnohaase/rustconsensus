@@ -31,9 +31,7 @@ pub async fn run_discovery(discovery_strategy: impl DiscoveryStrategy, config: A
             error!("discovery unsuccessful, shutting down: {}", e);
         }
     }
-
 }
-
 
 
 pub fn create_join_seed_nodes_strategy(seed_nodes: impl ToSocketAddrs) -> anyhow::Result<impl DiscoveryStrategy> {

@@ -10,7 +10,6 @@ use rustconsensus::cluster::cluster_config::ClusterConfig;
 use rustconsensus::cluster::discovery_strategy::PartOfSeedNodeStrategy;
 use rustconsensus::cluster::heartbeat::downing_strategy::QuorumOfSeedNodesStrategy;
 use rustconsensus::messaging::messaging::Messaging;
-use rustconsensus::messaging::node_addr::NodeAddr;
 
 fn init_logging() {
     tracing_subscriber::fmt()

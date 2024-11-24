@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use tokio::{select, spawn, time};
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, info, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
@@ -16,7 +16,7 @@ use crate::messaging::node_addr::NodeAddr;
 use crate::util::crdt::{Crdt, CrdtOrdering};
 
 
-pub async fn run_administrative_tasks_loop(config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>) {
+pub async fn run_administrative_tasks_loop(config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, mut events: broadcast::Receiver<ClusterEvent>) {
     let mut leader_action_ticks = time::interval(config.leader_action_interval);
 
     //TODO documentation
@@ -35,6 +35,14 @@ pub async fn run_administrative_tasks_loop(config: Arc<ClusterConfig>, cluster_s
                 debug!("running periodic leader actions");
                 cluster_state.write().await
                     .do_leader_actions().await
+            }
+            evt = events.recv() => {
+                if let Ok(ClusterEvent::NodeStateChanged(data)) = evt {
+                    if data.new_state.is_terminal() {
+                        info!("Shutting down this cluster node because it reached terminal state {:?}", data.new_state);
+                        return;
+                    }
+                }
             }
         }
     }
@@ -590,6 +598,15 @@ impl MembershipState {
             // NB: We allow a leader to be 'Exiting' to allow promotion to 'Removed' reliably during shutdown
             Up | Leaving | Exiting => true,
             Down | Removed => false,
+        }
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        use MembershipState::*;
+
+        match self {
+            Down | Removed => true,
+            Joining | WeaklyUp | Up | Leaving | Exiting => false,
         }
     }
 }
