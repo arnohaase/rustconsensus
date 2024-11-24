@@ -46,7 +46,6 @@ impl Cluster {
 
         select! {
             //TODO start messaging receive loop only after the cluster is started
-            //TODO and allow registration of application level message handlers before the receive loop is started
             r = self.messaging.recv() => r, //TODO spawn messaging? or at least message handling?
             r = self._run(discovery_strategy, downing_strategy) => r,
         }
