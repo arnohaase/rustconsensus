@@ -150,7 +150,8 @@ async fn check_joined_other_seed_nodes(cluster_state: Arc<RwLock<ClusterState>>,
 
 async fn send_join_message_loop(other_seed_nodes: &[SocketAddr], messaging: Arc<Messaging>, config: Arc<ClusterConfig>) {
     let mut join_msg_buf = BytesMut::new();
-    JoinMessage::Join.ser(&mut join_msg_buf);
+    JoinMessage::Join{ roles: config.roles.clone(), }
+        .ser(&mut join_msg_buf);
 
     //NB: This endless loop *must* be in a separate function rather than inlined in the select! block
     //     due to limitations in the select! macro / rewriting of awaits

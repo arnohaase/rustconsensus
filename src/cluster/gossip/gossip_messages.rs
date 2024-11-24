@@ -14,6 +14,7 @@ use crate::cluster::cluster_state::{MembershipState, NodeReachability, NodeState
 use crate::messaging::envelope::Envelope;
 use crate::messaging::message_module::{MessageModule, MessageModuleId};
 use crate::messaging::node_addr::NodeAddr;
+use crate::util::buf::{put_string, try_get_string};
 
 //TODO make non-pub
 pub const GOSSIP_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"CtrGossp");
@@ -253,7 +254,6 @@ impl GossipMessage {
             nodes,
         }))
     }
-
 }
 
 
@@ -442,7 +442,7 @@ impl <'a> StringPoolSerializer<'a> {
         buf.put_usize_varint(self.resolution_table.len());
         for s in self.reverse_resolution_table {
             // strings are serialized in the order of their ids, so there is no need to store the id explicitly
-            put_string_raw(buf, s);
+            put_string(buf, s);
         }
     }
 }
@@ -471,7 +471,7 @@ impl StringPoolDeserializer {
 
         let mut resolution_table = Vec::with_capacity(num_entries);
         for _ in 0..num_entries {
-            resolution_table.push(try_get_string_raw(&mut buf_resolution_table)?);
+            resolution_table.push(try_get_string(&mut buf_resolution_table)?);
         }
 
         Ok(StringPoolDeserializer {
@@ -496,22 +496,6 @@ impl StringPoolDeserializer {
         }
         Ok(strings.into_iter().collect())
     }
-}
-
-fn put_string_raw(buf: &mut BytesMut, s: &str) {
-    buf.put_usize_varint(s.len());
-    buf.put_slice(s.as_bytes());
-}
-
-fn try_get_string_raw(buf: &mut impl Buf) -> anyhow::Result<String> {
-    let len = buf.try_get_usize_varint()?;
-    let mut result = Vec::new();
-    for _ in 0..len {
-        result.push(buf.try_get_u8()?);
-    }
-
-    let s = String::from_utf8(result)?;
-    Ok(s)
 }
 
 #[cfg(test)]

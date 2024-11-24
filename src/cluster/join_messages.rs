@@ -1,23 +1,40 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::BytesMut;
+use bytes_varint::{VarIntSupport, VarIntSupportMut};
 use tokio::sync::RwLock;
 use tracing::error;
 use crate::cluster::cluster_state::ClusterState;
 use crate::messaging::envelope::Envelope;
 use crate::messaging::message_module::{MessageModule, MessageModuleId};
 use crate::messaging::messaging::JOIN_MESSAGE_MODULE_ID;
+use crate::util::buf::{put_string, try_get_string};
 
 pub enum JoinMessage {
-    Join
+    Join{ roles: BTreeSet<String>, }
 }
 impl JoinMessage {
-    pub fn ser(&self, _buf: &mut BytesMut) {
+    pub fn ser(&self, buf: &mut BytesMut) {
+        let JoinMessage::Join { roles} = self;
+
+        buf.put_usize_varint(roles.len());
+        for role in roles {
+            put_string(buf, role);
+        }
+
         //TODO write shared secret
     }
 
-    pub fn deser(_buf: &[u8]) -> anyhow::Result<JoinMessage> {
-        Ok(JoinMessage::Join)
+    pub fn deser(mut buf: &[u8]) -> anyhow::Result<JoinMessage> {
+        let mut roles = BTreeSet::default();
+
+        let num_roles = buf.try_get_usize_varint()?;
+        for _ in 0..num_roles {
+            roles.insert(try_get_string(&mut buf)?);
+        }
+
+        Ok(JoinMessage::Join { roles })
     }
 }
 
@@ -42,11 +59,11 @@ impl MessageModule for JoinMessageModule {
 
     async fn on_message(&self, envelope: &Envelope, buf: &[u8]) {
         match JoinMessage::deser(buf) {
-            Ok(msg) => {
+            Ok(JoinMessage::Join { roles }) => {
                 //TODO check shared secret
 
                 self.cluster_state.write().await
-                    .add_joiner(envelope.from, Default::default()) //TODO roles in 'join' message
+                    .add_joiner(envelope.from, roles);
             }
             Err(e) => {
                 error!("error deserializing message: {}", e);

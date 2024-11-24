@@ -56,8 +56,8 @@ impl ClusterState {
         let nodes_with_state = BTreeMap::from_iter([(myself, NodeState {
             addr: myself,
             membership_state: MembershipState::Joining,
-            roles: Default::default(), //TODO roles!
-            reachability: Default::default(), //TODO is every node reachable from itself?
+            roles: config.roles.clone(),
+            reachability: Default::default(), //TODO is a node reachable from itself?
             seen_by: BTreeSet::from_iter([myself]),
         })]);
 
@@ -268,9 +268,6 @@ impl ClusterState {
                     }
                 }
             }
-
-            //TODO unreachable -> Down --> split brain handling etc.
-
 
             for addr in nodes_removed_from_gossip {
                 self.on_node_removed_from_gossip(&addr);

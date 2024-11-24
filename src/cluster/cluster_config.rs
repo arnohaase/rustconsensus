@@ -1,7 +1,10 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 use rustc_hash::FxHashSet;
 
 pub struct ClusterConfig {
+    pub roles: BTreeSet<String>,
+
     pub num_gossip_partners: usize,
     /// number between 0.0 and 1.0 that determines the probability to gossip with a node that has
     ///  proven differences from myself (rather than a node that may have an identical perception
@@ -37,6 +40,7 @@ pub struct ClusterConfig {
 impl Default for ClusterConfig {
     fn default() -> Self { //TODO default values
         ClusterConfig {
+            roles: Default::default(),
             num_gossip_partners: 3,
             gossip_with_differing_state_probability: 0.8,
             converged_gossip_interval: Duration::from_secs(1),
