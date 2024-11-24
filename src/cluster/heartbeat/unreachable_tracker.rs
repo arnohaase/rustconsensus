@@ -4,11 +4,11 @@ use rustc_hash::FxHashSet;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
-use crate::cluster::heartbeat::downing_strategy::DowningStrategy;
+use crate::cluster::heartbeat::downing_strategy::{DowningStrategy, DowningStrategyDecision};
 use crate::messaging::node_addr::NodeAddr;
 
 pub struct UnreachableTracker {
@@ -99,10 +99,15 @@ impl UnreachableTracker {
             }
 
             let timeout_period = self.config.unstable_thrashing_timeout;
+            let cluster_state = self.cluster_state.clone();
+
             *lock = Some(tokio::spawn(async move {
                 time::sleep(timeout_period).await;
 
-                //TODO shut down cluster
+                // not canceled -> shut down the whole cluster
+                warn!("unreachable for {:?} without reaching a stable configuration: shutting down the entire cluster", timeout_period);
+                cluster_state.write().await.on_stable_unreachable_set(DowningStrategyDecision::DownUs).await;
+                cluster_state.write().await.on_stable_unreachable_set(DowningStrategyDecision::DownThem).await;
             }));
         }
     }
