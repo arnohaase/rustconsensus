@@ -141,23 +141,12 @@ impl ClusterState {
     //TODO unit test
     /// returns the node that is the leader in the current topology once state converges (which
     ///  can only happen if all nodes are reachable)
-    async fn recalc_leader_candidate(&mut self) {
+    async fn update_leader_candidate(&mut self) {
         //TODO does this require more sophisticated handling? Give preference to some states
         // over others? Or does the timestamp of joining take care of that well enough?
 
-        let new_leader = self.nodes_with_state.values()
-            .filter(|s| s.membership_state.is_leader_eligible())
-            .filter(|s| {
-                if let Some(leader_eligible_roles) = &self.config.leader_eligible_roles {
-                    leader_eligible_roles.iter()
-                        .any(|role| s.roles.contains(role))
-                }
-                else {
-                    true
-                }
-            })
-            .map(|s| s.addr)
-            .min();
+        let new_leader = Self::calc_leader_candidate(self.config.as_ref(), self.nodes_with_state.values())
+            .map(|s| s.addr);
 
         if new_leader != self.leader {
             if let Some(l) = new_leader {
@@ -171,7 +160,21 @@ impl ClusterState {
         }
     }
 
-    //TODO logging / handling if there is no leader candidate (e.g. because no node has one of the leader roles)
+    //TODO unit test
+    pub fn calc_leader_candidate<'a>(config: &ClusterConfig, nodes: impl Iterator<Item = &'a NodeState>) -> Option<&'a NodeState> {
+        nodes
+            .filter(|s| s.membership_state.is_leader_eligible())
+            .filter(|s| {
+                if let Some(leader_eligible_roles) = &config.leader_eligible_roles {
+                    leader_eligible_roles.iter()
+                        .any(|role| s.roles.contains(role))
+                }
+                else {
+                    true
+                }
+            })
+            .min_by_key(|s| s.addr)
+    }
 
     pub fn get_leader(&self) -> Option<NodeAddr> {
         self.leader
@@ -247,7 +250,7 @@ impl ClusterState {
     async fn do_leader_actions(&mut self) {
         use MembershipState::*;
 
-        self.recalc_leader_candidate().await;
+        self.update_leader_candidate().await;
 
         if self.am_i_leader() && self.is_converged() {
             let mut nodes_removed_from_gossip = Vec::new();

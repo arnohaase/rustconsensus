@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 use rustc_hash::FxHashSet;
 
+#[derive(Debug)]
 pub struct ClusterConfig {
     pub roles: BTreeSet<String>,
 

@@ -1,7 +1,9 @@
 use std::fmt::Debug;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tracing::info;
-use crate::cluster::cluster_state::NodeState;
+use crate::cluster::cluster_config::ClusterConfig;
+use crate::cluster::cluster_state::{ClusterState, NodeState};
 use crate::cluster::heartbeat::downing_strategy::DowningStrategyDecision::{DownThem, DownUs};
 
 /// A [DowningStrategy] decides which nodes should continue to run and which nodes should be
@@ -139,13 +141,13 @@ impl DowningStrategy for QuorumOfRoleStrategy {
 
 //TODO documentation, unit test
 #[derive(Debug)]
-pub struct LeaderSurvivesStrategy {}
+pub struct LeaderSurvivesStrategy {
+    config: Arc<ClusterConfig>,
+}
 impl DowningStrategy for LeaderSurvivesStrategy {
     fn decide(&self, node_states: &[NodeState]) -> DowningStrategyDecision {
-        //TODO role requirements for leader eligibility
-
-        let opt_leader_candidate = node_states.iter()
-            .find(|s| s.membership_state.is_leader_eligible());
+        let opt_leader_candidate =
+            ClusterState::calc_leader_candidate(self.config.as_ref(), node_states.iter());
 
         if let Some(l) = opt_leader_candidate {
             if l.is_reachable() {
