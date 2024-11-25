@@ -127,8 +127,6 @@ pub struct HeartbeatResponseData {
 
 #[cfg(test)]
 mod test {
-    use std::collections::BTreeSet;
-
     use rstest::*;
 
     use HeartbeatMessage::*;

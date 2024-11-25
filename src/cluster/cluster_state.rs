@@ -10,11 +10,9 @@ use tracing::{debug, info, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
-use crate::cluster::cluster_state::MembershipState::Joining;
 use crate::cluster::heartbeat::downing_strategy::DowningStrategyDecision;
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::crdt::{Crdt, CrdtOrdering};
-
 
 pub async fn run_administrative_tasks_loop(config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, mut events: broadcast::Receiver<ClusterEvent>) {
     let mut leader_action_ticks = time::interval(config.leader_action_interval);
@@ -111,7 +109,7 @@ impl ClusterState {
 
     async fn promote_myself_to_weakly_up(&mut self) {
         if let Some(node) = self.get_node_state(&self.myself) {
-            if node.membership_state == Joining {
+            if node.membership_state == MembershipState::Joining {
                 info!("promoting myself to 'weakly up' after configured timeout of {}ms", self.config.weakly_up_after.unwrap().as_millis());
                 self.promote_myself(MembershipState::WeaklyUp).await
             }
@@ -146,7 +144,6 @@ impl ClusterState {
         //TODO shut down this node if state is 'down' or 'Removed' + special handling if this is the last node
     }
 
-    //TODO unit test
     /// returns the node that is the leader in the current topology once state converges (which
     ///  can only happen if all nodes are reachable)
     async fn update_leader_candidate(&mut self) {
@@ -168,7 +165,6 @@ impl ClusterState {
         }
     }
 
-    //TODO unit test
     pub fn calc_leader_candidate<'a>(config: &ClusterConfig, nodes: impl Iterator<Item = &'a NodeState>) -> Option<&'a NodeState> {
         nodes
             .filter(|s| s.membership_state.is_leader_eligible())
@@ -335,7 +331,6 @@ impl ClusterState {
         self.event_notifier.send_event(event);
     }
 
-    //TODO unit test
     pub async fn update_current_reachability(&mut self, reachability: &BTreeMap<NodeAddr, bool>) {
         let mut lazy_version_counter = LazyCounterVersion::new(self);
 
@@ -467,7 +462,6 @@ pub struct NodeState {
     pub seen_by: BTreeSet<NodeAddr>,
 }
 impl NodeState {
-    //TODO unit test
     pub fn is_reachable(&self) -> bool {
         self.reachability.values()
             .all(|r| r.is_reachable)
@@ -622,5 +616,180 @@ impl Crdt for MembershipState {
                 CrdtOrdering::SelfWasBigger
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+    use std::sync::Arc;
+
+    use rstest::rstest;
+
+    use MembershipState::*;
+
+    use crate::cluster::cluster_config::ClusterConfig;
+    use crate::cluster::cluster_events::ClusterEventNotifier;
+    use crate::messaging::node_addr::NodeAddr;
+
+    use super::*;
+
+    #[test]
+    fn test_new() {
+        let self_addr = SocketAddr::from_str("127.0.0.1:1234").unwrap();
+        let myself = NodeAddr::from(self_addr);
+        let config = Arc::new(ClusterConfig::new(self_addr));
+        let cluster_event_queue = Arc::new(ClusterEventNotifier::new());
+
+        let cluster_state = ClusterState::new(
+            myself,
+            config,
+            cluster_event_queue,
+        );
+
+        let node_state = NodeState {
+            addr: myself,
+            membership_state: MembershipState::Joining,
+            roles: BTreeSet::default(),
+            reachability: BTreeMap::default(),
+            seen_by: BTreeSet::from([myself]),
+        };
+
+
+        assert_eq!(cluster_state.myself(), myself);
+        assert_eq!(cluster_state.version_counter, 0);
+        assert_eq!(cluster_state.leader, None);
+        assert_eq!(cluster_state.get_leader(), None);
+        assert_eq!(
+            cluster_state.nodes_with_state,
+            BTreeMap::from([(myself, node_state.clone())]),
+        );
+        assert_eq!(
+            cluster_state.node_states()
+                .collect::<Vec<_>>(),
+            vec![&node_state],
+        );
+        assert_eq!(
+            cluster_state.get_node_state(&myself),
+            Some(&node_state),
+        );
+    }
+
+    #[test]
+    fn test_add_joiner() {
+        todo!()
+    }
+
+    #[test]
+    fn test_promote_myself_to_up() {
+        todo!()
+    }
+
+    #[test]
+    fn test_promote_myself_to_weakly_up() {
+        todo!()
+    }
+
+    #[test]
+    fn test_promote_node() {
+        todo!()
+    }
+
+    #[test]
+    fn test_on_stable_unreachable_set() {
+        todo!()
+    }
+
+    #[test]
+    fn test_promote_calc_leader_candidate() {
+        todo!()
+    }
+
+    #[test]
+    fn test_promote_update_leader_candidate() {
+        todo!()
+    }
+
+    #[test]
+    fn test_get_leader() {
+        todo!()
+    }
+
+    #[test]
+    fn test_am_i_leader() {
+        todo!()
+    }
+
+    #[test]
+    fn test_is_converged() {
+        todo!()
+    }
+
+    #[test]
+    fn test_state_changed() {
+        todo!()
+    }
+
+    #[test]
+    fn test_do_leade_actions() {
+        todo!()
+    }
+
+    #[test]
+    fn test_merge_node_state() {
+        todo!()
+    }
+
+    #[test]
+    fn test_update_current_reachability() {
+        todo!()
+    }
+
+    #[test]
+    fn test_node_state_is_reachable() {
+        todo!()
+    }
+
+    #[test]
+    fn test_node_state_merge() {
+        todo!()
+    }
+
+    #[rstest]
+    #[case::joining(Joining, true)]
+    #[case::weakly_up(WeaklyUp, true)]
+    #[case::up(Up, true)]
+    #[case::leaving(Leaving, true)]
+    #[case::exiting(Exiting, true)]
+    #[case::removed(Removed, false)]
+    #[case::down(Down, false)]
+    fn test_membership_state_is_gossip_partner(#[case] membership_state: MembershipState, #[case] expected: bool) {
+        assert_eq!(membership_state.is_gossip_partner(), expected);
+    }
+
+    #[rstest]
+    #[case::joining(Joining, false)]
+    #[case::weakly_up(WeaklyUp, false)]
+    #[case::up(Up, true)]
+    #[case::leaving(Leaving, true)]
+    #[case::exiting(Exiting, true)]
+    #[case::removed(Removed, false)]
+    #[case::down(Down, false)]
+    fn test_membership_state_is_leader_eligible(#[case] membership_state: MembershipState, #[case] expected: bool) {
+        assert_eq!(membership_state.is_leader_eligible(), expected);
+    }
+
+    #[rstest]
+    #[case::joining(Joining, false)]
+    #[case::weakly_up(WeaklyUp, false)]
+    #[case::up(Up, false)]
+    #[case::leaving(Leaving, false)]
+    #[case::exiting(Exiting, false)]
+    #[case::removed(Removed, true)]
+    #[case::down(Down, true)]
+    fn test_membership_state_is_terminal(#[case] membership_state: MembershipState, #[case] expected: bool) {
+        assert_eq!(membership_state.is_terminal(), expected);
     }
 }
