@@ -46,7 +46,7 @@ impl Messaging {
                 Err(anyhow!("registering a second message module for module id {:?}, replacing the first", message_module.id()))
             }
             Entry::Vacant(e) => {
-                let _ = e.insert(message_module);
+                e.insert(message_module);
                 Ok(())
             },
         }

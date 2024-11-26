@@ -127,7 +127,7 @@ impl  Gossip {
                 sb.hash(&mut hasher);
             }
 
-            let _ = nodes.insert(s.addr, hasher.finish());
+            nodes.insert(s.addr, hasher.finish());
             trace!("hashing {:?} with nonce {}: {}", s, nonce, nodes.get(&s.addr).unwrap());
         }
 

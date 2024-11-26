@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::iter::Extend;
+use crate::util::crdt::CrdtOrdering::{NeitherWasBigger, OtherWasBigger};
 
 pub trait Crdt {
     /// Merges 'other' into 'self', modifying 'self' in place. The function returns the
@@ -27,6 +28,7 @@ pub enum CrdtOrdering {
     NeitherWasBigger,
 }
 impl CrdtOrdering {
+    #[must_use]
     pub fn merge(&self, other: CrdtOrdering) -> CrdtOrdering {
         use CrdtOrdering::*;
 
@@ -41,8 +43,13 @@ impl CrdtOrdering {
         }
     }
 
+    #[must_use]
     pub fn merge_all(it: impl Iterator<Item = CrdtOrdering>) -> Option<CrdtOrdering> {
         it.reduce(|a, b| a.merge(b))
+    }
+
+    pub fn was_self_modified(&self) -> bool {
+        *self == OtherWasBigger || *self == NeitherWasBigger
     }
 }
 
@@ -120,5 +127,14 @@ mod test {
 
         assert_eq!(a, merged.iter().collect());
         assert_eq!(actual_ordering, ordering);
+    }
+
+    #[rstest]
+    #[case(Equal, false)]
+    #[case(SelfWasBigger, false)]
+    #[case(OtherWasBigger, true)]
+    #[case(NeitherWasBigger, true)]
+    fn test_was_self_modified(#[case] ordering: CrdtOrdering, #[case] expected: bool) {
+        assert_eq!(ordering.was_self_modified(), expected);
     }
 }

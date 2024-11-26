@@ -144,7 +144,7 @@ impl HeartbeatRegistry {
             Entry::Vacant(e) => {
                 let mut tracker = HeartbeatTracker::new(self.config.clone());
                 tracker.on_heartbeat_roundtrip(rtt_nanos);
-                let _ = e.insert(tracker);
+                e.insert(tracker);
             }
         }
 
@@ -241,6 +241,8 @@ impl HeartbeatTracker {
             let coefficient = 1.0 / (sigma * (2.0 * PI).sqrt());
             coefficient * exponent.exp()
         }
+
+        //TODO logarithm?
 
         let g = gaussian(millis_overdue, rtt_std_dev_millis);
         if g < 1.0 / Self::MAX_PHI {

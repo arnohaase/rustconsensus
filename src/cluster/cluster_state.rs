@@ -100,7 +100,7 @@ impl ClusterState {
             seen_by: vec![self.myself].into_iter().collect(),
         };
 
-        let _ = self.nodes_with_state.insert(addr, node_state);
+        self.nodes_with_state.insert(addr, node_state);
     }
 
     pub async fn promote_myself_to_up(&mut self) {
@@ -199,35 +199,9 @@ impl ClusterState {
 
     /// This is the internal handler for all changes to a given node state. It updates the 'seen by'
     ///  set and sends change events.
-    async fn state_changed(myself: NodeAddr, old_state: Option<MembershipState>, s: &mut NodeState, crdt_ordering: CrdtOrdering, other_seen_by: &BTreeSet<NodeAddr>, event_notifier: Arc<ClusterEventNotifier>) {
-        use CrdtOrdering::*;
-
-        if crdt_ordering == SelfWasBigger {
-            // the gossip partner has an older version of this node's data, so we ignore its 'seen
-            //  by' set
+    async fn state_changed(old_state: Option<MembershipState>, s: &mut NodeState, was_self_modified: bool, event_notifier: Arc<ClusterEventNotifier>) {
+        if !was_self_modified {
             return;
-        }
-
-        if crdt_ordering == Equal {
-            // both nodes share the same view on a node's data, so we merge their 'seen by' sets
-            let seen_by_size_before = s.seen_by.len();
-            for &addr in other_seen_by {
-                let _ = s.seen_by.insert(addr);
-            }
-            if s.seen_by.len() > seen_by_size_before {
-                // we send out events only when the 'seen by' set increased - there is no other
-                //  change after all
-                event_notifier.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr: s.addr }));
-            }
-            return;
-        }
-
-        s.seen_by.clear();
-        s.seen_by.insert(myself);
-        if crdt_ordering == OtherWasBigger {
-            for &addr in other_seen_by {
-                s.seen_by.insert(addr);
-            }
         }
 
         event_notifier.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr: s.addr }));
@@ -269,8 +243,10 @@ impl ClusterState {
                 } {
                     debug!("leader action: promoting {:?} to {:?}", s.addr, new_state);
                     s.membership_state = new_state;
-                    Self::state_changed(self.myself, Some(old_state), s, CrdtOrdering::NeitherWasBigger, &Default::default(), self.event_notifier.clone()).await;
-                    if !new_state.is_gossip_partner() {
+                    s.seen_by.clear();
+                    s.seen_by.insert(self.myself);
+                    Self::state_changed(Some(old_state), s, true, self.event_notifier.clone()).await;
+                    if old_state.is_gossip_partner() && !new_state.is_gossip_partner() {
                         nodes_removed_from_gossip.push(s.addr);
                     }
                 }
@@ -297,18 +273,17 @@ impl ClusterState {
             Entry::Occupied(mut e) => {
                 trace!("merging external node state for {:?} into existing state", state.addr);
                 let old_state = e.get().membership_state;
-                let crdt_ordering = e.get_mut().merge(&state);
-                Self::state_changed(self.myself, Some(old_state), e.get_mut(), crdt_ordering, &state.seen_by, self.event_notifier.clone()).await;
+                let was_self_changed = e.get_mut().merge(&state);
+                Self::state_changed(Some(old_state), e.get_mut(), was_self_changed, self.event_notifier.clone()).await;
                 if old_state.is_gossip_partner() && !state.membership_state.is_gossip_partner() {
                     self.on_node_removed_from_gossip(&state.addr);
                 }
             }
             Entry::Vacant(e) => {
                 trace!("merging external node state for {:?}: registering previously unknown node locally", state.addr);
-                let other_seen_by = state.seen_by;
                 state.seen_by = Default::default();
 
-                Self::state_changed(self.myself, None, &mut state, CrdtOrdering::OtherWasBigger, &other_seen_by, self.event_notifier.clone()).await;
+                Self::state_changed(None, &mut state, true, self.event_notifier.clone()).await;
 
                 let new_state = state.membership_state;
                 let addr = state.addr;
@@ -467,19 +442,21 @@ impl NodeState {
             .all(|r| r.is_reachable)
     }
 
-    pub fn merge(&mut self, other: &NodeState) -> CrdtOrdering {
+    /// returns a flag whether 'self' was modified in any way
+    #[must_use]
+    pub fn merge(&mut self, other: &NodeState) -> bool {
         assert_eq!(self.addr, other.addr);
 
-        let mut result = CrdtOrdering::Equal;
+        let mut result_ordering = CrdtOrdering::Equal;
 
         let membership_state_result = self.membership_state.merge_from(&other.membership_state);
-        result = result.merge(membership_state_result);
+        result_ordering = result_ordering.merge(membership_state_result);
 
         let roles_result = self.roles.merge_from(&other.roles);
         if roles_result != CrdtOrdering::Equal {
             warn!("different roles when merging gossip state for node {:?} - merged and proceeding, but this is a bug", self.addr);
         }
-        result = result.merge(roles_result);
+        result_ordering = result_ordering.merge(roles_result);
 
         for (addr, r_self) in self.reachability.iter_mut() {
             if let Some(r_other) = other.reachability.get(addr) {
@@ -487,7 +464,7 @@ impl NodeState {
                     Ordering::Less => {
                         r_self.counter_of_reporter = r_other.counter_of_reporter;
                         r_self.is_reachable = r_other.is_reachable;
-                        result.merge(CrdtOrdering::OtherWasBigger);
+                        result_ordering = result_ordering.merge(CrdtOrdering::OtherWasBigger);
                     }
                     Ordering::Equal => {
                         if r_self.is_reachable != r_other.is_reachable {
@@ -495,12 +472,12 @@ impl NodeState {
                         }
                     }
                     Ordering::Greater => {
-                        result.merge(CrdtOrdering::SelfWasBigger);
+                        result_ordering = result_ordering.merge(CrdtOrdering::SelfWasBigger);
                     }
                 }
             }
             else {
-                result.merge(CrdtOrdering::SelfWasBigger);
+                result_ordering = result_ordering.merge(CrdtOrdering::SelfWasBigger);
             }
         }
 
@@ -510,11 +487,29 @@ impl NodeState {
             .collect::<Vec<_>>();
 
         for (addr, r) in reporters_only_in_other {
-            let _ = self.reachability.insert(addr, r);
-            result.merge(CrdtOrdering::OtherWasBigger);
+            self.reachability.insert(addr, r);
+            result_ordering = result_ordering.merge(CrdtOrdering::OtherWasBigger);
         }
 
-        result
+        match result_ordering {
+            CrdtOrdering::SelfWasBigger => {
+            }
+            CrdtOrdering::Equal => {
+                for &s in &other.seen_by {
+                    self.seen_by.insert(s);
+                }
+            }
+            CrdtOrdering::OtherWasBigger => {
+                self.seen_by = other.seen_by.clone();
+                self.seen_by.insert(self.addr);
+            }
+            CrdtOrdering::NeitherWasBigger => {
+                self.seen_by.clear();
+                self.seen_by.insert(self.addr);
+            }
+        }
+
+        result_ordering.was_self_modified()
     }
 }
 
@@ -629,10 +624,12 @@ mod test {
     use rstest::rstest;
 
     use MembershipState::*;
+    use CrdtOrdering::*;
 
     use crate::cluster::cluster_config::ClusterConfig;
     use crate::cluster::cluster_events::ClusterEventNotifier;
     use crate::messaging::node_addr::NodeAddr;
+    use crate::node_state;
 
     use super::*;
 
@@ -748,13 +745,58 @@ mod test {
     }
 
     #[test]
-    fn test_node_state_is_reachable() {
-        todo!()
+    fn test_lazy_counter_version() {
+        let self_addr = SocketAddr::from_str("127.0.0.1:1234").unwrap();
+        let myself = NodeAddr::from(self_addr);
+        let config = Arc::new(ClusterConfig::new(self_addr));
+        let cluster_event_queue = Arc::new(ClusterEventNotifier::new());
+
+        let mut cluster_state = ClusterState::new(
+            myself,
+            config,
+            cluster_event_queue,
+        );
+        cluster_state.version_counter = 24;
+
+        let counter = LazyCounterVersion::new(&cluster_state);
+        counter.finalize(&mut cluster_state);
+        assert_eq!(24, cluster_state.version_counter);
+
+        let mut counter = LazyCounterVersion::new(&cluster_state);
+        assert_eq!(25, counter.get_version());
+        assert_eq!(24, cluster_state.version_counter);
+        counter.finalize(&mut cluster_state);
+        assert_eq!(25, cluster_state.version_counter);
     }
 
-    #[test]
-    fn test_node_state_merge() {
-        todo!()
+    #[rstest]
+    #[case::two_reachable     (node_state!(1['a']:Up->[2:true@7,  3:true@5 ]@[1,2,3]), true)]
+    #[case::one_reachable     (node_state!(1['a']:Up->[2:true@7            ]@[1,2,3]), true)]
+    #[case::one_unreachable   (node_state!(1['a']:Up->[2:false@7           ]@[1,2,3]), false)]
+    #[case::first_unreachable (node_state!(1['a']:Up->[2:false@7, 3:true@5 ]@[1,2,3]), false)]
+    #[case::second_unreachable(node_state!(1['a']:Up->[2:true@7,  3:false@5]@[1,2,3]), false)]
+    #[case::both_unreachable  (node_state!(1['a']:Up->[2:false@7, 3:false@5]@[1,2,3]), false)]
+    #[case::empty_reachability(node_state!(1['a']:Up->[                    ]@[1,2,3]), true)]
+    fn test_node_state_is_reachable(#[case] node_state: NodeState, #[case] expected: bool) {
+        assert_eq!(node_state.is_reachable(), expected);
+    }
+
+    #[rstest]
+    #[case::equal(node_state!(1["a"]:Up->[2:true@7]@[1,2]), node_state!(1["a"]:Up->[2:true@7]@[1,2]), node_state!(1["a"]:Up->[2:true@7]@[1,2]), false)]
+    #[case::equal_merge_seen_by(node_state!(1["a"]:Up->[2:true@7]@[1,2]), node_state!(1["a"]:Up->[2:true@7]@[3]), node_state!(1["a"]:Up->[2:true@7]@[1,2,3]), false)]
+    #[case::joining_up(node_state!(1[]:Joining->[]@[1,2]), node_state!(1[]:Up->[]@[3]), node_state!(1[]:Up->[]@[1,3]), true)]
+    #[case::up_joining(node_state!(1[]:Up->[]@[1,2]), node_state!(1[]:Joining->[]@[3]), node_state!(1[]:Up->[]@[1,2]), false)]
+    #[case::roles(node_state!(1["a"]:Up->[]@[1,2]), node_state!(1["b"]:Up->[]@[3]), node_state!(1["a","b"]:Up->[]@[1]), true)]
+    #[case::reachability_added_node(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:true@5,3:false@6]@[3]), node_state!(1[]:Up->[2:true@5,3:false@6]@[1,3]), true)]
+    #[case::reachability_missing_node(node_state!(1[]:Up->[2:true@5,3:false@9]@[1,2]), node_state!(1[]:Up->[2:true@5]@[3]), node_state!(1[]:Up->[2:true@5,3:false@9]@[1,2]), false)]
+    #[case::reachability_higher_version(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:false@6]@[3]), node_state!(1[]:Up->[2:false@6]@[1,3]), true)] //TODO combinations -> neither
+    #[case::reachability_lower_version(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:false@4]@[3]), node_state!(1[]:Up->[2:true@5]@[1,2]), false)]
+    //TODO reachability: node version higher / lower <-> same / different is_reachable
+    //TODO reachability: same version, different is_reachable (should not happen but...)
+    fn test_node_state_merge(#[case] mut first: NodeState, #[case] second: NodeState, #[case] expected_merged: NodeState, #[case] expected_was_self_changed: bool) {
+        let ordering = first.merge(&second);
+        assert_eq!(ordering, expected_was_self_changed);
+        assert_eq!(first, expected_merged);
     }
 
     #[rstest]

@@ -162,7 +162,7 @@ impl GossipMessage {
                 1 => true,
                 b => return Err(anyhow!("invalid value for a boolean: {}", b)),
             };
-            let _ = reachability.insert(addr, NodeReachability {
+            reachability.insert(addr, NodeReachability {
                 counter_of_reporter,
                 is_reachable,
             });
@@ -202,7 +202,7 @@ impl GossipMessage {
         for _ in 0..num_nodes {
             let addr = NodeAddr::try_deser(&mut buf)?;
             let hash = buf.try_get_u64()?;
-            let _ = nodes.insert(addr, hash);
+            nodes.insert(addr, hash);
         }
 
         Ok(GossipMessage::GossipDetailedDigest(GossipDetailedDigestData {
