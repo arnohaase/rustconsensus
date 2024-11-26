@@ -469,6 +469,8 @@ impl NodeState {
                     Ordering::Equal => {
                         if r_self.is_reachable != r_other.is_reachable {
                             warn!("gossip inconsistency for heartbeat of node {:?} as seen from {:?}@{}: ", self.addr, addr, r_self.counter_of_reporter);
+                            r_self.is_reachable = false; // to facilitate eventual self-healing
+                            result_ordering = CrdtOrdering::NeitherWasBigger;
                         }
                     }
                     Ordering::Greater => {
@@ -789,10 +791,15 @@ mod test {
     #[case::roles(node_state!(1["a"]:Up->[]@[1,2]), node_state!(1["b"]:Up->[]@[3]), node_state!(1["a","b"]:Up->[]@[1]), true)]
     #[case::reachability_added_node(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:true@5,3:false@6]@[3]), node_state!(1[]:Up->[2:true@5,3:false@6]@[1,3]), true)]
     #[case::reachability_missing_node(node_state!(1[]:Up->[2:true@5,3:false@9]@[1,2]), node_state!(1[]:Up->[2:true@5]@[3]), node_state!(1[]:Up->[2:true@5,3:false@9]@[1,2]), false)]
-    #[case::reachability_higher_version(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:false@6]@[3]), node_state!(1[]:Up->[2:false@6]@[1,3]), true)] //TODO combinations -> neither
+    #[case::reachability_higher_version(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:false@6]@[3]), node_state!(1[]:Up->[2:false@6]@[1,3]), true)]
     #[case::reachability_lower_version(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:false@4]@[3]), node_state!(1[]:Up->[2:true@5]@[1,2]), false)]
-    //TODO reachability: node version higher / lower <-> same / different is_reachable
-    //TODO reachability: same version, different is_reachable (should not happen but...)
+    #[case::reachability_same_version(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:false@5]@[3]), node_state!(1[]:Up->[2:false@5]@[1]), true)]
+    #[case::reachability_same_version2(node_state!(1[]:Up->[2:false@5]@[1,2]), node_state!(1[]:Up->[2:true@5]@[3]), node_state!(1[]:Up->[2:false@5]@[1]), true)]
+    #[case::reachability_higher_lower_version(node_state!(1[]:Up->[2:false@5,3:false@5]@[1,2]), node_state!(1[]:Up->[2:true@4,3:true@6]@[3]), node_state!(1[]:Up->[2:false@5,3:true@6]@[1]), true)]
+    #[case::reachability_added_missing(node_state!(1[]:Up->[2:false@5]@[1,2]), node_state!(1[]:Up->[3:true@6]@[3]), node_state!(1[]:Up->[2:false@5,3:true@6]@[1]), true)]
+    #[case::state_and_reachability(node_state!(1[]:Up->[]@[1,2]), node_state!(1[]:Joining->[3:true@6]@[3]), node_state!(1[]:Up->[3:true@6]@[1]), true)]
+    #[case::state_and_roles(node_state!(1[]:Up->[]@[1,2]), node_state!(1["a"]:Joining->[]@[3]), node_state!(1["a"]:Up->[]@[1]), true)]
+    #[case::roles_and_reachability(node_state!(1["a"]:Up->[]@[1,2]), node_state!(1[]:Up->[3:true@6]@[3]), node_state!(1["a"]:Up->[3:true@6]@[1]), true)]
     fn test_node_state_merge(#[case] mut first: NodeState, #[case] second: NodeState, #[case] expected_merged: NodeState, #[case] expected_was_self_changed: bool) {
         let ordering = first.merge(&second);
         assert_eq!(ordering, expected_was_self_changed);
