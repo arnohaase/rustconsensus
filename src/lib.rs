@@ -6,7 +6,7 @@ pub mod test_util;
 
 #[cfg(test)]
 mod test {
-    use tracing::{error, Level};
+    use tracing::Level;
 
     #[ctor::ctor]
     fn init_test_logging() {

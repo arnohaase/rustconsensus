@@ -100,7 +100,9 @@ impl ClusterState {
             seen_by: vec![self.myself].into_iter().collect(),
         };
 
-        self.nodes_with_state.insert(addr, node_state);
+        if !self.nodes_with_state.contains_key(&addr) {
+            self.nodes_with_state.insert(addr, node_state);
+        }
     }
 
     pub async fn promote_myself_to_up(&mut self) {
@@ -266,29 +268,31 @@ impl ClusterState {
         }
     }
 
-    pub async fn merge_node_state(&mut self, mut state: NodeState) {
+    pub async fn merge_node_state(&mut self, node_state: NodeState) {
         let is_converged_before = self.is_converged();
 
-        match self.nodes_with_state.entry(state.addr) {
+        match self.nodes_with_state.entry(node_state.addr) {
             Entry::Occupied(mut e) => {
-                trace!("merging external node state for {:?} into existing state", state.addr);
+                trace!("merging external node state for {:?} into existing state", node_state.addr);
                 let old_state = e.get().membership_state;
-                let was_self_changed = e.get_mut().merge(&state);
+                let was_self_changed = e.get_mut().merge(&node_state);
+                e.get_mut().seen_by.insert(self.myself);
                 Self::state_changed(Some(old_state), e.get_mut(), was_self_changed, self.event_notifier.clone()).await;
-                if old_state.is_gossip_partner() && !state.membership_state.is_gossip_partner() {
-                    self.on_node_removed_from_gossip(&state.addr);
+                if old_state.is_gossip_partner() && !node_state.membership_state.is_gossip_partner() {
+                    self.on_node_removed_from_gossip(&node_state.addr);
                 }
             }
             Entry::Vacant(e) => {
-                trace!("merging external node state for {:?}: registering previously unknown node locally", state.addr);
-                state.seen_by = Default::default();
+                trace!("merging external node state for {:?}: registering previously unknown node locally", node_state.addr);
+                let mut node_state = node_state;
+                node_state.seen_by.insert(self.myself);
 
-                Self::state_changed(None, &mut state, true, self.event_notifier.clone()).await;
+                Self::state_changed(None, &mut node_state, true, self.event_notifier.clone()).await;
 
-                let new_state = state.membership_state;
-                let addr = state.addr;
-                e.insert(state);
-                if !new_state.is_gossip_partner() {
+                let new_membership_state = node_state.membership_state;
+                let addr = node_state.addr;
+                e.insert(node_state);
+                if !new_membership_state.is_gossip_partner() {
                     self.on_node_removed_from_gossip(&addr);
                 }
             }
@@ -454,7 +458,7 @@ impl NodeState {
 
         let roles_result = self.roles.merge_from(&other.roles);
         if roles_result != CrdtOrdering::Equal {
-            warn!("different roles when merging gossip state for node {:?} - merged and proceeding, but this is a bug", self.addr);
+            warn!("different roles when merging gossip state for node {:?} - merged and proceeding, but this is a bug somewhere in the distributed system", self.addr);
         }
         result_ordering = result_ordering.merge(roles_result);
 
@@ -503,11 +507,9 @@ impl NodeState {
             }
             CrdtOrdering::OtherWasBigger => {
                 self.seen_by = other.seen_by.clone();
-                self.seen_by.insert(self.addr);
             }
             CrdtOrdering::NeitherWasBigger => {
                 self.seen_by.clear();
-                self.seen_by.insert(self.addr);
             }
         }
 
@@ -624,14 +626,15 @@ mod test {
     use std::sync::Arc;
 
     use rstest::rstest;
+    use tokio::runtime::Runtime;
 
     use MembershipState::*;
-    use CrdtOrdering::*;
 
     use crate::cluster::cluster_config::ClusterConfig;
-    use crate::cluster::cluster_events::ClusterEventNotifier;
+    use crate::cluster::cluster_events::*;
     use crate::messaging::node_addr::NodeAddr;
     use crate::node_state;
+    use crate::test_util::test_node_addr_from_number;
 
     use super::*;
 
@@ -678,7 +681,41 @@ mod test {
 
     #[test]
     fn test_add_joiner() {
-        todo!()
+        let myself = test_node_addr_from_number(1);
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+
+        let joiner_addr = test_node_addr_from_number(5);
+        cluster_state.add_joiner(joiner_addr, ["a".to_string()].into());
+
+        assert_eq!(cluster_state.get_node_state(&joiner_addr), Some(&NodeState {
+            addr: joiner_addr,
+            membership_state: Joining,
+            roles: ["a".to_string()].into(),
+            reachability: Default::default(),
+            seen_by: [myself].into(),
+        }));
+    }
+
+    #[test]
+    fn test_add_joiner_pre_existing() {
+        let myself = test_node_addr_from_number(1);
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+
+        let joiner_addr = test_node_addr_from_number(5);
+
+        let pre_existing_state = NodeState {
+            addr: joiner_addr,
+            membership_state: Up,
+            roles: ["b".to_string()].into(),
+            reachability: Default::default(),
+            seen_by: [myself, test_node_addr_from_number(2)].into(),
+        };
+
+        cluster_state.nodes_with_state.insert(joiner_addr, pre_existing_state.clone());
+
+        cluster_state.add_joiner(joiner_addr, ["a".to_string()].into());
+
+        assert_eq!(cluster_state.get_node_state(&joiner_addr), Some(&pre_existing_state));
     }
 
     #[test]
@@ -732,12 +769,52 @@ mod test {
     }
 
     #[test]
-    fn test_do_leade_actions() {
+    fn test_do_leader_actions() {
         todo!()
     }
 
+    #[rstest]
+    #[case::add(None, node_state!(2[]:Joining->[]@[3]), node_state!(2[]:Joining->[]@[1,3]), true, false, true)]
+    #[case::same(Some(node_state!(2[]:Joining->[]@[1,3,4])), node_state!(2[]:Joining->[]@[1,3,4]), node_state!(2[]:Joining->[]@[1,3,4]), false, false, false)]
+    #[case::same_merge_seen_by(Some(node_state!(2[]:Joining->[]@[1,4])), node_state!(2[]:Joining->[]@[3]), node_state!(2[]:Joining->[]@[1,3,4]), false, false, false)]
+    #[case::older(Some(node_state!(2[]:Up->[]@[1,4])), node_state!(2[]:Joining->[]@[3]), node_state!(2[]:Up->[]@[1,4]), false, false, false)]
+    #[case::newer(Some(node_state!(2[]:Joining->[]@[1,4])), node_state!(2[]:Up->[]@[3]), node_state!(2[]:Up->[]@[1,3]), false, true, true)]
+    fn test_merge_node_state(#[case] prev: Option<NodeState>, #[case] new_state: NodeState, #[case] expected: NodeState, #[case] is_add: bool, #[case] is_state_change: bool, #[case] is_update: bool) {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let myself = test_node_addr_from_number(1);
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+
+            let mut event_receiver = cluster_state.event_notifier.subscribe();
+
+            if let Some(prev) = prev.clone() {
+                cluster_state.nodes_with_state.insert(prev.addr, prev);
+            }
+
+            cluster_state.merge_node_state(new_state).await;
+
+            assert_eq!(cluster_state.get_node_state(&expected.addr), Some(&expected));
+
+            if is_update {
+                let evt = event_receiver.try_recv().unwrap();
+                assert_eq!(evt, ClusterEvent::NodeUpdated(NodeUpdatedData { addr: expected.addr }));
+            }
+            if is_state_change {
+                let evt = event_receiver.try_recv().unwrap();
+                assert_eq!(evt, ClusterEvent::NodeStateChanged(NodeStateChangedData { addr: expected.addr, old_state: prev.unwrap().membership_state, new_state: expected.membership_state }));
+            }
+            if is_add {
+                let evt = event_receiver.try_recv().unwrap();
+                assert_eq!(evt, ClusterEvent::NodeAdded(NodeAddedData { addr: expected.addr, state: expected.membership_state }));
+            }
+            assert!(event_receiver.is_empty());
+        });
+    }
+
     #[test]
-    fn test_merge_node_state() {
+    fn test_merge_node_state_remove_from_gossip() {
+        //TODO node removed from gossip -> remove from 'seen by' in other nodes
+        //TODO what about 'unreachable' set?!
         todo!()
     }
 
@@ -786,20 +863,20 @@ mod test {
     #[rstest]
     #[case::equal(node_state!(1["a"]:Up->[2:true@7]@[1,2]), node_state!(1["a"]:Up->[2:true@7]@[1,2]), node_state!(1["a"]:Up->[2:true@7]@[1,2]), false)]
     #[case::equal_merge_seen_by(node_state!(1["a"]:Up->[2:true@7]@[1,2]), node_state!(1["a"]:Up->[2:true@7]@[3]), node_state!(1["a"]:Up->[2:true@7]@[1,2,3]), false)]
-    #[case::joining_up(node_state!(1[]:Joining->[]@[1,2]), node_state!(1[]:Up->[]@[3]), node_state!(1[]:Up->[]@[1,3]), true)]
+    #[case::joining_up(node_state!(1[]:Joining->[]@[1,2]), node_state!(1[]:Up->[]@[3]), node_state!(1[]:Up->[]@[3]), true)]
     #[case::up_joining(node_state!(1[]:Up->[]@[1,2]), node_state!(1[]:Joining->[]@[3]), node_state!(1[]:Up->[]@[1,2]), false)]
-    #[case::roles(node_state!(1["a"]:Up->[]@[1,2]), node_state!(1["b"]:Up->[]@[3]), node_state!(1["a","b"]:Up->[]@[1]), true)]
-    #[case::reachability_added_node(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:true@5,3:false@6]@[3]), node_state!(1[]:Up->[2:true@5,3:false@6]@[1,3]), true)]
+    #[case::roles(node_state!(1["a"]:Up->[]@[1,2]), node_state!(1["b"]:Up->[]@[3]), node_state!(1["a","b"]:Up->[]@[]), true)]
+    #[case::reachability_added_node(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:true@5,3:false@6]@[3]), node_state!(1[]:Up->[2:true@5,3:false@6]@[3]), true)]
     #[case::reachability_missing_node(node_state!(1[]:Up->[2:true@5,3:false@9]@[1,2]), node_state!(1[]:Up->[2:true@5]@[3]), node_state!(1[]:Up->[2:true@5,3:false@9]@[1,2]), false)]
-    #[case::reachability_higher_version(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:false@6]@[3]), node_state!(1[]:Up->[2:false@6]@[1,3]), true)]
+    #[case::reachability_higher_version(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:false@6]@[3]), node_state!(1[]:Up->[2:false@6]@[3]), true)]
     #[case::reachability_lower_version(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:false@4]@[3]), node_state!(1[]:Up->[2:true@5]@[1,2]), false)]
-    #[case::reachability_same_version(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:false@5]@[3]), node_state!(1[]:Up->[2:false@5]@[1]), true)]
-    #[case::reachability_same_version2(node_state!(1[]:Up->[2:false@5]@[1,2]), node_state!(1[]:Up->[2:true@5]@[3]), node_state!(1[]:Up->[2:false@5]@[1]), true)]
-    #[case::reachability_higher_lower_version(node_state!(1[]:Up->[2:false@5,3:false@5]@[1,2]), node_state!(1[]:Up->[2:true@4,3:true@6]@[3]), node_state!(1[]:Up->[2:false@5,3:true@6]@[1]), true)]
-    #[case::reachability_added_missing(node_state!(1[]:Up->[2:false@5]@[1,2]), node_state!(1[]:Up->[3:true@6]@[3]), node_state!(1[]:Up->[2:false@5,3:true@6]@[1]), true)]
-    #[case::state_and_reachability(node_state!(1[]:Up->[]@[1,2]), node_state!(1[]:Joining->[3:true@6]@[3]), node_state!(1[]:Up->[3:true@6]@[1]), true)]
-    #[case::state_and_roles(node_state!(1[]:Up->[]@[1,2]), node_state!(1["a"]:Joining->[]@[3]), node_state!(1["a"]:Up->[]@[1]), true)]
-    #[case::roles_and_reachability(node_state!(1["a"]:Up->[]@[1,2]), node_state!(1[]:Up->[3:true@6]@[3]), node_state!(1["a"]:Up->[3:true@6]@[1]), true)]
+    #[case::reachability_same_version(node_state!(1[]:Up->[2:true@5]@[1,2]), node_state!(1[]:Up->[2:false@5]@[3]), node_state!(1[]:Up->[2:false@5]@[]), true)]
+    #[case::reachability_same_version2(node_state!(1[]:Up->[2:false@5]@[1,2]), node_state!(1[]:Up->[2:true@5]@[3]), node_state!(1[]:Up->[2:false@5]@[]), true)]
+    #[case::reachability_higher_lower_version(node_state!(1[]:Up->[2:false@5,3:false@5]@[1,2]), node_state!(1[]:Up->[2:true@4,3:true@6]@[3]), node_state!(1[]:Up->[2:false@5,3:true@6]@[]), true)]
+    #[case::reachability_added_missing(node_state!(1[]:Up->[2:false@5]@[1,2]), node_state!(1[]:Up->[3:true@6]@[3]), node_state!(1[]:Up->[2:false@5,3:true@6]@[]), true)]
+    #[case::state_and_reachability(node_state!(1[]:Up->[]@[1,2]), node_state!(1[]:Joining->[3:true@6]@[3]), node_state!(1[]:Up->[3:true@6]@[]), true)]
+    #[case::state_and_roles(node_state!(1[]:Up->[]@[1,2]), node_state!(1["a"]:Joining->[]@[3]), node_state!(1["a"]:Up->[]@[]), true)]
+    #[case::roles_and_reachability(node_state!(1["a"]:Up->[]@[1,2]), node_state!(1[]:Up->[3:true@6]@[3]), node_state!(1["a"]:Up->[3:true@6]@[]), true)]
     fn test_node_state_merge(#[case] mut first: NodeState, #[case] second: NodeState, #[case] expected_merged: NodeState, #[case] expected_was_self_changed: bool) {
         let ordering = first.merge(&second);
         assert_eq!(ordering, expected_was_self_changed);
