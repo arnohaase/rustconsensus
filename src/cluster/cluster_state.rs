@@ -126,6 +126,7 @@ impl ClusterState {
         if let Some(state) = self.get_node_state(&addr) {
             let mut state = state.clone();
             state.membership_state = new_state;
+            state.seen_by = [self.myself].into();
             self.merge_node_state(state).await;
         }
     }
@@ -729,9 +730,34 @@ mod test {
         todo!()
     }
 
-    #[test]
-    fn test_promote_node() {
-        todo!()
+    #[rstest]
+    #[case::joining_up_1(vec![node_state!(1[]:Joining->[]@[1])], 1, Up, Some(node_state!(1[]:Up->[]@[1])), vec![test_updated_evt(1), test_state_evt(1, Joining, Up)])]
+    #[case::joining_up_2(vec![node_state!(1[]:Joining->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], 1, Up, Some(node_state!(1[]:Up->[]@[1])), vec![test_updated_evt(1), test_state_evt(1, Joining, Up)])]
+    #[case::smaller_state(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], 1, Joining, Some(node_state!(1[]:Up->[]@[1,2])), vec![])]
+    #[case::same_state(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], 1, Up, Some(node_state!(1[]:Up->[]@[1,2])), vec![])]
+    #[case::missing_node(vec![node_state!(1[]:Up->[]@[1,2])], 2, Up, None, vec![])]
+    fn test_promote_node(#[case] nodes: Vec<NodeState>, #[case] addr: u16, #[case] to_state: MembershipState, #[case] new_state: Option<NodeState>, #[case] events: Vec<ClusterEvent>) {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let myself = test_node_addr_from_number(1);
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            for n in nodes {
+                cluster_state.nodes_with_state.insert(n.addr, n);
+            }
+            let mut event_subscriber = cluster_state.event_notifier.subscribe();
+
+            let addr = test_node_addr_from_number(addr);
+
+            cluster_state.promote_node(addr, to_state).await;
+
+            assert_eq!(cluster_state.get_node_state(&addr).cloned(), new_state);
+
+            for expected in events {
+                let actual = event_subscriber.try_recv().unwrap();
+                assert_eq!(actual, expected);
+            }
+            assert!(event_subscriber.is_empty());
+        });
     }
 
     #[test]
