@@ -55,7 +55,7 @@ pub struct ClusterState {
     /// we track the 'leader' even if there is no convergence (e.g. if it is unreachable) for convenience
     ///  of applications built on top of the cluster. Leader actions of the cluster are performed only
     ///  when convergence is reached.
-    leader: Option<NodeAddr>,
+    cached_old_leader: Option<NodeAddr>,
 }
 impl ClusterState {
     pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_event_queue: Arc<ClusterEventNotifier>) -> ClusterState {
@@ -73,7 +73,7 @@ impl ClusterState {
             nodes_with_state,
             event_notifier: cluster_event_queue,
             version_counter: 0,
-            leader: None,
+            cached_old_leader: None,
         }
     }
 
@@ -146,27 +146,7 @@ impl ClusterState {
         //TODO shut down this node if state is 'down' or 'Removed' + special handling if this is the last node
     }
 
-    /// returns the node that is the leader in the current topology once state converges (which
-    ///  can only happen if all nodes are reachable)
-    async fn update_leader_candidate(&mut self) {
-        //TODO does this require more sophisticated handling? Give preference to some states
-        // over others? Or does the timestamp of joining take care of that well enough?
-
-        let new_leader = Self::calc_leader_candidate(self.config.as_ref(), self.nodes_with_state.values())
-            .map(|s| s.addr);
-
-        if new_leader != self.leader {
-            if let Some(l) = new_leader {
-                info!("new cluster leader: {:?}", l);
-            }
-            self.send_event(ClusterEvent::LeaderChanged(LeaderChangedData {
-                old_leader: self.leader,
-                new_leader,
-            }));
-            self.leader = new_leader;
-        }
-    }
-
+    /// extracted as API for use by [super::heartbeat::downing_strategy::DowningStrategy] implementations
     pub fn calc_leader_candidate<'a>(config: &ClusterConfig, nodes: impl Iterator<Item = &'a NodeState>) -> Option<&'a NodeState> {
         nodes
             .filter(|s| s.membership_state.is_leader_eligible())
@@ -182,12 +162,29 @@ impl ClusterState {
             .min_by_key(|s| s.addr)
     }
 
-    pub fn get_leader(&self) -> Option<NodeAddr> {
-        self.leader
+    /// returns the current leader, or None if there is no leader at the moment (e.g. because of
+    ///  unreachable nodes that prevent convergence)
+    pub fn get_leader(&mut self) -> Option<NodeAddr> {
+        if !self.is_converged() {
+            return None;
+        }
+
+        if let Some(new_leader_state) = Self::calc_leader_candidate(self.config.as_ref(), self.node_states()) {
+            let new_leader = new_leader_state.addr;
+            if self.cached_old_leader != Some(new_leader) {
+                info!("new cluster leader: {:?}", new_leader);
+                self.send_event(ClusterEvent::LeaderChanged(LeaderChangedData { new_leader }));
+                self.cached_old_leader = Some(new_leader);
+            }
+            Some(new_leader)
+        }
+        else {
+            None
+        }
     }
 
-    pub fn am_i_leader(&self) -> bool {
-        self.leader == Some(self.myself)
+    pub fn am_i_leader(&mut self) -> bool {
+        self.get_leader() == Some(self.myself)
     }
 
     pub fn is_converged(&self) -> bool {
@@ -230,16 +227,14 @@ impl ClusterState {
     async fn do_leader_actions(&mut self) {
         use MembershipState::*;
 
-        self.update_leader_candidate().await;
-
-        if self.am_i_leader() && self.is_converged() {
+        if self.am_i_leader() {
             let mut nodes_removed_from_gossip = Vec::new();
 
             for s in self.nodes_with_state.values_mut() {
                 let old_state = s.membership_state;
                 if let Some(new_state) = match old_state {
                     Joining | WeaklyUp => Some(Up),
-                    Leaving => Some(Exiting),
+                    Leaving => Some(Exiting), //TODO grace period
                     Exiting | Down => Some(Removed),
                     _ => None
                 } {
@@ -669,8 +664,7 @@ mod test {
 
         assert_eq!(cluster_state.myself(), myself);
         assert_eq!(cluster_state.version_counter, 0);
-        assert_eq!(cluster_state.leader, None);
-        assert_eq!(cluster_state.get_leader(), None);
+        assert_eq!(cluster_state.cached_old_leader, None);
         assert_eq!(
             cluster_state.nodes_with_state,
             BTreeMap::from([(myself, node_state.clone())]),
@@ -745,28 +739,77 @@ mod test {
         todo!()
     }
 
-    #[test]
-    fn test_promote_calc_leader_candidate() {
-        todo!()
+    #[rstest]
+    #[case::empty(vec![], true)]
+    #[case::converged_1(vec![node_state!(1[]:Up->[]@[1])], true)]
+    #[case::converged_2(vec![node_state!(1[]:Up->[]@[1,2]),node_state!(2[]:Up->[]@[1,2]),], true)]
+    #[case::converged_3(vec![node_state!(1[]:Up->[]@[1,2,3]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], true)]
+    #[case::joining_counts(vec![node_state!(1[]:Joining->[]@[1,2]),node_state!(2[]:Up->[]@[1,2])], true)]
+    #[case::joining_negative_1(vec![node_state!(1[]:Joining->[]@[1,2]),node_state!(2[]:Up->[]@[2])], false)]
+    #[case::joining_negative_2(vec![node_state!(1[]:Joining->[]@[2]),node_state!(2[]:Up->[]@[2])], false)]
+    #[case::down(vec![node_state!(1[]:Down->[]@[2]),node_state!(2[]:Up->[]@[2])], true)]
+    #[case::leaving(vec![node_state!(1[]:Leaving->[]@[1,2]),node_state!(2[]:Up->[]@[1,2])], true)]
+    #[case::exiting(vec![node_state!(1[]:Exiting->[]@[1,2]),node_state!(2[]:Up->[]@[1,2])], true)]
+    #[case::removed(vec![node_state!(1[]:Removed->[]@[2]),node_state!(2[]:Up->[]@[2])], true)]
+    fn test_is_converged(#[case] nodes: Vec<NodeState>, #[case] expected: bool) {
+        let myself = test_node_addr_from_number(1);
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+        for n in nodes {
+            cluster_state.nodes_with_state.insert(n.addr, n);
+        }
+
+        assert_eq!(cluster_state.is_converged(), expected);
     }
 
-    #[test]
-    fn test_promote_update_leader_candidate() {
-        todo!()
-    }
+    #[rstest]
+    #[case::empty(vec![], true, None, None, false)]
+    #[case::regular_2(vec![node_state!(1[]:Up->[]@[1,2]),node_state!(2[]:Up->[]@[1,2])], true, Some(1), None, true)]
+    #[case::regular_3(vec![node_state!(1[]:Up->[]@[1,2,3]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], true, Some(1), None, true)]
+    #[case::regular_3_same_leader(vec![node_state!(1[]:Up->[]@[1,2,3]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], true, Some(1), Some(1), false)]
+    #[case::regular_3_new_leader(vec![node_state!(1[]:Up->[]@[1,2,3]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], true, Some(1), Some(2), true)]
+    #[case::joining(vec![node_state!(1[]:Joining->[]@[1,2,3]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], true, Some(2), None, true)]
+    #[case::joining_same_leader(vec![node_state!(1[]:Joining->[]@[1,2,3]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], true, Some(2), Some(2), false)]
+    #[case::joining_new_leader(vec![node_state!(1[]:Joining->[]@[1,2,3]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], true, Some(2), Some(3), true)]
+    #[case::not_converged_1(vec![node_state!(1[]:Up->[]@[1,2]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], false, Some(1), None, false)]
+    #[case::not_converged_2(vec![node_state!(1[]:Joining->[]@[1,2]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], false, Some(2), None, false)]
+    #[case::down(vec![node_state!(1[]:Down->[]@[2,3]),node_state!(2[]:Up->[]@[2,3]),node_state!(3[]:Up->[]@[2,3])], true, Some(2), None, true)]
+    #[case::leaving(vec![node_state!(1[]:Leaving->[]@[1,2,3]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], true, Some(1), None, true)]
+    #[case::leaving_negative(vec![node_state!(1[]:Leaving->[]@[2,3]),node_state!(2[]:Up->[]@[2,3]),node_state!(3[]:Up->[]@[2,3])], false, Some(1), None, false)]
+    #[case::exiting(vec![node_state!(1[]:Exiting->[]@[1,2,3]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], true, Some(1), None, true)]
+    #[case::exiting_negative(vec![node_state!(1[]:Exiting->[]@[2,3]),node_state!(2[]:Up->[]@[2,3]),node_state!(3[]:Up->[]@[2,3])], false, Some(1), None, false)]
+    #[case::removed(vec![node_state!(1[]:Removed->[]@[2,3]),node_state!(2[]:Up->[]@[2,3]),node_state!(3[]:Up->[]@[2,3])], true, Some(2), None, true)]
+    fn test_get_leader(#[case] nodes: Vec<NodeState>, #[case] is_converged: bool, #[case] leader_candidate: Option<u16>, #[case] prev_leader: Option<u16>, #[case] is_event_expected: bool) {
+        let leader_candidate = leader_candidate.map(|n| test_node_addr_from_number(n));
 
-    #[test]
-    fn test_get_leader() {
-        todo!()
+        let myself = test_node_addr_from_number(1);
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+        for n in nodes {
+            cluster_state.nodes_with_state.insert(n.addr, n);
+        }
+        cluster_state.cached_old_leader = prev_leader.map(|n| test_node_addr_from_number(n));
+
+        let mut event_subscriber = cluster_state.event_notifier.subscribe();
+
+        assert_eq!(
+            ClusterState::calc_leader_candidate(cluster_state.config.as_ref(), cluster_state.node_states())
+                .map(|s| s.addr),
+            leader_candidate,
+        );
+        assert_eq!(cluster_state.is_converged(), is_converged);
+        assert_eq!(cluster_state.get_leader(), if is_converged { leader_candidate } else { None });
+
+        if is_event_expected {
+            assert_eq!(
+                event_subscriber.try_recv().unwrap(),
+                ClusterEvent::LeaderChanged(LeaderChangedData {
+                    new_leader: leader_candidate.unwrap()
+                })
+            );
+        }
     }
 
     #[test]
     fn test_am_i_leader() {
-        todo!()
-    }
-
-    #[test]
-    fn test_is_converged() {
         todo!()
     }
 
@@ -777,6 +820,21 @@ mod test {
 
     #[test]
     fn test_do_leader_actions() {
+
+
+        // update leader candidate
+
+        // am i leader
+
+        // is converged?
+
+
+        // promote joining + weakly up -> up
+        // promote leaving -> exiting
+        // promote exiting / down -> removed
+
+        // removed from gossip -> clean up seen_by sets
+
         todo!()
     }
 

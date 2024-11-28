@@ -35,8 +35,7 @@ pub struct NodeRemovedData {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LeaderChangedData {
-    pub old_leader: Option<NodeAddr>,
-    pub new_leader: Option<NodeAddr>,
+    pub new_leader: NodeAddr,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
