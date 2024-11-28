@@ -311,6 +311,7 @@ impl ClusterState {
     }
 
     pub async fn update_current_reachability(&mut self, reachability: &BTreeMap<NodeAddr, bool>) {
+        trace!("updating reachability from myself to {:?}", reachability);
         let mut lazy_version_counter = LazyCounterVersion::new(self);
 
         {
@@ -320,10 +321,13 @@ impl ClusterState {
             for s in self.nodes_with_state.values_mut()
                 .filter(|s| !reachability.contains_key(&s.addr))
             {
+                let was_reachable = s.is_reachable();
+
                 // mark nodes as 'reachable' that were previously tracked for heartbeat by this node
                 //  but are not tracked anymore (due to a node joining or unreachable nodes in between
                 //  becoming reachable)
                 if let Some(r) = s.reachability.get_mut(&self.myself) {
+                    trace!("node now has no reachability from myself: {:?}", s.addr);
                     if !r.is_reachable {
                         r.is_reachable = true;
                         r.counter_of_reporter = lazy_version_counter.get_version();
@@ -336,7 +340,7 @@ impl ClusterState {
                         updated_nodes.push(s.addr);
                     }
 
-                    if s.is_reachable() {
+                    if was_reachable != s.is_reachable() {
                         // it was not reachable previously, so this means the heartbeat changed
                         reachablility_changed_nodes.push(s.addr);
                     }
@@ -347,6 +351,7 @@ impl ClusterState {
                 self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr }));
             }
             for addr in reachablility_changed_nodes {
+                // removing reachability information can only change reachability from false to true
                 self.send_event(ClusterEvent::ReachabilityChanged(ReachabilityChangedData {
                     addr,
                     old_is_reachable: false,
@@ -358,6 +363,8 @@ impl ClusterState {
         for (&addr, &reachable) in reachability {
             if let Some(node) = self.nodes_with_state.get_mut(&addr) {
                 let old_is_reachable = node.is_reachable();
+
+                trace!("pre-existing reachability {} for node {:?} (from myself)", old_is_reachable, addr);
 
                 let was_updated = match node.reachability.entry(self.myself) {
                     Entry::Occupied(mut e) => {
@@ -634,7 +641,7 @@ mod test {
     use crate::cluster::cluster_events::*;
     use crate::messaging::node_addr::NodeAddr;
     use crate::node_state;
-    use crate::test_util::test_node_addr_from_number;
+    use crate::test_util::*;
 
     use super::*;
 
@@ -811,16 +818,150 @@ mod test {
         });
     }
 
-    #[test]
-    fn test_merge_node_state_remove_from_gossip() {
-        //TODO node removed from gossip -> remove from 'seen by' in other nodes
-        //TODO what about 'unreachable' set?!
-        todo!()
+    #[rstest]
+    #[case(Down, true)]
+    #[case(Down, false)]
+    #[case(Removed, true)]
+    #[case(Removed, false)]
+    fn test_merge_node_state_remove_from_gossip(#[case] terminal_state: MembershipState, #[case] present_before_merge: bool) {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let myself = test_node_addr_from_number(1);
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+
+            // node 3 is in node 2's 'seen by' set
+            cluster_state.merge_node_state(NodeState {
+                addr: test_node_addr_from_number(2),
+                membership_state: Up,
+                roles: Default::default(),
+                reachability: Default::default(),
+                seen_by: [test_node_addr_from_number(1), test_node_addr_from_number(3)].into(),
+            }).await;
+
+            if present_before_merge {
+                // initial data for node 3: up
+                cluster_state.merge_node_state(NodeState {
+                    addr: test_node_addr_from_number(3),
+                    membership_state: Up,
+                    roles: Default::default(),
+                    reachability: Default::default(),
+                    seen_by: [test_node_addr_from_number(1)].into(),
+                }).await;
+            }
+
+            assert_eq!(
+                cluster_state.nodes_with_state.get(&test_node_addr_from_number(2))
+                    .unwrap()
+                    .seen_by,
+                BTreeSet::from([test_node_addr_from_number(1), test_node_addr_from_number(3)])
+            );
+
+            // promote node 3 to terminal state -> should remove it from node 2's 'seen by' set
+            cluster_state.merge_node_state(NodeState {
+                addr: test_node_addr_from_number(3),
+                membership_state: terminal_state,
+                roles: Default::default(),
+                reachability: Default::default(),
+                seen_by: [test_node_addr_from_number(1)].into(),
+            }).await;
+
+            assert_eq!(
+                cluster_state.nodes_with_state.get(&test_node_addr_from_number(2))
+                    .unwrap()
+                    .seen_by,
+                BTreeSet::from([test_node_addr_from_number(1)])
+            );
+        })
     }
 
-    #[test]
-    fn test_update_current_reachability() {
-        todo!()
+    #[rstest]
+    #[case::empty(vec![], vec![], vec![], 8, vec![])]
+    #[case::same_1_true(vec![(2,Some(true))], vec![(2,true)], vec![(2,(5,true))], 8, vec![])]
+    #[case::same_1_false(vec![(2,Some(false))], vec![(2,false)], vec![(2,(5,false))], 8, vec![])]
+    #[case::same_2(vec![(2,Some(true)),(3,Some(false))], vec![(2,true),(3,false)], vec![(2,(5,true)),(3,(5,false))], 8, vec![])]
+    #[case::update_1_true(vec![(2,Some(true))], vec![(2,false)], vec![(2,(9,false))], 9, vec![test_updated_evt(2), test_reachability_evt(2,false)])]
+    #[case::update_1_false(vec![(2,Some(false))], vec![(2,true)], vec![(2,(9,true))], 9, vec![test_updated_evt(2), test_reachability_evt(2,true)])]
+    #[case::update_2(vec![(2,Some(true)),(3,Some(false))], vec![(2,false),(3,true)], vec![(2,(9,false)),(3,(9,true))], 9, vec![test_updated_evt(2), test_reachability_evt(2,false), test_updated_evt(3), test_reachability_evt(3,true)])]
+    #[case::add_0(vec![(3,None)], vec![(3,false)], vec![(3,(9,false))], 9, vec![test_updated_evt(3), test_reachability_evt(3,false)])]
+    #[case::add_0_true(vec![(3,None)], vec![(3,true)], vec![(3,(9,true))], 9, vec![test_updated_evt(3)])]
+    #[case::add_1(vec![(2,Some(false)),(3,None)], vec![(2,false),(3,false)], vec![(2,(5,false)),(3,(9,false))], 9, vec![test_updated_evt(3), test_reachability_evt(3,false)])]
+    #[case::add_1_true(vec![(2,Some(false)),(3,None)], vec![(2,false),(3,true)], vec![(2,(5,false)),(3,(9,true))], 9, vec![test_updated_evt(3)])]
+    #[case::remove_0(vec![(3,Some(false))], vec![], vec![(3,(9,true))], 9, vec![test_updated_evt(3), test_reachability_evt(3,true)])]
+    #[case::remove_0_true(vec![(3,Some(true))], vec![], vec![(3,(5,true))], 8, vec![])]
+    #[case::remove_1(vec![(2,Some(false)),(3,Some(false))], vec![(2,false)], vec![(2,(5,false)),(3,(9,true))], 9, vec![test_updated_evt(3), test_reachability_evt(3,true)])]
+    #[case::remove_1_true(vec![(2,Some(false)),(3,Some(true))], vec![(2,false)], vec![(2,(5,false)),(3,(5,true))], 8, vec![])]
+    #[case::heartbeat_without_node(vec![], vec![(3,false)], vec![], 8, vec![])]
+    fn test_update_current_reachability(
+        #[case] old_reachability: Vec<(u16,Option<bool>)>,
+        #[case] new_reachability: Vec<(u16,bool)>,
+        #[case] expected_reachability: Vec<(u16,(u32,bool))>,
+        #[case] expected_version_counter: u32,
+        #[case] expected_events: Vec<ClusterEvent>,
+    ) {
+        assert_eq!(old_reachability.len(), expected_reachability.len());
+
+        let new_reachability = new_reachability.into_iter()
+            .map(|(k,v)| (test_node_addr_from_number(k), v))
+            .collect::<BTreeMap<_,_>>();
+
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let myself = test_node_addr_from_number(1);
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            cluster_state.version_counter = 8;
+
+            let mut event_subscriber = cluster_state.event_notifier.subscribe();
+
+            // set up initial state: add nodes for 'old reachability'
+            for (k,v) in old_reachability {
+                let node_state = match (k,v) {
+                    (2,Some(true)) => node_state!(2[]:Up->[1:true@5,99:true@111]@[1,99]),
+                    (2,Some(false)) => node_state!(2[]:Up->[1:false@5,99:true@111]@[1,99]),
+                    (2,None) => node_state!(2[]:Up->[99:true@111]@[1,99]),
+                    (3,Some(true)) => node_state!(3[]:Up->[1:true@5,99:true@111]@[1,99]),
+                    (3,Some(false)) => node_state!(3[]:Up->[1:false@5,99:true@111]@[1,99]),
+                    (3,None) => node_state!(3[]:Up->[99:true@111]@[1,99]),
+                    _ => panic!(),
+                };
+                cluster_state.nodes_with_state
+                    .insert(node_state.addr, node_state);
+            }
+            // set up initial state: add a node unrelated to reachability
+            let unrelated_node = node_state!(98[]:Up->[99:true@7]@[1,99]);
+            cluster_state.nodes_with_state
+                .insert(unrelated_node.addr, unrelated_node.clone());
+
+            let initial_nodes: Vec<NodeAddr> = cluster_state.nodes_with_state.keys().cloned().collect();
+
+            // execute code under test
+            cluster_state.update_current_reachability(&new_reachability).await;
+
+            for (addr, (counter_of_reporter, is_reachable)) in expected_reachability {
+                let node = cluster_state.nodes_with_state.get(&test_node_addr_from_number(addr)).unwrap();
+                let node_reachability = NodeReachability {
+                    counter_of_reporter,
+                    is_reachable,
+                };
+                assert_eq!(&node.reachability, &[
+                    (myself, node_reachability),
+                    (test_node_addr_from_number(99), NodeReachability { counter_of_reporter: 111, is_reachable: true }),
+                ].into());
+            }
+
+            assert_eq!(cluster_state.nodes_with_state.keys().cloned().collect::<Vec<_>>(), initial_nodes);
+            assert_eq!(cluster_state.version_counter, expected_version_counter);
+
+            // verify that the unrelated node was left untouched
+            assert_eq!(cluster_state.nodes_with_state.get(&unrelated_node.addr), Some(&unrelated_node));
+
+            for exp in expected_events {
+                let act = event_subscriber.try_recv().unwrap();
+                trace!("received event {:?}", act);
+                assert_eq!(act, exp);
+            }
+
+            assert!(event_subscriber.is_empty());
+        });
     }
 
     #[test]
