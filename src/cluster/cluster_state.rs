@@ -808,9 +808,19 @@ mod test {
         }
     }
 
-    #[test]
-    fn test_am_i_leader() {
-        todo!()
+    #[rstest]
+    #[case::empty(vec![], false)]
+    #[case::only(vec![node_state!(1[]:Up->[]@[1])], true)]
+    #[case::regular_2(vec![node_state!(1[]:Up->[]@[1,2]),node_state!(2[]:Up->[]@[1,2])], true)]
+    #[case::joining(vec![node_state!(1[]:Joining->[]@[1,2]),node_state!(2[]:Up->[]@[1,2])], false)]
+    #[case::not_converged(vec![node_state!(1[]:Up->[]@[1,2]),node_state!(2[]:Up->[]@[1])], false)]
+    fn test_am_i_leader(#[case] nodes: Vec<NodeState>, #[case] expected: bool) {
+        let myself = test_node_addr_from_number(1);
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+        for n in nodes {
+            cluster_state.nodes_with_state.insert(n.addr, n);
+        }
+        assert_eq!(cluster_state.am_i_leader(), expected);
     }
 
     #[test]
