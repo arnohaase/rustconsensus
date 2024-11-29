@@ -777,6 +777,32 @@ mod test {
     }
 
     #[rstest]
+    #[case::joining(vec![node_state!(1[]:Joining->[]@[1])], node_state!(1[]:Down->[]@[]), vec![test_updated_evt(1), test_state_evt(1, Joining, Down)])]
+    #[case::up(vec![node_state!(1[]:Up->[]@[1])], node_state!(1[]:Down->[]@[]), vec![test_updated_evt(1), test_state_evt(1, Up, Down)])]
+    #[case::down(vec![node_state!(1[]:Down->[]@[])], node_state!(1[]:Down->[]@[]), vec![])]
+    #[case::removed(vec![node_state!(1[]:Removed->[]@[])], node_state!(1[]:Removed->[]@[]), vec![])]
+    fn test_promote_myself_to_down(#[case] nodes: Vec<NodeState>, #[case] expected: NodeState, #[case] events: Vec<ClusterEvent>) {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let myself = test_node_addr_from_number(1);
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            for n in nodes {
+                cluster_state.nodes_with_state.insert(n.addr, n);
+            }
+            let mut event_subscriber = cluster_state.event_notifier.subscribe();
+
+            cluster_state.promote_myself_to_down().await;
+
+            assert_eq!(cluster_state.get_node_state(&myself).cloned(), Some(expected));
+            for expected in events {
+                let actual = event_subscriber.try_recv().unwrap();
+                assert_eq!(actual, expected);
+            }
+            assert!(event_subscriber.is_empty());
+        });
+    }
+
+    #[rstest]
     #[case::joining(vec![node_state!(1[]:Joining->[]@[1])], node_state!(1[]:WeaklyUp->[]@[1]), vec![test_updated_evt(1), test_state_evt(1, Joining, WeaklyUp)])]
     #[case::weakly_up(vec![node_state!(1[]:WeaklyUp->[]@[1])], node_state!(1[]:WeaklyUp->[]@[1]), vec![])]
     #[case::up(vec![node_state!(1[]:Up->[]@[1])], node_state!(1[]:Up->[]@[1]), vec![])]
