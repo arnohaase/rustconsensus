@@ -12,7 +12,7 @@ use crate::cluster::gossip::gossip_messages::{GOSSIP_MESSAGE_MODULE_ID, GossipMe
 use crate::messaging::messaging::Messaging;
 use crate::messaging::node_addr::NodeAddr;
 
-mod gossip_messages;
+pub mod gossip_messages;
 mod gossip_logic;
 
 
@@ -92,6 +92,9 @@ async fn on_gossip_message(msg: GossipMessage, sender: NodeAddr, gossip: &mut Go
         }
         GossipNodes(data) => {
             gossip.on_nodes(data).await
+        }
+        DownYourself => {
+            gossip.down_yourself().await
         }
     }
 }

@@ -109,6 +109,11 @@ impl ClusterState {
         self.promote_myself(MembershipState::Up).await
     }
 
+    //TODO unit test
+    pub async fn promote_myself_to_down(&mut self) {
+        self.promote_myself(MembershipState::Down).await
+    }
+
     async fn promote_myself_to_weakly_up(&mut self) {
         if let Some(node) = self.get_node_state(&self.myself) {
             if node.membership_state == MembershipState::Joining {

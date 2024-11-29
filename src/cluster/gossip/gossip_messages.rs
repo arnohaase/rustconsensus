@@ -16,8 +16,7 @@ use crate::messaging::message_module::{MessageModule, MessageModuleId};
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::buf::{put_string, try_get_string};
 
-//TODO make non-pub
-pub const GOSSIP_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"CtrGossp");
+pub(crate) const GOSSIP_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"CtrGossp");
 
 //TODO make the message module infrastructure reusable
 
@@ -59,13 +58,14 @@ pub enum GossipMessage {
     GossipDetailedDigest(GossipDetailedDigestData),
     GossipDifferingAndMissingNodes(GossipDifferingAndMissingNodesData),
     GossipNodes(GossipNodesData),
-
+    DownYourself,
 }
 
 const ID_GOSSIP_SUMMARY_DIGEST: u8 = 1;
 const ID_GOSSIP_DETAILED_DIGEST: u8 = 2;
 const ID_GOSSIP_DIFFERING_AND_MISSING_NODES: u8 = 3;
 const ID_GOSSIP_NODES: u8 = 4;
+const ID_DOWN_YOURSELF: u8 = 5;
 
 impl GossipMessage {
     pub fn id(&self) -> u8 {
@@ -74,6 +74,7 @@ impl GossipMessage {
             GossipMessage::GossipDetailedDigest(_) => ID_GOSSIP_DETAILED_DIGEST,
             GossipMessage::GossipDifferingAndMissingNodes(_) => ID_GOSSIP_DIFFERING_AND_MISSING_NODES,
             GossipMessage::GossipNodes(_) => ID_GOSSIP_NODES,
+            GossipMessage::DownYourself => ID_DOWN_YOURSELF,
         }
     }
 
@@ -85,6 +86,7 @@ impl GossipMessage {
             GossipMessage::GossipDetailedDigest(data) => Self::ser_gossip_detailed_digest(data, buf),
             GossipMessage::GossipDifferingAndMissingNodes(data) => Self::ser_gossip_differing_and_missing_nodes(data, buf),
             GossipMessage::GossipNodes(data) => Self::ser_gossip_nodes(data, buf),
+            GossipMessage::DownYourself => {}
         }
     }
 
@@ -179,6 +181,7 @@ impl GossipMessage {
             ID_GOSSIP_DETAILED_DIGEST => Self::deser_gossip_detailed_digest(buf),
             ID_GOSSIP_DIFFERING_AND_MISSING_NODES => Self::deser_gossip_differing_and_missing_nodes(buf),
             ID_GOSSIP_NODES => Self::deser_gossip_nodes(buf),
+            ID_DOWN_YOURSELF => Ok(GossipMessage::DownYourself),
             id => Err(anyhow!("invalid message discriminator {}", id)),
         }
     }
@@ -591,6 +594,7 @@ mod test {
             seen_by: BTreeSet::from_iter([NodeAddr::localhost(8), NodeAddr::localhost(5)]),
         }],
     }), ID_GOSSIP_NODES)]
+    #[case::down_yourself(DownYourself, ID_DOWN_YOURSELF)]
     fn test_ser_gossip_message(#[case] msg: GossipMessage, #[case] msg_id: u8) {
         assert_eq!(msg.id(), msg_id);
 

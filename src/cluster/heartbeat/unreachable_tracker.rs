@@ -1,5 +1,6 @@
 use std::ops::DerefMut;
 use std::sync::Arc;
+use bytes::BytesMut;
 
 use rustc_hash::FxHashSet;
 use tokio::sync::RwLock;
@@ -9,7 +10,9 @@ use tracing::{info, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
+use crate::cluster::gossip::gossip_messages::{GOSSIP_MESSAGE_MODULE_ID, GossipMessage};
 use crate::cluster::heartbeat::downing_strategy::{DowningStrategy, DowningStrategyDecision};
+use crate::messaging::messaging::Messaging;
 use crate::messaging::node_addr::NodeAddr;
 
 pub struct UnreachableTracker {
@@ -32,7 +35,7 @@ impl UnreachableTracker {
         }
     }
 
-    pub async fn update_reachability(&mut self, node: NodeAddr, is_reachable: bool) {
+    pub async fn update_reachability(&mut self, node: NodeAddr, is_reachable: bool, messaging: Arc<Messaging>) {
         let was_fully_reachable = self.unreachable_nodes.is_empty();
 
         let modified = if is_reachable {
@@ -64,6 +67,7 @@ impl UnreachableTracker {
             let downing_strategy = self.downing_strategy.clone();
 
             let unreachable_nodes = self.unreachable_nodes.clone();
+            let messaging = messaging.clone();
 
             // there are unreachable nodes, so we start a new timer for stability
             self.stability_period_handle = Some(tokio::spawn(async move {
@@ -84,7 +88,7 @@ impl UnreachableTracker {
 
                 let node_states = cluster_state.node_states().cloned().collect::<Vec<_>>();
                 let downing_decision = downing_strategy.decide(&node_states);
-                Self::on_downing_decision(&mut cluster_state, downing_decision).await;
+                Self::on_downing_decision(&mut cluster_state, downing_decision, messaging.as_ref()).await;
             }));
         }
 
@@ -101,6 +105,7 @@ impl UnreachableTracker {
 
             let timeout_period = self.config.unstable_thrashing_timeout;
             let cluster_state = self.cluster_state.clone();
+            let messaging = messaging.clone();
 
             *lock = Some(tokio::spawn(async move {
                 time::sleep(timeout_period).await;
@@ -109,14 +114,21 @@ impl UnreachableTracker {
                 warn!("unreachable for {:?} without reaching a stable configuration: shutting down the entire cluster", timeout_period);
                 // we want the downing of all nodes to be atomic
                 let mut cs_lock = cluster_state.write().await;
-                Self::on_downing_decision(cs_lock.deref_mut(), DowningStrategyDecision::DownUs).await;
-                Self::on_downing_decision(cs_lock.deref_mut(), DowningStrategyDecision::DownThem).await;
+                Self::on_downing_decision(cs_lock.deref_mut(), DowningStrategyDecision::DownUs, messaging.as_ref()).await;
+                Self::on_downing_decision(cs_lock.deref_mut(), DowningStrategyDecision::DownThem, messaging.as_ref()).await;
             }));
         }
     }
 
-    async fn on_downing_decision(cluster_state: &mut ClusterState, downing_strategy_decision: DowningStrategyDecision) {
+    async fn on_downing_decision(cluster_state: &mut ClusterState, downing_strategy_decision: DowningStrategyDecision, messaging: &Messaging) {
         let downed_nodes = cluster_state.apply_downing_decision(downing_strategy_decision).await;
-        //TODO send 'down' message to affected nodes as 'best effort' heuristic
+        let mut buf = BytesMut::new();
+        GossipMessage::DownYourself.ser(&mut buf);
+        for n in downed_nodes {
+            // This is a best effort to notify all affected nodes of the downing decision.
+            //  We cannot reach all nodes anyway, and there may be network problems, so this is
+            //  *not* a reliable notification - but it may help in the face of problems
+            let _ = messaging.send(n, GOSSIP_MESSAGE_MODULE_ID, &buf).await;
+        }
     }
 }

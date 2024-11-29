@@ -50,7 +50,7 @@ pub async fn run_heartbeat(config: Arc<ClusterConfig>, messaging: Arc<Messaging>
             evt = cluster_events.recv() => {
                 match evt {
                     Ok(ClusterEvent::ReachabilityChanged(data)) => {
-                        unreachable_tracker.update_reachability(data.addr, data.new_is_reachable).await;
+                        unreachable_tracker.update_reachability(data.addr, data.new_is_reachable, messaging.clone()).await;
                     }
                     Err(RecvError::Lagged(_)) => {
                         //TODO re-sync based on cluster state

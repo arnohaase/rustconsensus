@@ -287,4 +287,10 @@ impl  Gossip {
             cluster_state.merge_node_state(s).await;
         }
     }
+
+    pub async fn down_yourself(&self) {
+        debug!("received 'down yourself' message");
+        self.cluster_state.write().await
+            .promote_myself_to_down().await
+    }
 }
