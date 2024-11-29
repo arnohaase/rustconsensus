@@ -241,8 +241,7 @@ impl ClusterState {
         use MembershipState::*;
 
         if self.am_i_leader() {
-            let mut nodes_removed_from_gossip = Vec::new();
-
+            let mut to_be_promoted= Vec::new();
             for s in self.nodes_with_state.values_mut() {
                 let old_state = s.membership_state;
                 if let Some(new_state) = match old_state {
@@ -251,20 +250,13 @@ impl ClusterState {
                     Exiting | Down => Some(Removed),
                     _ => None
                 } {
-                    debug!("leader action: promoting {:?} to {:?}", s.addr, new_state);
-                    //TODO self.promote...()?
-                    s.membership_state = new_state;
-                    s.seen_by.clear();
-                    s.seen_by.insert(self.myself);
-                    Self::state_changed(Some(old_state), s, true, self.event_notifier.clone()).await;
-                    if old_state.is_gossip_partner() && !new_state.is_gossip_partner() {
-                        nodes_removed_from_gossip.push(s.addr);
-                    }
+                    to_be_promoted.push((s.addr, new_state));
                 }
             }
 
-            for addr in nodes_removed_from_gossip {
-                self.on_node_removed_from_gossip(&addr);
+            for (addr, new_state) in to_be_promoted {
+                debug!("leader action: promoting {:?} to {:?}", addr, new_state);
+                self.promote_node(addr, new_state).await;
             }
         }
     }
@@ -990,7 +982,15 @@ mod test {
         assert_eq!(cluster_state.am_i_leader(), expected);
     }
 
-    #[test]
+    #[rstest]
+    //TODO not leader
+    //TODO joining -> up
+    //TODO weakly_up -> up
+    //TODO leaving -> exiting
+    //TODO exiting -> removed
+    //TODO down -> removed
+    //TODO removed from gossip
+    //TODO events
     fn test_do_leader_actions() {
 
 
