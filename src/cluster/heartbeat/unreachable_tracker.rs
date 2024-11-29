@@ -1,3 +1,4 @@
+use std::ops::DerefMut;
 use std::sync::Arc;
 
 use rustc_hash::FxHashSet;
@@ -83,7 +84,7 @@ impl UnreachableTracker {
 
                 let node_states = cluster_state.node_states().cloned().collect::<Vec<_>>();
                 let downing_decision = downing_strategy.decide(&node_states);
-                cluster_state.on_stable_unreachable_set(downing_decision).await;
+                Self::on_downing_decision(&mut cluster_state, downing_decision).await;
             }));
         }
 
@@ -106,9 +107,16 @@ impl UnreachableTracker {
 
                 // not canceled -> shut down the whole cluster
                 warn!("unreachable for {:?} without reaching a stable configuration: shutting down the entire cluster", timeout_period);
-                cluster_state.write().await.on_stable_unreachable_set(DowningStrategyDecision::DownUs).await;
-                cluster_state.write().await.on_stable_unreachable_set(DowningStrategyDecision::DownThem).await;
+                // we want the downing of all nodes to be atomic
+                let mut cs_lock = cluster_state.write().await;
+                Self::on_downing_decision(cs_lock.deref_mut(), DowningStrategyDecision::DownUs).await;
+                Self::on_downing_decision(cs_lock.deref_mut(), DowningStrategyDecision::DownThem).await;
             }));
         }
+    }
+
+    async fn on_downing_decision(cluster_state: &mut ClusterState, downing_strategy_decision: DowningStrategyDecision) {
+        let downed_nodes = cluster_state.apply_downing_decision(downing_strategy_decision).await;
+        //TODO send 'down' message to affected nodes as 'best effort' heuristic
     }
 }

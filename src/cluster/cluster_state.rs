@@ -63,7 +63,7 @@ impl ClusterState {
             addr: myself,
             membership_state: MembershipState::Joining,
             roles: config.roles.clone(),
-            reachability: Default::default(), //TODO is a node reachable from itself?
+            reachability: Default::default(),
             seen_by: BTreeSet::from_iter([myself]),
         })]);
 
@@ -126,12 +126,17 @@ impl ClusterState {
         if let Some(state) = self.get_node_state(&addr) {
             let mut state = state.clone();
             state.membership_state = new_state;
-            state.seen_by = [self.myself].into();
+            if self.is_myself_still_gossipping() {
+                state.seen_by = [self.myself].into();
+            }
             self.merge_node_state(state).await;
         }
     }
 
-    pub async fn on_stable_unreachable_set(&mut self, downing_decision: DowningStrategyDecision) {
+    /// apply the downing decision to the cluster state's internal data structures, returning the
+    ///  downed nodes so a downing message can be sent to them as a best effort heuristic in the
+    ///  face of network unreliability
+    pub async fn apply_downing_decision(&mut self, downing_decision: DowningStrategyDecision) -> Vec<NodeAddr> {
         let predicate = match downing_decision {
             DowningStrategyDecision::DownUs => |s: &&NodeState| s.is_reachable(),
             DowningStrategyDecision::DownThem => |s: &&NodeState| !s.is_reachable(),
@@ -141,9 +146,11 @@ impl ClusterState {
             .map(|s| s.addr)
             .collect::<Vec<_>>();
 
-        for node in to_be_downed {
+        for &node in &to_be_downed {
             self.promote_node(node, MembershipState::Down).await;
         }
+
+        to_be_downed
         //TODO shut down this node if state is 'down' or 'Removed' + special handling if this is the last node
     }
 
@@ -240,6 +247,7 @@ impl ClusterState {
                     _ => None
                 } {
                     debug!("leader action: promoting {:?} to {:?}", s.addr, new_state);
+                    //TODO self.promote...()?
                     s.membership_state = new_state;
                     s.seen_by.clear();
                     s.seen_by.insert(self.myself);
@@ -264,15 +272,24 @@ impl ClusterState {
         }
     }
 
+    fn is_myself_still_gossipping(&self) -> bool {
+        self.get_node_state(&self.myself).unwrap()
+            .membership_state
+            .is_gossip_partner()
+    }
+
     pub async fn merge_node_state(&mut self, node_state: NodeState) {
         let is_converged_before = self.is_converged();
+        let is_myself_still_gossipping = self.is_myself_still_gossipping();
 
         match self.nodes_with_state.entry(node_state.addr) {
             Entry::Occupied(mut e) => {
-                trace!("merging external node state for {:?} into existing state", node_state.addr);
+                trace!("merging external node state {:?} into existing state {:?}", node_state, e.get());
                 let old_state = e.get().membership_state;
                 let was_self_changed = e.get_mut().merge(&node_state);
-                e.get_mut().seen_by.insert(self.myself);
+                if is_myself_still_gossipping {
+                    e.get_mut().seen_by.insert(self.myself);
+                }
                 Self::state_changed(Some(old_state), e.get_mut(), was_self_changed, self.event_notifier.clone()).await;
                 if old_state.is_gossip_partner() && !node_state.membership_state.is_gossip_partner() {
                     self.on_node_removed_from_gossip(&node_state.addr);
@@ -281,7 +298,9 @@ impl ClusterState {
             Entry::Vacant(e) => {
                 trace!("merging external node state for {:?}: registering previously unknown node locally", node_state.addr);
                 let mut node_state = node_state;
-                node_state.seen_by.insert(self.myself);
+                if is_myself_still_gossipping {
+                    node_state.seen_by.insert(self.myself);
+                }
 
                 Self::state_changed(None, &mut node_state, true, self.event_notifier.clone()).await;
 
@@ -309,6 +328,7 @@ impl ClusterState {
     pub async fn update_current_reachability(&mut self, reachability: &BTreeMap<NodeAddr, bool>) {
         trace!("updating reachability from myself to {:?}", reachability);
         let mut lazy_version_counter = LazyCounterVersion::new(self);
+        let is_myself_still_gossipping = self.is_myself_still_gossipping();
 
         {
             let mut updated_nodes = Vec::new();
@@ -331,7 +351,9 @@ impl ClusterState {
                         //TODO refactor - extract shared code with the loop below
 
                         s.seen_by.clear();
-                        s.seen_by.insert(self.myself);
+                        if is_myself_still_gossipping {
+                            s.seen_by.insert(self.myself);
+                        }
 
                         updated_nodes.push(s.addr);
                     }
@@ -388,7 +410,9 @@ impl ClusterState {
                     //  is a new version of the node's data that was not seen by any other nodes
                     //  yet and that must be spread by gossip
                     node.seen_by.clear();
-                    node.seen_by.insert(self.myself);
+                    if is_myself_still_gossipping {
+                        node.seen_by.insert(self.myself);
+                    }
 
                     self.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr }));
                 }
@@ -631,6 +655,7 @@ mod test {
     use rstest::rstest;
     use tokio::runtime::Runtime;
 
+    use DowningStrategyDecision::*;
     use MembershipState::*;
 
     use crate::cluster::cluster_config::ClusterConfig;
@@ -801,9 +826,53 @@ mod test {
         });
     }
 
-    #[test]
-    fn test_on_stable_unreachable_set() {
-        todo!()
+    #[rstest]
+    #[case::single_reg_us(vec![node_state!(1[]:Up->[]@[1])], DownUs, vec![1], vec![node_state!(1[]:Down->[]@[])], vec![test_updated_evt(1), test_state_evt(1, Up, Down)])]
+    #[case::single_reg_them(vec![node_state!(1[]:Up->[]@[1])], DownThem, vec![], vec![node_state!(1[]:Up->[]@[1])], vec![])]
+    #[case::two_reg_us(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], DownUs, vec![1,2], vec![node_state!(1[]:Down->[]@[]), node_state!(2[]:Down->[]@[])], vec![test_updated_evt(1), test_state_evt(1, Up, Down), test_updated_evt(2), test_state_evt(2, Up, Down)])]
+    #[case::two_reg_them(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], DownThem, vec![], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], vec![])]
+    #[case::split_us(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[1:false@5]@[1])], DownUs, vec![1], vec![node_state!(1[]:Down->[]@[]), node_state!(2[]:Up->[1:false@5]@[])], vec![test_updated_evt(1), test_state_evt(1, Up, Down)])]
+    #[case::split_them(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[1:false@5]@[1])], DownThem, vec![2], vec![node_state!(1[]:Up->[]@[1]), node_state!(2[]:Down->[1:false@5]@[1])], vec![test_updated_evt(2), test_state_evt(2, Up, Down)])]
+    #[case::explicit_us(vec![node_state!(1[]:Up->[2:true@6]@[1,2]), node_state!(2[]:Up->[1:false@5]@[1])], DownUs, vec![1], vec![node_state!(1[]:Down->[2:true@6]@[]), node_state!(2[]:Up->[1:false@5]@[])], vec![test_updated_evt(1), test_state_evt(1, Up, Down)])]
+    #[case::explicit_them(vec![node_state!(1[]:Up->[2:true@6]@[1,2]), node_state!(2[]:Up->[1:false@5]@[1])], DownThem, vec![2], vec![node_state!(1[]:Up->[2:true@6]@[1]), node_state!(2[]:Down->[1:false@5]@[1])], vec![test_updated_evt(2), test_state_evt(2, Up, Down)])]
+    // somewhat pathological corner case - more to check robustness than anything else
+    #[case::two_unreachable_us(vec![node_state!(1[]:Up->[2:false@3]@[1,2]), node_state!(2[]:Up->[1:false@4]@[1,2])], DownUs, vec![], vec![node_state!(1[]:Up->[2:false@3]@[1,2]), node_state!(2[]:Up->[1:false@4]@[1,2])], vec![])]
+    #[case::two_unreachable_them(vec![node_state!(1[]:Up->[2:false@3]@[1,2]), node_state!(2[]:Up->[1:false@4]@[1,2])], DownThem, vec![1,2], vec![node_state!(1[]:Down->[2:false@3]@[]), node_state!(2[]:Down->[1:false@4]@[])], vec![test_updated_evt(1), test_state_evt(1, Up, Down), test_updated_evt(2), test_state_evt(2, Up, Down)])]
+    fn test_apply_downing_decision(
+        #[case] initial_nodes: Vec<NodeState>,
+        #[case] downing_strategy_decision: DowningStrategyDecision,
+        #[case] expected_downed_nodes: Vec<u16>,
+        #[case] expected_state: Vec<NodeState>,
+        #[case] expected_events: Vec<ClusterEvent>,
+    ) {
+        assert_eq!(initial_nodes.len(), expected_state.len());
+
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let expected_downed_nodes = expected_downed_nodes.into_iter()
+                .map(|n| test_node_addr_from_number(n))
+                .collect::<Vec<_>>();
+
+            let myself = test_node_addr_from_number(1);
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            for n in initial_nodes {
+                cluster_state.nodes_with_state.insert(n.addr, n);
+            }
+            let mut event_subscriber = cluster_state.event_notifier.subscribe();
+
+            let downed_nodes = cluster_state.apply_downing_decision(downing_strategy_decision).await;
+            assert_eq!(downed_nodes, expected_downed_nodes);
+
+            for exp in &expected_state {
+                assert_eq!(cluster_state.get_node_state(&exp.addr), Some(exp));
+            }
+
+            for exp in expected_events {
+                let act = event_subscriber.try_recv().unwrap();
+                assert_eq!(act, exp);
+            }
+            assert!(event_subscriber.is_empty());
+        });
     }
 
     #[rstest]
