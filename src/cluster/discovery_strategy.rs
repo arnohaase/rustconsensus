@@ -16,8 +16,8 @@ use crate::cluster::join_messages::JoinMessage;
 use crate::messaging::messaging::{JOIN_MESSAGE_MODULE_ID, Messaging};
 use crate::messaging::node_addr::NodeAddr;
 
-///TODO documentation
-
+//TODO documentation
+//TODO unit test
 
 pub async fn run_discovery(discovery_strategy: impl DiscoveryStrategy, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<Messaging>) {
     match discovery_strategy.do_discovery(config, cluster_state, messaging).await {

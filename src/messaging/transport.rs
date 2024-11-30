@@ -37,6 +37,10 @@ impl UdpTransport {
     }
 }
 
+/// This trait decouples the implementation of message transport (different strategies) from the
+///  handling of a message once it is received (always the same, part of the messaging library core).
+///
+/// It is passed around as an `Arc<dyn ...>` to minimize dependencies of [Transport] implementations.
 #[async_trait::async_trait]
 pub trait MessageHandler : Sync + Send {
     async fn handle_message(&self, buf: &[u8], sender: SocketAddr);

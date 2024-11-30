@@ -19,6 +19,7 @@ pub const MAX_MSG_SIZE: usize = 256*1024; //TODO make this configurable
 
 pub struct Messaging {
     myself: NodeAddr,
+    shared_secret: Vec<u8>,
     message_modules: Arc<RwLock<FxHashMap<MessageModuleId, Arc<dyn MessageModule>>>>,
     transport: Arc<dyn Transport>,
 }
@@ -30,9 +31,10 @@ impl Debug for Messaging {
 }
 
 impl Messaging {
-    pub async fn new(myself: NodeAddr) -> anyhow::Result<Messaging> {
+    pub async fn new(myself: NodeAddr, shared_secret: &[u8]) -> anyhow::Result<Messaging> {
         Ok(Messaging {
             myself,
+            shared_secret: shared_secret.to_vec(),
             message_modules: Default::default(),
             transport: Arc::new(UdpTransport::new(myself.addr).await?), //TODO configurable transport
         })
@@ -83,7 +85,7 @@ impl Messaging {
     async fn _send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
         trace!(from=?self.myself, ?to, "sending message");
 
-        let checksum = Checksum::new(self.myself, to, msg_module_id, msg);
+        let checksum = Checksum::new(&self.shared_secret, self.myself, to, msg_module_id, msg);
 
         let mut buf = BytesMut::new();
         Envelope::write(self.myself, to, checksum, msg_module_id, &mut buf);
@@ -98,6 +100,7 @@ impl Messaging {
     pub async fn recv(&self) -> anyhow::Result<()> {
         let handler = ReceivedMessageHandler {
             myself: self.myself,
+            shared_secret: self.shared_secret.clone(),
             message_modules: self.message_modules.clone(),
         };
 
@@ -121,6 +124,7 @@ pub const JOIN_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"CtrJo
 
 struct ReceivedMessageHandler {
     myself: NodeAddr,
+    shared_secret: Vec<u8>,
     message_modules: Arc<RwLock<FxHashMap<MessageModuleId, Arc<dyn MessageModule>>>>,
 }
 
@@ -147,7 +151,7 @@ impl MessageHandler for ReceivedMessageHandler {
                     return;
                 }
 
-                let actual_checksum = Checksum::new(envelope.from, envelope.to, envelope.message_module_id, msg_buf);
+                let actual_checksum = Checksum::new(&self.shared_secret, envelope.from, envelope.to, envelope.message_module_id, msg_buf);
                 if envelope.checksum != actual_checksum {
                     warn!("checksum error in message - skipping");
                     return;

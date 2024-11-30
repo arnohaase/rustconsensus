@@ -16,10 +16,11 @@ impl Debug for Checksum {
     }
 }
 impl Checksum {
-    pub fn new(from: NodeAddr, to: NodeAddr, message_module_id: MessageModuleId, msg: &[u8]) -> Checksum {
+    pub fn new(shared_secret: &[u8], from: NodeAddr, to: NodeAddr, message_module_id: MessageModuleId, msg: &[u8]) -> Checksum {
         let hasher = Crc::<u64>::new(&crc::CRC_64_REDIS);
         let mut digest = hasher.digest();
 
+        digest.update(shared_secret);
         digest.update(&from.unique.to_le_bytes());
         digest.update(&to.unique.to_le_bytes());
         digest.update(&message_module_id.0.to_le_bytes());

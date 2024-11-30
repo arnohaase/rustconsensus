@@ -41,7 +41,7 @@ fn init_logging() {
 
 async fn create_messaging(addr: &str) -> anyhow::Result<Arc<Messaging>> {
     let addr = NodeAddr::from(SocketAddr::from_str(addr).unwrap());
-    let messaging = Messaging::new(addr).await?;
+    let messaging = Messaging::new(addr, b"abc").await?;
     messaging.register_module(Arc::new(TestMessageModule{})).await?;
 
     Ok(Arc::new(messaging))
