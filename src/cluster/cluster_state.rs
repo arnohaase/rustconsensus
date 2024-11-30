@@ -211,7 +211,7 @@ impl ClusterState {
 
     /// This is the internal handler for all changes to a given node state. It updates the 'seen by'
     ///  set and sends change events.
-    async fn state_changed(old_state: Option<MembershipState>, s: &mut NodeState, was_self_modified: bool, event_notifier: Arc<ClusterEventNotifier>) {
+    async fn send_state_changed_events(old_state: Option<MembershipState>, s: &mut NodeState, was_self_modified: bool, event_notifier: Arc<ClusterEventNotifier>) {
         if !was_self_modified {
             return;
         }
@@ -287,8 +287,9 @@ impl ClusterState {
                 if is_myself_still_gossipping {
                     e.get_mut().seen_by.insert(self.myself);
                 }
-                Self::state_changed(Some(old_state), e.get_mut(), was_self_changed, self.event_notifier.clone()).await;
-                if old_state.is_gossip_partner() && !node_state.membership_state.is_gossip_partner() {
+                Self::send_state_changed_events(Some(old_state), e.get_mut(), was_self_changed, self.event_notifier.clone()).await;
+                if !node_state.membership_state.is_gossip_partner() {
+                    debug!("node {:?} is not a gossip partner any more, removing from all 'seen by' sets", node_state.addr);
                     self.on_node_removed_from_gossip(&node_state.addr);
                 }
             }
@@ -299,7 +300,7 @@ impl ClusterState {
                     node_state.seen_by.insert(self.myself);
                 }
 
-                Self::state_changed(None, &mut node_state, true, self.event_notifier.clone()).await;
+                Self::send_state_changed_events(None, &mut node_state, true, self.event_notifier.clone()).await;
 
                 let new_membership_state = node_state.membership_state;
                 let addr = node_state.addr;
@@ -983,31 +984,48 @@ mod test {
     }
 
     #[rstest]
-    //TODO not leader
-    //TODO joining -> up
-    //TODO weakly_up -> up
-    //TODO leaving -> exiting
-    //TODO exiting -> removed
-    //TODO down -> removed
-    //TODO removed from gossip
-    //TODO events
-    fn test_do_leader_actions() {
+    #[case::stable_nop(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], Some(1), vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], vec![])]
+    #[case::new_leader_nop(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], None, vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], vec![test_leader_evt(1)])]
+    #[case::joining(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Joining->[]@[1,2])], Some(1), vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1])], vec![test_updated_evt(2), test_state_evt(2, Joining, Up)])]
+    #[case::joining_several(vec![node_state!(1[]:Up->[]@[1,2,3]), node_state!(2[]:Joining->[]@[1,2,3]), node_state!(3[]:Joining->[]@[1,2,3])],
+                            Some(1),
+                            vec![node_state!(1[]:Up->[]@[1,2,3]), node_state!(2[]:Up->[]@[1]), node_state!(3[]:Up->[]@[1])],
+                            vec![test_updated_evt(2), test_state_evt(2, Joining, Up), test_updated_evt(3), test_state_evt(3, Joining, Up)])]
+    #[case::joining_not_converged(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Joining->[]@[1])], Some(1), vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Joining->[]@[1])], vec![])]
+    #[case::weakly_up(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:WeaklyUp->[]@[1,2])], Some(1), vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1])], vec![test_updated_evt(2), test_state_evt(2, WeaklyUp, Up)])]
+    #[case::leaving(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Leaving->[]@[1,2])], Some(1), vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Exiting->[]@[1])], vec![test_updated_evt(2), test_state_evt(2, Leaving, Exiting)])]
+    #[case::exiting(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Exiting->[]@[1,2])], Some(1), vec![node_state!(1[]:Up->[]@[1]), node_state!(2[]:Removed->[]@[1])], vec![test_updated_evt(2), test_state_evt(2, Exiting, Removed)])]
+    #[case::down(vec![node_state!(1[]:Up->[]@[1]), node_state!(2[]:Down->[]@[1])], Some(1), vec![node_state!(1[]:Up->[]@[1]), node_state!(2[]:Removed->[]@[1])], vec![test_updated_evt(2), test_state_evt(2, Down, Removed)])]
+    #[case::not_leader(vec![node_state!(0[]:Up->[]@[0,1,2]), node_state!(1[]:Up->[]@[1,2,3]), node_state!(2[]:Joining->[]@[1,2,3])],
+                       None,
+                       vec![node_state!(0[]:Up->[]@[0,1,2]), node_state!(1[]:Up->[]@[1,2,3]), node_state!(2[]:Joining->[]@[1,2,3])],
+                       vec![test_leader_evt(0)])]
+    fn test_do_leader_actions(#[case] initial: Vec<NodeState>, #[case] prev_leader: Option<u16>, #[case] expected: Vec<NodeState>, #[case] expected_events: Vec<ClusterEvent>) {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let myself = test_node_addr_from_number(1);
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            cluster_state.nodes_with_state.clear();
+            for n in initial {
+                cluster_state.nodes_with_state.insert(n.addr, n);
+            }
+            cluster_state.cached_old_leader = prev_leader.map(|n| test_node_addr_from_number(n));
+            let mut event_subscriber = cluster_state.event_notifier.subscribe();
 
+            cluster_state.do_leader_actions().await;
 
-        // update leader candidate
+            for s in expected {
+                assert_eq!(cluster_state.nodes_with_state.get(&s.addr), Some(&s));
+            }
 
-        // am i leader
+            for exp in expected_events {
+                let act = event_subscriber.try_recv().unwrap();
+                trace!("received event {:?}", act);
+                assert_eq!(act, exp);
+            }
 
-        // is converged?
-
-
-        // promote joining + weakly up -> up
-        // promote leaving -> exiting
-        // promote exiting / down -> removed
-
-        // removed from gossip -> clean up seen_by sets
-
-        todo!()
+            assert!(event_subscriber.is_empty());
+        });
     }
 
     #[rstest]
@@ -1022,7 +1040,7 @@ mod test {
             let myself = test_node_addr_from_number(1);
             let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
 
-            let mut event_receiver = cluster_state.event_notifier.subscribe();
+            let mut event_subscriber = cluster_state.event_notifier.subscribe();
 
             if let Some(prev) = prev.clone() {
                 cluster_state.nodes_with_state.insert(prev.addr, prev);
@@ -1033,18 +1051,18 @@ mod test {
             assert_eq!(cluster_state.get_node_state(&expected.addr), Some(&expected));
 
             if is_update {
-                let evt = event_receiver.try_recv().unwrap();
+                let evt = event_subscriber.try_recv().unwrap();
                 assert_eq!(evt, ClusterEvent::NodeUpdated(NodeUpdatedData { addr: expected.addr }));
             }
             if is_state_change {
-                let evt = event_receiver.try_recv().unwrap();
+                let evt = event_subscriber.try_recv().unwrap();
                 assert_eq!(evt, ClusterEvent::NodeStateChanged(NodeStateChangedData { addr: expected.addr, old_state: prev.unwrap().membership_state, new_state: expected.membership_state }));
             }
             if is_add {
-                let evt = event_receiver.try_recv().unwrap();
+                let evt = event_subscriber.try_recv().unwrap();
                 assert_eq!(evt, ClusterEvent::NodeAdded(NodeAddedData { addr: expected.addr, state: expected.membership_state }));
             }
-            assert!(event_receiver.is_empty());
+            assert!(event_subscriber.is_empty());
         });
     }
 

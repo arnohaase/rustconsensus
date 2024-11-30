@@ -1,5 +1,5 @@
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use crate::cluster::cluster_events::{ClusterEvent, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
+use crate::cluster::cluster_events::{ClusterEvent, LeaderChangedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
 use crate::cluster::cluster_state::MembershipState;
 use crate::messaging::node_addr::NodeAddr;
 
@@ -56,6 +56,12 @@ pub fn test_state_evt(node: u16, old_state: MembershipState, new_state: Membersh
         addr: test_node_addr_from_number(node),
         old_state,
         new_state,
+    })
+}
+
+pub fn test_leader_evt(node: u16) -> ClusterEvent {
+    ClusterEvent::LeaderChanged(LeaderChangedData {
+        new_leader: test_node_addr_from_number(node),
     })
 }
 
