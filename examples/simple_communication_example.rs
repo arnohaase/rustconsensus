@@ -7,7 +7,7 @@ use tracing::Level;
 use rustconsensus::messaging::envelope::Envelope;
 
 use rustconsensus::messaging::message_module::{MessageModule, MessageModuleId};
-use rustconsensus::messaging::messaging::Messaging;
+use rustconsensus::messaging::messaging::{Messaging, MessagingImpl};
 use rustconsensus::messaging::node_addr::NodeAddr;
 
 
@@ -41,7 +41,7 @@ fn init_logging() {
 
 async fn create_messaging(addr: &str) -> anyhow::Result<Arc<Messaging>> {
     let addr = NodeAddr::from(SocketAddr::from_str(addr).unwrap());
-    let messaging = Messaging::new(addr, b"abc").await?;
+    let messaging = MessagingImpl::new(addr, b"abc").await?;
     messaging.register_module(Arc::new(TestMessageModule{})).await?;
 
     Ok(Arc::new(messaging))

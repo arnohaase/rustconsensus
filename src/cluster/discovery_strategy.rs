@@ -213,7 +213,7 @@ mod test {
     use tokio::time;
     use super::*;
     use crate::cluster::cluster_events::ClusterEventNotifier;
-    use crate::messaging::messaging::MessagingImpl;
+    use crate::messaging::messaging::{MessagingImpl, MockMessaging};
     use crate::test_util::test_node_addr_from_number;
 
     #[tokio::test]
@@ -227,9 +227,7 @@ mod test {
         let cluster_state = Arc::new(RwLock::new(cluster_state));
         let cluster_state_for_check = cluster_state.clone();
 
-        //TODO mock messaging
-
-        let messaging = Arc::new(MessagingImpl::new(myself, b"").await.unwrap());
+        let messaging = Arc::new(MockMessaging::new());
         let messaging_for_check = messaging.clone();
 
         let mut mock = MockDiscoveryStrategy::new();
