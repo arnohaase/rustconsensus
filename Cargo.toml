@@ -5,8 +5,9 @@ edition = "2021"
 
 [dev-dependencies]
 ctor = "*"
+mockall = "*"
 rstest = "*"
-tokio = { version = "*", features = ["full"]}
+tokio = { version = "*", features = ["full", "test-util"]}
 tracing-subscriber = "*"
 
 [dependencies]

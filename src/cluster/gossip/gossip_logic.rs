@@ -294,3 +294,8 @@ impl  Gossip {
             .promote_myself_to_down().await
     }
 }
+
+#[cfg(test)]
+mod test {
+
+}

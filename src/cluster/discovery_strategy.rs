@@ -1,10 +1,11 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
-use anyhow::anyhow;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::BytesMut;
+#[cfg(test)] use mockall::automock;
 use tokio::select;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
@@ -13,7 +14,7 @@ use tracing::{debug, error, info};
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeState};
 use crate::cluster::join_messages::JoinMessage;
-use crate::messaging::messaging::{JOIN_MESSAGE_MODULE_ID, Messaging};
+use crate::messaging::messaging::{Messaging, JOIN_MESSAGE_MODULE_ID};
 use crate::messaging::node_addr::NodeAddr;
 
 //TODO documentation
@@ -45,6 +46,7 @@ pub fn create_join_seed_nodes_strategy(seed_nodes: impl ToSocketAddrs) -> anyhow
 /// Strategy for joining an existing cluster on startup. This is more important than it looks at
 ///  first glance because we want to avoid a split into two clusters due to race conditions on
 ///  startup.
+#[cfg_attr(test, automock)]
 #[async_trait]
 pub trait DiscoveryStrategy {
     async fn do_discovery(
@@ -206,3 +208,43 @@ impl DiscoveryStrategy for JoinOthersStrategy {
     }
 }
 
+#[cfg(test)]
+mod test {
+    use tokio::time;
+    use super::*;
+    use crate::cluster::cluster_events::ClusterEventNotifier;
+    use crate::test_util::test_node_addr_from_number;
+
+    #[tokio::test]
+    async fn test_run_discovery() {
+        let myself = test_node_addr_from_number(1);
+        let config = Arc::new(ClusterConfig::new(myself.addr));
+
+        //TODO mock cluster state
+
+        let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
+        let cluster_state = Arc::new(RwLock::new(cluster_state));
+        let cluster_state_for_check = cluster_state.clone();
+
+        //TODO mock messaging
+
+        let messaging = Arc::new(Messaging::new(myself, b"").await.unwrap());
+        let messaging_for_check = messaging.clone();
+
+        let mut mock = MockDiscoveryStrategy::new();
+        mock.expect_do_discovery()
+            .times(1)
+            .withf(move |_, s, _| Arc::as_ptr(s) == Arc::as_ptr(&cluster_state_for_check))
+            .withf(move |_, _, m| Arc::as_ptr(m) == Arc::as_ptr(&messaging_for_check))
+            .returning_st(|_a, _b, _c| Ok(()));
+
+
+        time::pause();
+
+        let handle = tokio::spawn(run_discovery(mock, config, cluster_state.clone(), messaging));
+
+        time::advance(Duration::from_secs(9999999999)).await;
+        assert!(!handle.is_finished());
+        handle.abort();
+    }
+}
