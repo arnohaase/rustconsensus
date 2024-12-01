@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::ops::DerefMut;
 use std::sync::Arc;
 use bytes::BytesMut;
@@ -15,16 +16,17 @@ use crate::cluster::heartbeat::downing_strategy::{DowningStrategy, DowningStrate
 use crate::messaging::messaging::Messaging;
 use crate::messaging::node_addr::NodeAddr;
 
-pub struct UnreachableTracker {
+pub struct UnreachableTracker<M: Messaging>  {
     config: Arc<ClusterConfig>,
     cluster_state: Arc<RwLock<ClusterState>>,
     unreachable_nodes: FxHashSet<NodeAddr>,
     stability_period_handle: Option<JoinHandle<()>>,
     unstable_thrashing_timeout_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
     downing_strategy: Arc<dyn DowningStrategy>,
+    _pd: PhantomData<M>,
 }
-impl UnreachableTracker {
-    pub fn new(config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, downing_strategy: Arc<dyn DowningStrategy>) -> UnreachableTracker {
+impl <M: Messaging> UnreachableTracker<M> {
+    pub fn new(config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, downing_strategy: Arc<dyn DowningStrategy>) -> UnreachableTracker<M> {
         UnreachableTracker {
             config,
             cluster_state,
@@ -32,10 +34,11 @@ impl UnreachableTracker {
             stability_period_handle: None,
             unstable_thrashing_timeout_handle: Default::default(),
             downing_strategy,
+            _pd: PhantomData::default(),
         }
     }
 
-    pub async fn update_reachability(&mut self, node: NodeAddr, is_reachable: bool, messaging: Arc<Messaging>) {
+    pub async fn update_reachability(&mut self, node: NodeAddr, is_reachable: bool, messaging: Arc<M>) {
         let was_fully_reachable = self.unreachable_nodes.is_empty();
 
         let modified = if is_reachable {
@@ -120,7 +123,7 @@ impl UnreachableTracker {
         }
     }
 
-    async fn on_downing_decision(cluster_state: &mut ClusterState, downing_strategy_decision: DowningStrategyDecision, messaging: &Messaging) {
+    async fn on_downing_decision(cluster_state: &mut ClusterState, downing_strategy_decision: DowningStrategyDecision, messaging: &M) {
         let downed_nodes = cluster_state.apply_downing_decision(downing_strategy_decision).await;
         let mut buf = BytesMut::new();
         GossipMessage::DownYourself.ser(&mut buf);

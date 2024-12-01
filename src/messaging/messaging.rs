@@ -1,46 +1,60 @@
+use anyhow::anyhow;
+use async_trait::async_trait;
+use bytes::BytesMut;
+#[cfg(test)] use mockall::automock;
+use rustc_hash::FxHashMap;
 use std::collections::hash_map::Entry;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use anyhow::anyhow;
-
-use bytes::BytesMut;
-use rustc_hash::FxHashMap;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::messaging::envelope::{Checksum, Envelope};
 use crate::messaging::message_module::{MessageModule, MessageModuleId};
-use crate::messaging::transport::{MessageHandler, Transport, UdpTransport};
 use crate::messaging::node_addr::NodeAddr;
+use crate::messaging::transport::{MessageHandler, Transport, UdpTransport};
 
 
 pub const MAX_MSG_SIZE: usize = 256*1024; //TODO make this configurable
 
-pub struct Messaging {
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub trait Messaging: Debug + Send + Sync + 'static {
+    fn get_self_addr(&self) -> NodeAddr;
+    async fn register_module(&self, message_module: Arc<dyn MessageModule>) -> anyhow::Result<()>;
+    async fn deregister_module(&self, id: MessageModuleId) -> anyhow::Result<()>;
+
+    /// Passing in the message as a byte slice instead of serializing it into the send buffer may introduce
+    ///  some overhead, but it simplifies the design. If profiling shows significant potential for
+    ///  speedup at some point, this may be worth revisiting, but for now it looks like a good trade-off.
+    ///
+    /// When Tokio's UdpSocket adds support for multi-buffer send, the point may be moot anyway.
+    async fn send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()>;
+
+    async fn recv(&self) -> anyhow::Result<()>;
+}
+
+pub struct MessagingImpl {
     myself: NodeAddr,
     shared_secret: Vec<u8>,
     message_modules: Arc<RwLock<FxHashMap<MessageModuleId, Arc<dyn MessageModule>>>>,
     transport: Arc<dyn Transport>,
 }
 
-impl Debug for Messaging {
+impl Debug for MessagingImpl {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "UdpTransport{{myself:{:?}}}", &self.myself)
     }
 }
 
-impl Messaging {
-    pub async fn new(myself: NodeAddr, shared_secret: &[u8]) -> anyhow::Result<Messaging> {
-        Ok(Messaging {
-            myself,
-            shared_secret: shared_secret.to_vec(),
-            message_modules: Default::default(),
-            transport: Arc::new(UdpTransport::new(myself.addr).await?), //TODO configurable transport
-        })
+#[async_trait]
+impl Messaging for MessagingImpl {
+    fn get_self_addr(&self) -> NodeAddr {
+        self.myself
     }
 
-    pub async fn register_module(&self, message_module: Arc<dyn MessageModule>) -> anyhow::Result<()> {
+    async fn register_module(&self, message_module: Arc<dyn MessageModule>) -> anyhow::Result<()> {
         match self.message_modules.write().await
             .entry(message_module.id())
         {
@@ -54,7 +68,7 @@ impl Messaging {
         }
     }
 
-    pub async fn deregister_module(&self, id: MessageModuleId) -> anyhow::Result<()> {
+    async fn deregister_module(&self, id: MessageModuleId) -> anyhow::Result<()> {
         let prev = self.message_modules.write().await
             .remove(&id);
         if prev.is_none() {
@@ -63,16 +77,7 @@ impl Messaging {
         Ok(())
     }
 
-    pub fn get_self_addr(&self) -> NodeAddr {
-        self.myself
-    }
-
-    /// Passing in the message as a byte slice instead of serializing it into the send buffer may introduce
-    ///  some overhead, but it simplifies the design. If profiling shows significant potential for
-    ///  speedup at some point, this may be worth revisiting, but for now it looks like a good trade-off.
-    ///
-    /// When Tokio's UdpSocket adds support for multi-buffer send, the point may be moot anyway.
-    pub async fn send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
+    async fn send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
         match self._send(to, msg_module_id, msg).await {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -82,22 +87,8 @@ impl Messaging {
         }
     }
 
-    async fn _send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
-        trace!(from=?self.myself, ?to, "sending message");
-
-        let checksum = Checksum::new(&self.shared_secret, self.myself, to, msg_module_id, msg);
-
-        let mut buf = BytesMut::new();
-        Envelope::write(self.myself, to, checksum, msg_module_id, &mut buf);
-
-        buf.extend_from_slice(msg);
-
-        self.transport.send(to.addr, &buf).await?;
-        Ok(())
-    }
-
     #[tracing::instrument] //TODO instrument with some unique message id instead of this generic sig
-    pub async fn recv(&self) -> anyhow::Result<()> {
+    async fn recv(&self) -> anyhow::Result<()> {
         let handler = ReceivedMessageHandler {
             myself: self.myself,
             shared_secret: self.shared_secret.clone(),
@@ -114,6 +105,31 @@ impl Messaging {
                 Err(e)
             }
         }
+    }
+}
+
+impl MessagingImpl {
+    pub async fn new(myself: NodeAddr, shared_secret: &[u8]) -> anyhow::Result<MessagingImpl> {
+        Ok(MessagingImpl {
+            myself,
+            shared_secret: shared_secret.to_vec(),
+            message_modules: Default::default(),
+            transport: Arc::new(UdpTransport::new(myself.addr).await?), //TODO configurable transport
+        })
+    }
+
+    async fn _send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
+        trace!(from=?self.myself, ?to, "sending message");
+
+        let checksum = Checksum::new(&self.shared_secret, self.myself, to, msg_module_id, msg);
+
+        let mut buf = BytesMut::new();
+        Envelope::write(self.myself, to, checksum, msg_module_id, &mut buf);
+
+        buf.extend_from_slice(msg);
+
+        self.transport.send(to.addr, &buf).await?;
+        Ok(())
     }
 }
 

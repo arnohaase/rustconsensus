@@ -20,7 +20,7 @@ use crate::messaging::node_addr::NodeAddr;
 //TODO documentation
 //TODO unit test
 
-pub async fn run_discovery(discovery_strategy: impl DiscoveryStrategy, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<Messaging>) {
+pub async fn run_discovery<M: Messaging> (discovery_strategy: impl DiscoveryStrategy<M>, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) {
     match discovery_strategy.do_discovery(config, cluster_state, messaging).await {
         Ok(_) => {
             // sleep forever, i.e. until the cluster's regular loop terminates
@@ -35,7 +35,7 @@ pub async fn run_discovery(discovery_strategy: impl DiscoveryStrategy, config: A
 }
 
 
-pub fn create_join_seed_nodes_strategy(seed_nodes: impl ToSocketAddrs) -> anyhow::Result<impl DiscoveryStrategy> {
+pub fn create_join_seed_nodes_strategy<M: Messaging> (seed_nodes: impl ToSocketAddrs) -> anyhow::Result<impl DiscoveryStrategy<M>> {
     let seed_nodes = seed_nodes.to_socket_addrs()?.collect::<Vec<_>>();
     Ok(JoinOthersStrategy {
         seed_nodes,
@@ -48,12 +48,12 @@ pub fn create_join_seed_nodes_strategy(seed_nodes: impl ToSocketAddrs) -> anyhow
 ///  startup.
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait DiscoveryStrategy {
+pub trait DiscoveryStrategy<M: Messaging> {
     async fn do_discovery(
         &self,
         config: Arc<ClusterConfig>,
         cluster_state: Arc<RwLock<ClusterState>>,
-        messaging: Arc<Messaging>,
+        messaging: Arc<M>,
     ) -> anyhow::Result<()>;
 }
 
@@ -65,8 +65,8 @@ impl StartAsClusterDiscoveryStrategy {
     }
 }
 #[async_trait]
-impl DiscoveryStrategy for StartAsClusterDiscoveryStrategy {
-    async fn do_discovery(&self, _config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, _messaging: Arc<Messaging>) -> anyhow::Result<()> {
+impl <M: Messaging> DiscoveryStrategy<M> for StartAsClusterDiscoveryStrategy {
+    async fn do_discovery(&self, _config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, _messaging: Arc<M>) -> anyhow::Result<()> {
         cluster_state.write().await
             .promote_myself_to_up().await;
         Ok(())
@@ -91,8 +91,8 @@ impl PartOfSeedNodeStrategy {
     }
 }
 #[async_trait]
-impl DiscoveryStrategy for PartOfSeedNodeStrategy {
-    async fn do_discovery(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<Messaging>) -> anyhow::Result<()> {
+impl <M: Messaging> DiscoveryStrategy<M> for PartOfSeedNodeStrategy {
+    async fn do_discovery(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) -> anyhow::Result<()> {
         let myself = cluster_state.read().await.myself();
         let other_seed_nodes = self.seed_nodes.iter()
             .filter(|&&n| n != myself.addr)
@@ -149,7 +149,7 @@ async fn check_joined_other_seed_nodes(cluster_state: Arc<RwLock<ClusterState>>,
     }
 }
 
-async fn send_join_message_loop(other_seed_nodes: &[SocketAddr], messaging: Arc<Messaging>, config: Arc<ClusterConfig>) {
+async fn send_join_message_loop<M: Messaging> (other_seed_nodes: &[SocketAddr], messaging: Arc<M>, config: Arc<ClusterConfig>) {
     let mut join_msg_buf = BytesMut::new();
     JoinMessage::Join{ roles: config.roles.clone(), }
         .ser(&mut join_msg_buf);
@@ -193,8 +193,8 @@ impl JoinOthersStrategy {
     }
 }
 #[async_trait]
-impl DiscoveryStrategy for JoinOthersStrategy {
-    async fn do_discovery(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<Messaging>) -> anyhow::Result<()> {
+impl <M: Messaging> DiscoveryStrategy<M> for JoinOthersStrategy {
+    async fn do_discovery(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) -> anyhow::Result<()> {
         let myself = cluster_state.read().await.myself().addr;
         if self.seed_nodes.contains(&myself) {
             return Err(anyhow!("this node's address {:?} is listed as one of the seed nodes {:?} although the strategy is meant for cases where it isn't", myself, self.seed_nodes));
@@ -213,6 +213,7 @@ mod test {
     use tokio::time;
     use super::*;
     use crate::cluster::cluster_events::ClusterEventNotifier;
+    use crate::messaging::messaging::MessagingImpl;
     use crate::test_util::test_node_addr_from_number;
 
     #[tokio::test]
@@ -228,7 +229,7 @@ mod test {
 
         //TODO mock messaging
 
-        let messaging = Arc::new(Messaging::new(myself, b"").await.unwrap());
+        let messaging = Arc::new(MessagingImpl::new(myself, b"").await.unwrap());
         let messaging_for_check = messaging.clone();
 
         let mut mock = MockDiscoveryStrategy::new();

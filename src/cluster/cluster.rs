@@ -12,20 +12,20 @@ use crate::cluster::gossip::run_gossip;
 use crate::cluster::heartbeat::downing_strategy::DowningStrategy;
 use crate::cluster::heartbeat::run_heartbeat;
 use crate::cluster::join_messages::JoinMessageModule;
-use crate::messaging::messaging::{JOIN_MESSAGE_MODULE_ID, Messaging};
+use crate::messaging::messaging::{JOIN_MESSAGE_MODULE_ID, Messaging, MessagingImpl};
 use crate::messaging::node_addr::NodeAddr;
 
 /// This is the cluster's public API
-pub struct Cluster {
+pub struct Cluster<M: Messaging>  {
     pub config: Arc<ClusterConfig>,
-    pub messaging: Arc<Messaging>,
+    pub messaging: Arc<M>,
     event_notifier: Arc<ClusterEventNotifier>,
     cluster_state: Arc<RwLock<ClusterState>>,
 }
-impl Cluster {
-    pub async fn new(config: Arc<ClusterConfig>) -> anyhow::Result<Cluster> {
+impl Cluster<MessagingImpl> {
+    pub async fn new(config: Arc<ClusterConfig>) -> anyhow::Result<Cluster<MessagingImpl>> {
         let myself = NodeAddr::from(config.self_addr);
-        let messaging = Arc::new(Messaging::new(myself, &config.messaging_shared_secret).await?); //TODO configurable Transport
+        let messaging = Arc::new(MessagingImpl::new(myself, &config.messaging_shared_secret).await?); //TODO configurable Transport
         let event_notifier = Arc::new(ClusterEventNotifier::new());
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), event_notifier.clone())));
 
@@ -40,8 +40,10 @@ impl Cluster {
             cluster_state,
         })
     }
+}
 
-    pub async fn run(&self, discovery_strategy: impl DiscoveryStrategy, downing_strategy: impl DowningStrategy + 'static) -> anyhow::Result<()> {
+impl <M: Messaging> Cluster<M> {
+    pub async fn run(&self, discovery_strategy: impl DiscoveryStrategy<M>, downing_strategy: impl DowningStrategy + 'static) -> anyhow::Result<()> {
         //TODO make discovery strategy and downing strategy part of the cluster's config - that should include seed nodes
 
         select! {
@@ -51,7 +53,7 @@ impl Cluster {
         }
     }
 
-    async fn _run(&self, discovery_strategy: impl DiscoveryStrategy, downing_strategy: impl DowningStrategy + 'static) -> anyhow::Result<()> {
+    async fn _run(&self, discovery_strategy: impl DiscoveryStrategy<M>, downing_strategy: impl DowningStrategy + 'static) -> anyhow::Result<()> {
         select! {
             _ = run_discovery(discovery_strategy, self.config.clone(), self.cluster_state.clone(), self.messaging.clone()) => { }
             _ = run_administrative_tasks_loop(self.config.clone(), self.cluster_state.clone(), self.event_notifier.subscribe()) => {}
