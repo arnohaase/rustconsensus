@@ -33,8 +33,6 @@ pub trait Messaging: Debug + Send + Sync + 'static {
 
     async fn send(&self, to: NodeAddr, msg: &dyn Message) -> anyhow::Result<()>;
 
-    async fn send_asdf(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()>;
-
     async fn recv(&self) -> anyhow::Result<()>;
 }
 
@@ -81,20 +79,15 @@ impl Messaging for MessagingImpl {
     }
 
     async fn send(&self, to: NodeAddr, msg: &dyn Message) -> anyhow::Result<()> {
-        let mut buf = BytesMut::new();
-        msg.ser(&mut buf);
-        self.send_asdf(to, msg.module_id(), &buf).await?;
-        Ok(())
-    }
-
-    async fn send_asdf(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
-        match self._send(to, msg_module_id, msg).await {
+        let msg_module_id = msg.module_id();
+        (match self._send(to, msg_module_id, msg).await {
             Ok(()) => Ok(()),
             Err(e) => {
                 error!("error sending message: {}", e);
                 Err(e)
             }
-        }
+        })?;
+        Ok(())
     }
 
     #[tracing::instrument] //TODO instrument with some unique message id instead of this generic sig
@@ -128,15 +121,20 @@ impl MessagingImpl {
         })
     }
 
-    async fn _send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
+    async fn _send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &dyn Message) -> anyhow::Result<()> {
         trace!(from=?self.myself, ?to, "sending message");
 
-        let checksum = Checksum::new(&self.shared_secret, self.myself, to, msg_module_id, msg);
+        let mut msg_buf = BytesMut::new();
+        msg.ser(&mut msg_buf);
+
+        //TODO serialize to a single buffer, patch actual checksum afterwards
+
+        let checksum = Checksum::new(&self.shared_secret, self.myself, to, msg_module_id, &msg_buf);
 
         let mut buf = BytesMut::new();
         Envelope::write(self.myself, to, checksum, msg_module_id, &mut buf);
 
-        buf.extend_from_slice(msg);
+        buf.extend_from_slice(&msg_buf);
 
         self.transport.send(to.addr, &buf).await?;
         Ok(())

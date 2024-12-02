@@ -2,11 +2,11 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-
+use bytes::{BufMut, BytesMut};
 use tracing::Level;
 use rustconsensus::messaging::envelope::Envelope;
 
-use rustconsensus::messaging::message_module::{MessageModule, MessageModuleId};
+use rustconsensus::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use rustconsensus::messaging::messaging::{Messaging, MessagingImpl};
 use rustconsensus::messaging::node_addr::NodeAddr;
 
@@ -15,10 +15,6 @@ struct TestMessageModule {
 }
 impl TestMessageModule {
     const ID: MessageModuleId = MessageModuleId::new(b"test\0\0\0\0");
-
-    pub fn ser(&self, msg: u32) -> Vec<u8> {
-        msg.to_le_bytes().to_vec()
-    }
 }
 
 #[async_trait::async_trait]
@@ -30,6 +26,18 @@ impl MessageModule for TestMessageModule {
     async fn on_message(&self, _envelope: &Envelope, _buf: &[u8]) {}
 }
 
+#[derive(Debug)]
+pub struct TestMessage(pub u32);
+impl Message for TestMessage {
+    fn module_id(&self) -> MessageModuleId {
+        TestMessageModule::ID
+    }
+
+    fn ser(&self, buf: &mut BytesMut) {
+        buf.put_u32(self.0);
+    }
+}
+
 
 fn init_logging() {
     tracing_subscriber::fmt()
@@ -39,7 +47,7 @@ fn init_logging() {
         .ok();
 }
 
-async fn create_messaging(addr: &str) -> anyhow::Result<Arc<Messaging>> {
+async fn create_messaging(addr: &str) -> anyhow::Result<Arc<dyn Messaging>> {
     let addr = NodeAddr::from(SocketAddr::from_str(addr).unwrap());
     let messaging = MessagingImpl::new(addr, b"abc").await?;
     messaging.register_module(Arc::new(TestMessageModule{})).await?;
@@ -68,7 +76,7 @@ pub async fn main() -> anyhow::Result<()> {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
     for i in 0u32..10 {
-        t1.send(t2.get_self_addr(), m.id(), &m.ser(i)).await.unwrap();
+        t1.send(t2.get_self_addr(), &TestMessage(i)).await.unwrap();
     }
     tokio::time::sleep(Duration::from_millis(500)).await;
 
