@@ -221,7 +221,7 @@ impl  Gossip {
         // my own data for nodes that hash differently from the gossip partner's hash
         let differing: Vec<NodeState> = own_digest.nodes.iter()
             .filter(|(addr, &hash)| Some(&hash) != other_digest.nodes.get(addr))
-            .flat_map(|(addr, _)| cluster_state.get_node_state(addr).cloned())
+            .flat_map(|(addr, _)| cluster_state.get_node_state(addr))
             .collect();
 
         // nodes that are apparently present on the remote node but not locally

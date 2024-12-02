@@ -1,6 +1,4 @@
 use std::marker::PhantomPinned;
-use std::pin::Pin;
-use std::rc::Rc;
 
 pub fn main() {
     // let a = Rc::new(MyStruct::default());
