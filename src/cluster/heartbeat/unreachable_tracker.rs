@@ -1,7 +1,6 @@
-use std::marker::PhantomData;
+use bytes::BytesMut;
 use std::ops::DerefMut;
 use std::sync::Arc;
-use bytes::BytesMut;
 
 use rustc_hash::FxHashSet;
 use tokio::sync::RwLock;
@@ -11,22 +10,21 @@ use tracing::{info, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
-use crate::cluster::gossip::gossip_messages::{GOSSIP_MESSAGE_MODULE_ID, GossipMessage};
+use crate::cluster::gossip::gossip_messages::{GossipMessage, GOSSIP_MESSAGE_MODULE_ID};
 use crate::cluster::heartbeat::downing_strategy::{DowningStrategy, DowningStrategyDecision};
 use crate::messaging::messaging::Messaging;
 use crate::messaging::node_addr::NodeAddr;
 
-pub struct UnreachableTracker<M: Messaging>  {
+pub struct UnreachableTracker  {
     config: Arc<ClusterConfig>,
     cluster_state: Arc<RwLock<ClusterState>>,
     unreachable_nodes: FxHashSet<NodeAddr>,
     stability_period_handle: Option<JoinHandle<()>>,
     unstable_thrashing_timeout_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
     downing_strategy: Arc<dyn DowningStrategy>,
-    _pd: PhantomData<M>,
 }
-impl <M: Messaging> UnreachableTracker<M> {
-    pub fn new(config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, downing_strategy: Arc<dyn DowningStrategy>) -> UnreachableTracker<M> {
+impl  UnreachableTracker {
+    pub fn new(config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, downing_strategy: Arc<dyn DowningStrategy>) -> UnreachableTracker {
         UnreachableTracker {
             config,
             cluster_state,
@@ -34,11 +32,10 @@ impl <M: Messaging> UnreachableTracker<M> {
             stability_period_handle: None,
             unstable_thrashing_timeout_handle: Default::default(),
             downing_strategy,
-            _pd: PhantomData::default(),
         }
     }
 
-    pub async fn update_reachability(&mut self, node: NodeAddr, is_reachable: bool, messaging: Arc<M>) {
+    pub async fn update_reachability(&mut self, node: NodeAddr, is_reachable: bool, messaging: Arc<dyn Messaging>) {
         let was_fully_reachable = self.unreachable_nodes.is_empty();
 
         let modified = if is_reachable {
@@ -123,7 +120,7 @@ impl <M: Messaging> UnreachableTracker<M> {
         }
     }
 
-    async fn on_downing_decision(cluster_state: &mut ClusterState, downing_strategy_decision: DowningStrategyDecision, messaging: &M) {
+    async fn on_downing_decision(cluster_state: &mut ClusterState, downing_strategy_decision: DowningStrategyDecision, messaging: &dyn Messaging) {
         let downed_nodes = cluster_state.apply_downing_decision(downing_strategy_decision).await;
         let mut buf = BytesMut::new();
         GossipMessage::DownYourself.ser(&mut buf);

@@ -16,14 +16,15 @@ use crate::messaging::messaging::{JOIN_MESSAGE_MODULE_ID, Messaging, MessagingIm
 use crate::messaging::node_addr::NodeAddr;
 
 /// This is the cluster's public API
-pub struct Cluster<M: Messaging>  {
+pub struct Cluster  {
     pub config: Arc<ClusterConfig>,
-    pub messaging: Arc<M>,
+    pub messaging: Arc<dyn Messaging>,
     event_notifier: Arc<ClusterEventNotifier>,
     cluster_state: Arc<RwLock<ClusterState>>,
 }
-impl Cluster<MessagingImpl> {
-    pub async fn new(config: Arc<ClusterConfig>) -> anyhow::Result<Cluster<MessagingImpl>> {
+
+impl Cluster {
+    pub async fn new(config: Arc<ClusterConfig>) -> anyhow::Result<Cluster> {
         let myself = NodeAddr::from(config.self_addr);
         let messaging = Arc::new(MessagingImpl::new(myself, &config.messaging_shared_secret).await?); //TODO configurable Transport
         let event_notifier = Arc::new(ClusterEventNotifier::new());
@@ -40,10 +41,8 @@ impl Cluster<MessagingImpl> {
             cluster_state,
         })
     }
-}
 
-impl <M: Messaging> Cluster<M> {
-    pub async fn run(&self, discovery_strategy: impl DiscoveryStrategy<M>, downing_strategy: impl DowningStrategy + 'static) -> anyhow::Result<()> {
+    pub async fn run(&self, discovery_strategy: impl DiscoveryStrategy, downing_strategy: impl DowningStrategy + 'static) -> anyhow::Result<()> {
         //TODO make discovery strategy and downing strategy part of the cluster's config - that should include seed nodes
 
         select! {
@@ -53,7 +52,7 @@ impl <M: Messaging> Cluster<M> {
         }
     }
 
-    async fn _run(&self, discovery_strategy: impl DiscoveryStrategy<M>, downing_strategy: impl DowningStrategy + 'static) -> anyhow::Result<()> {
+    async fn _run(&self, discovery_strategy: impl DiscoveryStrategy, downing_strategy: impl DowningStrategy + 'static) -> anyhow::Result<()> {
         select! {
             _ = run_discovery(discovery_strategy, self.config.clone(), self.cluster_state.clone(), self.messaging.clone()) => { }
             _ = run_administrative_tasks_loop(self.config.clone(), self.cluster_state.clone(), self.event_notifier.subscribe()) => {}

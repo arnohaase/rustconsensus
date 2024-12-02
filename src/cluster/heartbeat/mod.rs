@@ -21,7 +21,7 @@ mod unreachable_tracker;
 pub mod downing_strategy;
 
 
-pub async fn run_heartbeat<M: Messaging> (config: Arc<ClusterConfig>, messaging: Arc<M>, cluster_state: Arc<RwLock<ClusterState>>, mut cluster_events: broadcast::Receiver<ClusterEvent>, downing_strategy: Arc<dyn DowningStrategy>) -> anyhow::Result<()> {
+pub async fn run_heartbeat(config: Arc<ClusterConfig>, messaging: Arc<dyn Messaging>, cluster_state: Arc<RwLock<ClusterState>>, mut cluster_events: broadcast::Receiver<ClusterEvent>, downing_strategy: Arc<dyn DowningStrategy>) -> anyhow::Result<()> {
     let myself = messaging.get_self_addr();
     let mut heartbeat = HeartBeat::new(myself, config.clone());
 
@@ -62,7 +62,7 @@ pub async fn run_heartbeat<M: Messaging> (config: Arc<ClusterConfig>, messaging:
     }
 }
 
-async fn on_heartbeat_message<M: Messaging> (sender: NodeAddr, msg: HeartbeatMessage, heartbeat: &mut HeartBeat, messaging: &M) {
+async fn on_heartbeat_message(sender: NodeAddr, msg: HeartbeatMessage, heartbeat: &mut HeartBeat, messaging: &dyn Messaging) {
     match msg {
         HeartbeatMessage::Heartbeat(data) => {
             debug!("received heartbeat message");
@@ -88,7 +88,7 @@ async fn update_reachability_from_here(cluster_state: &RwLock<ClusterState>, hea
         .await;
 }
 
-async fn do_heartbeat<M: Messaging> (cluster_state: &RwLock<ClusterState>, heart_beat: &mut HeartBeat, messaging: &M) {
+async fn do_heartbeat(cluster_state: &RwLock<ClusterState>, heart_beat: &mut HeartBeat, messaging: &dyn Messaging) {
     debug!("periodic heartbeat");
     let msg = heart_beat.new_heartbeat_message();
     let msg = HeartbeatMessage::Heartbeat(msg);

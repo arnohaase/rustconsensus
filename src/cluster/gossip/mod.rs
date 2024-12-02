@@ -16,7 +16,7 @@ pub mod gossip_messages;
 mod gossip_logic;
 
 
-pub async fn run_gossip<M: Messaging>(config: Arc<ClusterConfig>, messaging: Arc<M>, cluster_state: Arc<RwLock<ClusterState>>) -> anyhow::Result<()> {
+pub async fn run_gossip(config: Arc<ClusterConfig>, messaging: Arc<dyn Messaging>, cluster_state: Arc<RwLock<ClusterState>>) -> anyhow::Result<()> {
     let myself = messaging.get_self_addr();
 
     let (send, mut recv) = mpsc::channel(32);
@@ -50,7 +50,7 @@ pub async fn run_gossip<M: Messaging>(config: Arc<ClusterConfig>, messaging: Arc
     }
 }
 
-async fn do_gossip<M: Messaging> (gossip: &Gossip, messaging: &M) { //TODO move somewhere else
+async fn do_gossip(gossip: &Gossip, messaging: &dyn Messaging) { //TODO move somewhere else
     debug!("periodic gossip");
     let gossip_partners = gossip.gossip_partners().await;
     for (addr, msg) in gossip_partners {
@@ -64,14 +64,14 @@ async fn do_gossip<M: Messaging> (gossip: &Gossip, messaging: &M) { //TODO move 
 
 //TODO extract sending a message to MessageModule
 
-async fn reply<M: Messaging> (sender: NodeAddr, message: GossipMessage, messaging: &M) {
+async fn reply(sender: NodeAddr, message: GossipMessage, messaging: &dyn Messaging) {
     let mut buf = BytesMut::new();
     message.ser(&mut buf);
     let _ = messaging.send(sender, GOSSIP_MESSAGE_MODULE_ID, &buf).await;
 }
 
 
-async fn on_gossip_message<M: Messaging> (msg: GossipMessage, sender: NodeAddr, gossip: &mut Gossip, messaging: &M) { //TODO move to 'gossip_messages.rs'
+async fn on_gossip_message(msg: GossipMessage, sender: NodeAddr, gossip: &mut Gossip, messaging: &dyn Messaging) { //TODO move to 'gossip_messages.rs'
     use GossipMessage::*;
 
     match msg {
