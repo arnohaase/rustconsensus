@@ -12,7 +12,7 @@ use tracing::error;
 
 use crate::cluster::cluster_state::{MembershipState, NodeReachability, NodeState};
 use crate::messaging::envelope::Envelope;
-use crate::messaging::message_module::{MessageModule, MessageModuleId};
+use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::buf::{put_string, try_get_string};
 
@@ -60,6 +60,23 @@ pub enum GossipMessage {
     GossipNodes(GossipNodesData),
     DownYourself,
 }
+impl Message for GossipMessage {
+    fn module_id(&self) -> MessageModuleId {
+        GOSSIP_MESSAGE_MODULE_ID
+    }
+
+    fn ser(&self, buf: &mut BytesMut) {
+        buf.put_u8(self.id());
+        match self {
+            GossipMessage::GossipSummaryDigest(data) => Self::ser_gossip_summary_digest(data, buf),
+            GossipMessage::GossipDetailedDigest(data) => Self::ser_gossip_detailed_digest(data, buf),
+            GossipMessage::GossipDifferingAndMissingNodes(data) => Self::ser_gossip_differing_and_missing_nodes(data, buf),
+            GossipMessage::GossipNodes(data) => Self::ser_gossip_nodes(data, buf),
+            GossipMessage::DownYourself => {}
+        }
+    }
+}
+
 
 const ID_GOSSIP_SUMMARY_DIGEST: u8 = 1;
 const ID_GOSSIP_DETAILED_DIGEST: u8 = 2;
@@ -75,18 +92,6 @@ impl GossipMessage {
             GossipMessage::GossipDifferingAndMissingNodes(_) => ID_GOSSIP_DIFFERING_AND_MISSING_NODES,
             GossipMessage::GossipNodes(_) => ID_GOSSIP_NODES,
             GossipMessage::DownYourself => ID_DOWN_YOURSELF,
-        }
-    }
-
-    //TODO unit test
-    pub fn ser(&self, buf: &mut BytesMut) {
-        buf.put_u8(self.id());
-        match self {
-            GossipMessage::GossipSummaryDigest(data) => Self::ser_gossip_summary_digest(data, buf),
-            GossipMessage::GossipDetailedDigest(data) => Self::ser_gossip_detailed_digest(data, buf),
-            GossipMessage::GossipDifferingAndMissingNodes(data) => Self::ser_gossip_differing_and_missing_nodes(data, buf),
-            GossipMessage::GossipNodes(data) => Self::ser_gossip_nodes(data, buf),
-            GossipMessage::DownYourself => {}
         }
     }
 

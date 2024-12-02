@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bytes::BytesMut;
 #[cfg(test)] use mockall::automock;
 use tokio::select;
 use tokio::sync::RwLock;
@@ -14,7 +13,7 @@ use tracing::{debug, error, info};
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeState};
 use crate::cluster::join_messages::JoinMessage;
-use crate::messaging::messaging::{Messaging, JOIN_MESSAGE_MODULE_ID};
+use crate::messaging::messaging::Messaging;
 use crate::messaging::node_addr::NodeAddr;
 
 //TODO documentation
@@ -150,16 +149,14 @@ async fn check_joined_other_seed_nodes(cluster_state: Arc<RwLock<ClusterState>>,
 }
 
 async fn send_join_message_loop(other_seed_nodes: &[SocketAddr], messaging: Arc<dyn Messaging>, config: Arc<ClusterConfig>) {
-    let mut join_msg_buf = BytesMut::new();
-    JoinMessage::Join{ roles: config.roles.clone(), }
-        .ser(&mut join_msg_buf);
+    let join_msg = JoinMessage::Join{ roles: config.roles.clone(), };
 
     //NB: This endless loop *must* be in a separate function rather than inlined in the select! block
     //     due to limitations in the select! macro / rewriting of awaits
     loop {
         for seed_node in other_seed_nodes {
             debug!("trying to join cluster at {}", seed_node); //TODO clearer logging
-            let _ = messaging.send(seed_node.clone().into(), JOIN_MESSAGE_MODULE_ID, &join_msg_buf).await;
+            let _ = messaging.send(seed_node.clone().into(), &join_msg).await;
         }
         sleep(config.discovery_seed_node_retry_interval).await;
     }
@@ -213,7 +210,8 @@ mod test {
     use tokio::time;
     use super::*;
     use crate::cluster::cluster_events::ClusterEventNotifier;
-    use crate::messaging::messaging::MockMessaging;
+    use crate::messaging::messaging::MessagingImpl;
+    // use crate::messaging::messaging::MockMessaging;
     use crate::test_util::test_node_addr_from_number;
 
     #[tokio::test]
@@ -227,7 +225,9 @@ mod test {
         let cluster_state = Arc::new(RwLock::new(cluster_state));
         let cluster_state_for_check = cluster_state.clone();
 
-        let messaging = Arc::new(MockMessaging::new());
+        //TODO mock Messaging
+
+        let messaging = Arc::new(MessagingImpl::new(myself, b"").await.unwrap());
         let messaging_for_check = messaging.clone();
 
         let mut mock = MockDiscoveryStrategy::new();

@@ -7,25 +7,30 @@ use tokio::sync::RwLock;
 use tracing::error;
 use crate::cluster::cluster_state::ClusterState;
 use crate::messaging::envelope::Envelope;
-use crate::messaging::message_module::{MessageModule, MessageModuleId};
+use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::messaging::JOIN_MESSAGE_MODULE_ID;
 use crate::util::buf::{put_string, try_get_string};
 
+#[derive(Debug)]
 pub enum JoinMessage {
     Join{ roles: BTreeSet<String>, }
 }
-impl JoinMessage {
-    pub fn ser(&self, buf: &mut BytesMut) {
+impl Message for JoinMessage {
+    fn module_id(&self) -> MessageModuleId {
+        JOIN_MESSAGE_MODULE_ID
+    }
+
+    fn ser(&self, buf: &mut BytesMut) {
         let JoinMessage::Join { roles} = self;
 
         buf.put_usize_varint(roles.len());
         for role in roles {
             put_string(buf, role);
         }
-
-        //TODO write shared secret
     }
+}
 
+impl JoinMessage {
     pub fn deser(mut buf: &[u8]) -> anyhow::Result<JoinMessage> {
         let mut roles = BTreeSet::default();
 

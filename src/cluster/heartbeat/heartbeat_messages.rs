@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tracing::error;
 
 use crate::messaging::envelope::Envelope;
-use crate::messaging::message_module::{MessageModule, MessageModuleId};
+use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::node_addr::NodeAddr;
 
 pub const HEARTBEAT_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"CtrHeart");
@@ -53,20 +53,25 @@ pub enum HeartbeatMessage {
     Heartbeat(HeartbeatData),
     HeartbeatResponse(HeartbeatResponseData),
 }
+impl Message for HeartbeatMessage {
+    fn module_id(&self) -> MessageModuleId {
+        HEARTBEAT_MESSAGE_MODULE_ID
+    }
+
+    fn ser(&self, buf: &mut BytesMut) {
+        buf.put_u8(self.id());
+        match self {
+            HeartbeatMessage::Heartbeat(data) => Self::ser_heartbeat(data, buf),
+            HeartbeatMessage::HeartbeatResponse(data) => Self::ser_heartbeat_response(data, buf),
+        }
+    }
+}
+
 impl HeartbeatMessage {
     pub fn id(&self) -> u8 {
         match self {
             HeartbeatMessage::Heartbeat(_) => ID_HEARTBEAT,
             HeartbeatMessage::HeartbeatResponse(_) => ID_HEARTBEAT_RESPONSE,
-        }
-    }
-
-    //TODO unit test
-    pub fn ser(&self, buf: &mut BytesMut) {
-        buf.put_u8(self.id());
-        match self {
-            HeartbeatMessage::Heartbeat(data) => Self::ser_heartbeat(data, buf),
-            HeartbeatMessage::HeartbeatResponse(data) => Self::ser_heartbeat_response(data, buf),
         }
     }
 

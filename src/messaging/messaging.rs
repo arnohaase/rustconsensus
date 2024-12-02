@@ -1,7 +1,6 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::BytesMut;
-#[cfg(test)] use mockall::automock;
 use rustc_hash::FxHashMap;
 use std::collections::hash_map::Entry;
 use std::fmt::{Debug, Formatter};
@@ -11,26 +10,30 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::messaging::envelope::{Checksum, Envelope};
-use crate::messaging::message_module::{MessageModule, MessageModuleId};
+use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::node_addr::NodeAddr;
 use crate::messaging::transport::{MessageHandler, Transport, UdpTransport};
 
 
 pub const MAX_MSG_SIZE: usize = 256*1024; //TODO make this configurable
 
-#[cfg_attr(test, automock)]
+// #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait Messaging: Debug + Send + Sync + 'static {
     fn get_self_addr(&self) -> NodeAddr;
     async fn register_module(&self, message_module: Arc<dyn MessageModule>) -> anyhow::Result<()>;
     async fn deregister_module(&self, id: MessageModuleId) -> anyhow::Result<()>;
 
+
     /// Passing in the message as a byte slice instead of serializing it into the send buffer may introduce
     ///  some overhead, but it simplifies the design. If profiling shows significant potential for
     ///  speedup at some point, this may be worth revisiting, but for now it looks like a good trade-off.
     ///
     /// When Tokio's UdpSocket adds support for multi-buffer send, the point may be moot anyway.
-    async fn send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()>;
+
+    async fn send(&self, to: NodeAddr, msg: &dyn Message) -> anyhow::Result<()>;
+
+    async fn send_asdf(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()>;
 
     async fn recv(&self) -> anyhow::Result<()>;
 }
@@ -77,7 +80,14 @@ impl Messaging for MessagingImpl {
         Ok(())
     }
 
-    async fn send(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
+    async fn send(&self, to: NodeAddr, msg: &dyn Message) -> anyhow::Result<()> {
+        let mut buf = BytesMut::new();
+        msg.ser(&mut buf);
+        self.send_asdf(to, msg.module_id(), &buf).await?;
+        Ok(())
+    }
+
+    async fn send_asdf(&self, to: NodeAddr, msg_module_id: MessageModuleId, msg: &[u8]) -> anyhow::Result<()> {
         match self._send(to, msg_module_id, msg).await {
             Ok(()) => Ok(()),
             Err(e) => {

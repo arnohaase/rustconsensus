@@ -1,4 +1,3 @@
-use bytes::BytesMut;
 use std::ops::DerefMut;
 use std::sync::Arc;
 
@@ -10,7 +9,7 @@ use tracing::{info, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
-use crate::cluster::gossip::gossip_messages::{GossipMessage, GOSSIP_MESSAGE_MODULE_ID};
+use crate::cluster::gossip::gossip_messages::GossipMessage;
 use crate::cluster::heartbeat::downing_strategy::{DowningStrategy, DowningStrategyDecision};
 use crate::messaging::messaging::Messaging;
 use crate::messaging::node_addr::NodeAddr;
@@ -122,13 +121,11 @@ impl  UnreachableTracker {
 
     async fn on_downing_decision(cluster_state: &mut ClusterState, downing_strategy_decision: DowningStrategyDecision, messaging: &dyn Messaging) {
         let downed_nodes = cluster_state.apply_downing_decision(downing_strategy_decision).await;
-        let mut buf = BytesMut::new();
-        GossipMessage::DownYourself.ser(&mut buf);
         for n in downed_nodes {
             // This is a best effort to notify all affected nodes of the downing decision.
             //  We cannot reach all nodes anyway, and there may be network problems, so this is
             //  *not* a reliable notification - but it may help in the face of problems
-            let _ = messaging.send(n, GOSSIP_MESSAGE_MODULE_ID, &buf).await;
+            let _ = messaging.send(n, &GossipMessage::DownYourself).await;
         }
     }
 }

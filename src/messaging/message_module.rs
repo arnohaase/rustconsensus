@@ -1,5 +1,12 @@
 use std::fmt::{Debug, Formatter};
+use bytes::BytesMut;
 use crate::messaging::envelope::Envelope;
+
+
+pub trait Message: Send + Sync + Debug {
+    fn module_id(&self) -> MessageModuleId;
+    fn ser(&self, buf: &mut BytesMut);
+}
 
 
 /// A [MessageModuleId] is sent as part of a message's envelope to identify the module for

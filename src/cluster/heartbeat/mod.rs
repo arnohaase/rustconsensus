@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::time::Duration;
-use bytes::BytesMut;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio::{select, time};
 use tokio::sync::broadcast::error::RecvError;
@@ -10,7 +9,7 @@ use crate::cluster::cluster_events::ClusterEvent;
 use crate::cluster::cluster_state::ClusterState;
 use crate::cluster::heartbeat::downing_strategy::DowningStrategy;
 use crate::cluster::heartbeat::heartbeat_logic::HeartBeat;
-use crate::cluster::heartbeat::heartbeat_messages::{HEARTBEAT_MESSAGE_MODULE_ID, HeartbeatMessage, HeartbeatMessageModule, HeartbeatResponseData};
+use crate::cluster::heartbeat::heartbeat_messages::{HeartbeatMessage, HeartbeatMessageModule, HeartbeatResponseData};
 use crate::cluster::heartbeat::unreachable_tracker::UnreachableTracker;
 use crate::messaging::messaging::Messaging;
 use crate::messaging::node_addr::NodeAddr;
@@ -66,13 +65,11 @@ async fn on_heartbeat_message(sender: NodeAddr, msg: HeartbeatMessage, heartbeat
     match msg {
         HeartbeatMessage::Heartbeat(data) => {
             debug!("received heartbeat message");
-            //TODO extract into MessageModule
-            let mut buf = BytesMut::new();
-            HeartbeatMessage::HeartbeatResponse(HeartbeatResponseData {
+            let response = HeartbeatMessage::HeartbeatResponse(HeartbeatResponseData {
                 counter: data.counter,
                 timestamp_nanos: data.timestamp_nanos,
-            }).ser(&mut buf);
-            let _ = messaging.send(sender, HEARTBEAT_MESSAGE_MODULE_ID, &buf).await;
+            });
+            let _ = messaging.send(sender, &response).await;
         }
         HeartbeatMessage::HeartbeatResponse(data) => {
             debug!("received heartbeat response message");
@@ -95,8 +92,6 @@ async fn do_heartbeat(cluster_state: &RwLock<ClusterState>, heart_beat: &mut Hea
     let recipients = heart_beat.heartbeat_recipients(&*cluster_state.read().await);
     debug!("sending heartbeat message to {:?}", recipients);
     for recipient in recipients {
-        let mut buf = BytesMut::new();
-        msg.ser(&mut buf);
-        let _ = messaging.send(recipient, HEARTBEAT_MESSAGE_MODULE_ID, &buf).await;
+        let _ = messaging.send(recipient, &msg).await;
     }
 }
