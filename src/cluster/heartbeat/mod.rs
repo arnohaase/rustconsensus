@@ -11,7 +11,7 @@ use crate::cluster::heartbeat::downing_strategy::DowningStrategy;
 use crate::cluster::heartbeat::heartbeat_logic::HeartBeat;
 use crate::cluster::heartbeat::heartbeat_messages::{HeartbeatMessage, HeartbeatMessageModule, HeartbeatResponseData};
 use crate::cluster::heartbeat::unreachable_tracker::UnreachableTracker;
-use crate::messaging::messaging::Messaging;
+use crate::messaging::messaging::{MessageSender, Messaging};
 use crate::messaging::node_addr::NodeAddr;
 
 mod heartbeat_messages;
@@ -20,7 +20,7 @@ mod unreachable_tracker;
 pub mod downing_strategy;
 
 
-pub async fn run_heartbeat(config: Arc<ClusterConfig>, messaging: Arc<dyn Messaging>, cluster_state: Arc<RwLock<ClusterState>>, mut cluster_events: broadcast::Receiver<ClusterEvent>, downing_strategy: Arc<dyn DowningStrategy>) -> anyhow::Result<()> {
+pub async fn run_heartbeat<M: Messaging>(config: Arc<ClusterConfig>, messaging: Arc<M>, cluster_state: Arc<RwLock<ClusterState>>, mut cluster_events: broadcast::Receiver<ClusterEvent>, downing_strategy: Arc<dyn DowningStrategy>) -> anyhow::Result<()> {
     let myself = messaging.get_self_addr();
     let mut heartbeat = HeartBeat::new(myself, config.clone());
 
@@ -61,7 +61,7 @@ pub async fn run_heartbeat(config: Arc<ClusterConfig>, messaging: Arc<dyn Messag
     }
 }
 
-async fn on_heartbeat_message(sender: NodeAddr, msg: HeartbeatMessage, heartbeat: &mut HeartBeat, messaging: &dyn Messaging) {
+async fn on_heartbeat_message<M: MessageSender>(sender: NodeAddr, msg: HeartbeatMessage, heartbeat: &mut HeartBeat, messaging: &M) {
     match msg {
         HeartbeatMessage::Heartbeat(data) => {
             debug!("received heartbeat message");
@@ -85,7 +85,7 @@ async fn update_reachability_from_here(cluster_state: &RwLock<ClusterState>, hea
         .await;
 }
 
-async fn do_heartbeat(cluster_state: &RwLock<ClusterState>, heart_beat: &mut HeartBeat, messaging: &dyn Messaging) {
+async fn do_heartbeat<M: MessageSender>(cluster_state: &RwLock<ClusterState>, heart_beat: &mut HeartBeat, messaging: &M) {
     debug!("periodic heartbeat");
     let msg = heart_beat.new_heartbeat_message();
     let msg = HeartbeatMessage::Heartbeat(msg);

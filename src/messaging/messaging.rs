@@ -6,6 +6,7 @@ use std::collections::hash_map::Entry;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::sync::Arc;
+#[cfg(test)] use mockall::automock;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace, warn};
 
@@ -17,22 +18,18 @@ use crate::messaging::transport::{MessageHandler, Transport, UdpTransport};
 
 pub const MAX_MSG_SIZE: usize = 256*1024; //TODO make this configurable
 
-// #[cfg_attr(test, automock)]
+#[cfg_attr(test, automock)]
 #[async_trait]
-pub trait Messaging: Debug + Send + Sync + 'static {
+pub trait MessageSender: Debug + Send + Sync + 'static {
     fn get_self_addr(&self) -> NodeAddr;
+
+    async fn send<T: Message>(&self, to: NodeAddr, msg: &T) -> anyhow::Result<()>;
+}
+
+#[async_trait]
+pub trait Messaging: MessageSender {
     async fn register_module(&self, message_module: Arc<dyn MessageModule>) -> anyhow::Result<()>;
     async fn deregister_module(&self, id: MessageModuleId) -> anyhow::Result<()>;
-
-
-    /// Passing in the message as a byte slice instead of serializing it into the send buffer may introduce
-    ///  some overhead, but it simplifies the design. If profiling shows significant potential for
-    ///  speedup at some point, this may be worth revisiting, but for now it looks like a good trade-off.
-    ///
-    /// When Tokio's UdpSocket adds support for multi-buffer send, the point may be moot anyway.
-
-    async fn send(&self, to: NodeAddr, msg: &dyn Message) -> anyhow::Result<()>;
-
     async fn recv(&self) -> anyhow::Result<()>;
 }
 
@@ -50,11 +47,25 @@ impl Debug for MessagingImpl {
 }
 
 #[async_trait]
-impl Messaging for MessagingImpl {
+impl MessageSender for MessagingImpl {
     fn get_self_addr(&self) -> NodeAddr {
         self.myself
     }
 
+    async fn send<T: Message>(&self, to: NodeAddr, msg: &T) -> anyhow::Result<()> {
+        let msg_module_id = msg.module_id();
+        (match self._send(to, msg_module_id, msg).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                error!("error sending message: {}", e);
+                Err(e)
+            }
+        })?;
+        Ok(())
+    }
+}
+#[async_trait]
+impl Messaging for MessagingImpl {
     async fn register_module(&self, message_module: Arc<dyn MessageModule>) -> anyhow::Result<()> {
         match self.message_modules.write().await
             .entry(message_module.id())
@@ -75,18 +86,6 @@ impl Messaging for MessagingImpl {
         if prev.is_none() {
             return Err(anyhow!("deregistering a module that was not previously registered: {:?}", id));
         }
-        Ok(())
-    }
-
-    async fn send(&self, to: NodeAddr, msg: &dyn Message) -> anyhow::Result<()> {
-        let msg_module_id = msg.module_id();
-        (match self._send(to, msg_module_id, msg).await {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                error!("error sending message: {}", e);
-                Err(e)
-            }
-        })?;
         Ok(())
     }
 

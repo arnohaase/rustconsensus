@@ -13,13 +13,13 @@ use tracing::{debug, error, info};
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeState};
 use crate::cluster::join_messages::JoinMessage;
-use crate::messaging::messaging::Messaging;
+use crate::messaging::messaging::MessageSender;
 use crate::messaging::node_addr::NodeAddr;
 
 //TODO documentation
 //TODO unit test
 
-pub async fn run_discovery(discovery_strategy: impl DiscoveryStrategy, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<dyn Messaging>) {
+pub async fn run_discovery<M: MessageSender>(discovery_strategy: impl DiscoveryStrategy, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) {
     match discovery_strategy.do_discovery(config, cluster_state, messaging).await {
         Ok(_) => {
             // sleep forever, i.e. until the cluster's regular loop terminates
@@ -34,25 +34,17 @@ pub async fn run_discovery(discovery_strategy: impl DiscoveryStrategy, config: A
 }
 
 
-pub fn create_join_seed_nodes_strategy(seed_nodes: impl ToSocketAddrs) -> anyhow::Result<impl DiscoveryStrategy> {
-    let seed_nodes = seed_nodes.to_socket_addrs()?.collect::<Vec<_>>();
-    Ok(JoinOthersStrategy {
-        seed_nodes,
-    })
-}
-
-
 /// Strategy for joining an existing cluster on startup. This is more important than it looks at
 ///  first glance because we want to avoid a split into two clusters due to race conditions on
 ///  startup.
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait DiscoveryStrategy {
-    async fn do_discovery(
+    async fn do_discovery<M: MessageSender> (
         &self,
         config: Arc<ClusterConfig>,
         cluster_state: Arc<RwLock<ClusterState>>,
-        messaging: Arc<dyn Messaging>,
+        messaging: Arc<M>,
     ) -> anyhow::Result<()>;
 }
 
@@ -65,7 +57,7 @@ impl StartAsClusterDiscoveryStrategy {
 }
 #[async_trait]
 impl DiscoveryStrategy for StartAsClusterDiscoveryStrategy {
-    async fn do_discovery(&self, _config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, _messaging: Arc<dyn Messaging>) -> anyhow::Result<()> {
+    async fn do_discovery<M: MessageSender>(&self, _config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, _messaging: Arc<M>) -> anyhow::Result<()> {
         cluster_state.write().await
             .promote_myself_to_up().await;
         Ok(())
@@ -91,7 +83,7 @@ impl PartOfSeedNodeStrategy {
 }
 #[async_trait]
 impl DiscoveryStrategy for PartOfSeedNodeStrategy {
-    async fn do_discovery(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<dyn Messaging>) -> anyhow::Result<()> {
+    async fn do_discovery<M: MessageSender>(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) -> anyhow::Result<()> {
         let myself = cluster_state.read().await.myself();
         let other_seed_nodes = self.seed_nodes.iter()
             .filter(|&&n| n != myself.addr)
@@ -148,7 +140,7 @@ async fn check_joined_other_seed_nodes(cluster_state: Arc<RwLock<ClusterState>>,
     }
 }
 
-async fn send_join_message_loop(other_seed_nodes: &[SocketAddr], messaging: Arc<dyn Messaging>, config: Arc<ClusterConfig>) {
+async fn send_join_message_loop<M: MessageSender>(other_seed_nodes: &[SocketAddr], messaging: Arc<M>, config: Arc<ClusterConfig>) {
     let join_msg = JoinMessage::Join{ roles: config.roles.clone(), };
 
     //NB: This endless loop *must* be in a separate function rather than inlined in the select! block
@@ -173,6 +165,14 @@ fn seed_node_members<'a>(all_nodes: impl Iterator<Item=&'a NodeState>, seed_node
         .collect()
 }
 
+//TODO documentation
+pub fn create_join_seed_nodes_strategy(seed_nodes: impl ToSocketAddrs) -> anyhow::Result<impl DiscoveryStrategy> {
+    let seed_nodes = seed_nodes.to_socket_addrs()?.collect::<Vec<_>>();
+    Ok(JoinOthersStrategy {
+        seed_nodes,
+    })
+}
+
 pub struct JoinOthersStrategy {
     seed_nodes: Vec<SocketAddr>,
 }
@@ -191,7 +191,7 @@ impl JoinOthersStrategy {
 }
 #[async_trait]
 impl DiscoveryStrategy for JoinOthersStrategy {
-    async fn do_discovery(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<dyn Messaging>) -> anyhow::Result<()> {
+    async fn do_discovery<M: MessageSender>(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) -> anyhow::Result<()> {
         let myself = cluster_state.read().await.myself().addr;
         if self.seed_nodes.contains(&myself) {
             return Err(anyhow!("this node's address {:?} is listed as one of the seed nodes {:?} although the strategy is meant for cases where it isn't", myself, self.seed_nodes));
@@ -233,7 +233,7 @@ mod test {
         let mut mock = MockDiscoveryStrategy::new();
         mock.expect_do_discovery()
             .times(1)
-            .withf(move |_, s, _| std::ptr::addr_eq(Arc::as_ptr(s), Arc::as_ptr(&cluster_state_for_check)))
+            .withf(move |_, s, _: &Arc<MessagingImpl>| std::ptr::addr_eq(Arc::as_ptr(s), Arc::as_ptr(&cluster_state_for_check)))
             .withf(move |_, _, m| std::ptr::addr_eq(Arc::as_ptr(m), Arc::as_ptr(&messaging_for_check)))
             .returning_st(|_a, _b, _c| Ok(()));
 
@@ -245,4 +245,23 @@ mod test {
         assert!(!handle.is_finished());
         handle.abort();
     }
+
+    // #[tokio::test]
+    // async fn test_start_as_cluster_strategy() {
+    //     let myself = test_node_addr_from_number(1);
+    //     let config = Arc::new(ClusterConfig::new(myself.addr));
+    //     let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
+    //     let cluster_state = Arc::new(RwLock::new(cluster_state));
+    //
+    //     let mut messaging = MockMessaging::new();
+    //     messaging.expect_send()
+    //         .never();
+    //
+    //     let discovery_result = StartAsClusterDiscoveryStrategy{}
+    //         .do_discovery(config, cluster_state.clone(), Arc::new(messaging)).await;
+    //
+    //     assert!(discovery_result.is_ok());
+    //     assert_eq!(cluster_state.read().await.get_node_state(&myself).unwrap().membership_state, MembershipState::Up);
+    //     assert!(cluster_state.read().await.am_i_leader());
+    // }
 }

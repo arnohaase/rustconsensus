@@ -939,6 +939,7 @@ mod test {
     #[case::exiting(vec![node_state!(1[]:Exiting->[]@[1,2,3]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], true, Some(1), None, true)]
     #[case::exiting_negative(vec![node_state!(1[]:Exiting->[]@[2,3]),node_state!(2[]:Up->[]@[2,3]),node_state!(3[]:Up->[]@[2,3])], false, Some(1), None, false)]
     #[case::removed(vec![node_state!(1[]:Removed->[]@[2,3]),node_state!(2[]:Up->[]@[2,3]),node_state!(3[]:Up->[]@[2,3])], true, Some(2), None, true)]
+    #[case::todo_required_roles(vec![], true, None, None, true)]
     fn test_get_leader(#[case] nodes: Vec<NodeState>, #[case] is_converged: bool, #[case] leader_candidate: Option<u16>, #[case] prev_leader: Option<u16>, #[case] is_event_expected: bool) {
         let leader_candidate = leader_candidate.map(|n| test_node_addr_from_number(n));
 

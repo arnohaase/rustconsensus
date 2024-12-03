@@ -11,7 +11,7 @@ use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
 use crate::cluster::gossip::gossip_messages::GossipMessage;
 use crate::cluster::heartbeat::downing_strategy::{DowningStrategy, DowningStrategyDecision};
-use crate::messaging::messaging::Messaging;
+use crate::messaging::messaging::MessageSender;
 use crate::messaging::node_addr::NodeAddr;
 
 pub struct UnreachableTracker  {
@@ -34,7 +34,7 @@ impl  UnreachableTracker {
         }
     }
 
-    pub async fn update_reachability(&mut self, node: NodeAddr, is_reachable: bool, messaging: Arc<dyn Messaging>) {
+    pub async fn update_reachability<M: MessageSender>(&mut self, node: NodeAddr, is_reachable: bool, messaging: Arc<M>) {
         let was_fully_reachable = self.unreachable_nodes.is_empty();
 
         let modified = if is_reachable {
@@ -119,7 +119,7 @@ impl  UnreachableTracker {
         }
     }
 
-    async fn on_downing_decision(cluster_state: &mut ClusterState, downing_strategy_decision: DowningStrategyDecision, messaging: &dyn Messaging) {
+    async fn on_downing_decision<M: MessageSender>(cluster_state: &mut ClusterState, downing_strategy_decision: DowningStrategyDecision, messaging: &M) {
         let downed_nodes = cluster_state.apply_downing_decision(downing_strategy_decision).await;
         for n in downed_nodes {
             // This is a best effort to notify all affected nodes of the downing decision.

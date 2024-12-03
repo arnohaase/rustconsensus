@@ -5,7 +5,7 @@ edition = "2021"
 
 [dev-dependencies]
 ctor = "*"
-mockall = "*"
+mockall = { version = "*" }
 rstest = "*"
 tokio = { version = "*", features = ["full", "test-util"]}
 tracing-subscriber = "*"
@@ -22,5 +22,5 @@ num_enum = "*"
 rand = "*"
 rustc-hash = "*"
 sha2 = "*"
-tokio = { version = "*", features = ["net", "sync", "macros"] } #TODO
+tokio = { version = "*", features = ["macros", "net", "rt", "sync", "time"] } #TODO
 tracing = "*"
