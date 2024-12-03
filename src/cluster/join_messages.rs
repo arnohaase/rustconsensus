@@ -11,7 +11,7 @@ use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::messaging::JOIN_MESSAGE_MODULE_ID;
 use crate::util::buf::{put_string, try_get_string};
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum JoinMessage {
     Join{ roles: BTreeSet<String>, }
 }
@@ -74,5 +74,28 @@ impl MessageModule for JoinMessageModule {
                 error!("error deserializing message: {}", e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use rstest::rstest;
+    use super::*;
+
+    #[rstest]
+    #[case::no_roles(vec![])]
+    #[case::one_role(vec!["a"])]
+    #[case::two_roles(vec!["x", "yz"])]
+    fn test_ser(#[case] roles: Vec<&str>) {
+        let roles = roles.iter()
+            .map(|s| s.to_string())
+            .collect::<BTreeSet<String>>();
+        let msg = JoinMessage::Join { roles };
+
+        let mut buf = BytesMut::new();
+        msg.ser(&mut buf);
+        let deserialized = JoinMessage::deser(&buf).unwrap();
+
+        assert_eq!(deserialized, msg);
     }
 }
