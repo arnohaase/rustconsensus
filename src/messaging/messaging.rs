@@ -116,7 +116,7 @@ impl MessagingImpl {
             myself,
             shared_secret: shared_secret.to_vec(),
             message_modules: Default::default(),
-            transport: Arc::new(UdpTransport::new(myself.addr).await?), //TODO configurable transport
+            transport: Arc::new(UdpTransport::new(myself.socket_addr).await?), //TODO configurable transport
         })
     }
 
@@ -135,7 +135,7 @@ impl MessagingImpl {
 
         buf.extend_from_slice(&msg_buf);
 
-        self.transport.send(to.addr, &buf).await?;
+        self.transport.send(to.socket_addr, &buf).await?;
         Ok(())
     }
 }
@@ -164,7 +164,7 @@ impl MessageHandler for ReceivedMessageHandler {
         }
 
         let mut msg_buf = msg_buf;
-        match Envelope::try_read(&mut msg_buf, self.myself.addr) {
+        match Envelope::try_read(&mut msg_buf, self.myself.socket_addr) {
             Ok(envelope) => {
                 trace!("message is from {:?}", envelope.from);
 

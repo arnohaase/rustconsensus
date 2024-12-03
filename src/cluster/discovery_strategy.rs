@@ -86,7 +86,7 @@ impl DiscoveryStrategy for PartOfSeedNodeStrategy {
     async fn do_discovery<M: MessageSender>(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) -> anyhow::Result<()> {
         let myself = cluster_state.read().await.myself();
         let other_seed_nodes = self.seed_nodes.iter()
-            .filter(|&&n| n != myself.addr)
+            .filter(|&&n| n != myself.socket_addr)
             .cloned()
             .collect::<Vec<_>>();
 
@@ -96,15 +96,15 @@ impl DiscoveryStrategy for PartOfSeedNodeStrategy {
 
         select! {
             _ = send_join_message_loop(&other_seed_nodes, messaging.clone(), config.clone()) => { Ok(()) }
-            _ = check_joined_as_seed_node(cluster_state.clone(), &self.seed_nodes, &myself) => { Ok(()) }
+            _ = check_joined_as_seed_node(cluster_state.clone(), config.clone(), &self.seed_nodes, &myself) => { Ok(()) }
             _ = sleep(config.discovery_seed_node_give_up_timeout) => { Err(anyhow!("discovery timeout")) } //TODO better message; logging
         }
     }
 }
 
-async fn check_joined_as_seed_node(cluster_state: Arc<RwLock<ClusterState>>, seed_nodes: &[SocketAddr], myself: &NodeAddr) {
+async fn check_joined_as_seed_node(cluster_state: Arc<RwLock<ClusterState>>, config: Arc<ClusterConfig>, seed_nodes: &[SocketAddr], myself: &NodeAddr) {
     loop {
-        if is_any_node_up(cluster_state.read().await.node_states()) {
+        if is_any_node_leader_eligible(config.as_ref(), cluster_state.read().await.node_states()) {
             //TODO add message for 'joining a cluster' (e.g. before  any node is up)
             info!("joined a cluster"); //TODO better log message - this may be long after the initial 'joining'
             break;
@@ -130,7 +130,7 @@ async fn check_joined_other_seed_nodes(cluster_state: Arc<RwLock<ClusterState>>,
     loop {
         if cluster_state.read().await
             .node_states()
-            .any(|n| seed_nodes.contains(&n.addr.addr))
+            .any(|n| seed_nodes.contains(&n.addr.socket_addr))
         {
             info!("discovery successful, joined the cluster");
             break
@@ -154,13 +154,13 @@ async fn send_join_message_loop<M: MessageSender>(other_seed_nodes: &[SocketAddr
     }
 }
 
-fn is_any_node_up<'a>(mut nodes: impl Iterator<Item=&'a NodeState>) -> bool {
-    nodes.any(|n| n.membership_state >= MembershipState::Up)
+fn is_any_node_leader_eligible<'a>(config: &ClusterConfig, mut nodes: impl Iterator<Item=&'a NodeState>) -> bool {
+    nodes.any(|n| n.is_leader_eligible(config))
 }
 
 fn seed_node_members<'a>(all_nodes: impl Iterator<Item=&'a NodeState>, seed_nodes: &[SocketAddr]) -> Vec<NodeAddr> {
     all_nodes
-        .filter(|n| seed_nodes.contains(&n.addr.addr))
+        .filter(|n| seed_nodes.contains(&n.addr.socket_addr))
         .map(|n| n.addr)
         .collect()
 }
@@ -192,7 +192,7 @@ impl JoinOthersStrategy {
 #[async_trait]
 impl DiscoveryStrategy for JoinOthersStrategy {
     async fn do_discovery<M: MessageSender>(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) -> anyhow::Result<()> {
-        let myself = cluster_state.read().await.myself().addr;
+        let myself = cluster_state.read().await.myself().socket_addr;
         if self.seed_nodes.contains(&myself) {
             return Err(anyhow!("this node's address {:?} is listed as one of the seed nodes {:?} although the strategy is meant for cases where it isn't", myself, self.seed_nodes));
         }
@@ -207,17 +207,20 @@ impl DiscoveryStrategy for JoinOthersStrategy {
 
 #[cfg(test)]
 mod test {
-    use tokio::time;
     use super::*;
     use crate::cluster::cluster_events::ClusterEventNotifier;
-    use crate::messaging::messaging::MessagingImpl;
-    // use crate::messaging::messaging::MockMessaging;
+    use crate::cluster::cluster_state::NodeReachability;
+    use crate::messaging::messaging::{MessagingImpl, MockMessageSender};
+    use crate::node_state;
     use crate::test_util::test_node_addr_from_number;
+    use rstest::rstest;
+    use tokio::time;
+    use MembershipState::*;
 
     #[tokio::test]
     async fn test_run_discovery() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
 
         //TODO mock cluster state
 
@@ -246,22 +249,63 @@ mod test {
         handle.abort();
     }
 
-    // #[tokio::test]
-    // async fn test_start_as_cluster_strategy() {
-    //     let myself = test_node_addr_from_number(1);
-    //     let config = Arc::new(ClusterConfig::new(myself.addr));
-    //     let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
-    //     let cluster_state = Arc::new(RwLock::new(cluster_state));
-    //
-    //     let mut messaging = MockMessaging::new();
-    //     messaging.expect_send()
-    //         .never();
-    //
-    //     let discovery_result = StartAsClusterDiscoveryStrategy{}
-    //         .do_discovery(config, cluster_state.clone(), Arc::new(messaging)).await;
-    //
-    //     assert!(discovery_result.is_ok());
-    //     assert_eq!(cluster_state.read().await.get_node_state(&myself).unwrap().membership_state, MembershipState::Up);
-    //     assert!(cluster_state.read().await.am_i_leader());
-    // }
+    #[tokio::test]
+    async fn test_start_as_cluster_strategy() {
+        let myself = test_node_addr_from_number(1);
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
+        let cluster_state = Arc::new(RwLock::new(cluster_state));
+
+        let mut message_sender = MockMessageSender::new();
+        message_sender.expect_send::<JoinMessage>()
+            .never();
+
+        let discovery_result = StartAsClusterDiscoveryStrategy{}
+            .do_discovery(config, cluster_state.clone(), Arc::new(message_sender)).await;
+
+        assert!(discovery_result.is_ok());
+        assert_eq!(cluster_state.read().await.get_node_state(&myself).unwrap().membership_state, MembershipState::Up);
+        assert!(cluster_state.write().await.am_i_leader());
+    }
+
+    #[test]
+    fn test_part_of_seed_nodes_strategy() {
+        todo!()
+    }
+
+    #[test]
+    fn test_check_joined_as_seed_node() {
+        todo!()
+    }
+
+    #[test]
+    fn test_send_join_message_loop() {
+        todo!()
+    }
+
+    #[rstest]
+    #[case::empty(vec![], false)]
+    #[case::up(vec![node_state!(1[]:Up->[]@[1])], true)]
+    #[case::up_unreachable(vec![node_state!(1[]:Up->[2:false@5]@[1])], true)]
+    #[case::joining(vec![node_state!(1[]:Joining->[]@[1])], false)]
+    #[case::weakly_up(vec![node_state!(1[]:WeaklyUp->[]@[1])], false)]
+    #[case::leaving(vec![node_state!(1[]:Leaving->[]@[1])], true)]
+    #[case::exiting(vec![node_state!(1[]:Exiting->[]@[1])], true)]
+    #[case::down(vec![node_state!(1[]:Down->[]@[1])], false)]
+    #[case::removed(vec![node_state!(1[]:Removed->[]@[1])], false)]
+    #[case::multiple(vec![node_state!(1[]:Joining->[]@[1,2,3]), node_state!(2[]:Up->[]@[1,2,3]), node_state!(3[]:WeaklyUp->[]@[1,2,3])], true)]
+    fn test_is_any_leader_eligible(#[case] nodes: Vec<NodeState>, #[case] expected: bool) {
+        let config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr);
+        assert_eq!(is_any_node_leader_eligible(&config, nodes.iter()), expected);
+    }
+
+    #[test]
+    fn test_seed_node_members() {
+        todo!()
+    }
+
+    #[test]
+    fn test_join_others_strategy() {
+        todo!()
+    }
 }

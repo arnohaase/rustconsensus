@@ -20,22 +20,22 @@ use bytes_varint::try_get_fixed::TryGetFixedSupport;
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub struct NodeAddr {
     pub unique: u32,
-    pub addr: SocketAddr,
+    pub socket_addr: SocketAddr,
 }
 impl Hash for NodeAddr {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.unique.hash(state);
-        match self.addr {
+        match self.socket_addr {
             SocketAddr::V4(s) => s.ip().to_bits().hash(state),
             SocketAddr::V6(s) => s.ip().to_bits().hash(state),
         };
-        self.addr.port().hash(state);
+        self.socket_addr.port().hash(state);
     }
 }
 
 impl Debug for NodeAddr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{:?}@{}]", self.addr, self.unique)
+        write!(f, "[{:?}@{}]", self.socket_addr, self.unique)
     }
 }
 
@@ -46,14 +46,14 @@ impl NodeAddr {
 
         NodeAddr {
             unique,
-            addr,
+            socket_addr: addr,
         }
     }
 
     //TODO unit test
     pub fn ser(&self, buf: &mut impl BufMut) {
         buf.put_u32(self.unique);
-        match &self.addr {
+        match &self.socket_addr {
             SocketAddr::V4(data) => {
                 buf.put_u8(4);
                 buf.put_u32(data.ip().to_bits());
@@ -88,7 +88,7 @@ impl NodeAddr {
         };
         Ok(NodeAddr {
             unique,
-            addr,
+            socket_addr: addr,
         })
     }
 }
@@ -102,7 +102,7 @@ impl From<SocketAddr> for NodeAddr { //TODO ToSocketAddrs
 
         NodeAddr {
             unique,
-            addr,
+            socket_addr: addr,
         }
     }
 }

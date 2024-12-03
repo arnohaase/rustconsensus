@@ -43,7 +43,7 @@ macro_rules! node_state {
 pub fn test_node_addr_from_number(number: u16) -> NodeAddr {
     NodeAddr {
         unique: number.into(),
-        addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, number)),
+        socket_addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, number)),
     }
 }
 

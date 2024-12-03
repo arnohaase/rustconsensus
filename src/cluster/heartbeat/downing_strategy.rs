@@ -70,13 +70,13 @@ impl DowningStrategy for QuorumOfSeedNodesStrategy {
     fn decide(&self, node_states: &[NodeState]) -> DowningStrategyDecision {
         let num_reachable_seed_nodes = node_states.iter()
             .filter(|s| s.is_reachable())
-            .filter(|s| self.seed_nodes.contains(&s.addr.addr))
+            .filter(|s| self.seed_nodes.contains(&s.addr.socket_addr))
             .count();
 
         info!("{} of {} seed nodes are in the cluster, {} of them are reachable",
             num_reachable_seed_nodes,
             node_states.iter()
-                .filter(|s| self.seed_nodes.contains(&s.addr.addr))
+                .filter(|s| self.seed_nodes.contains(&s.addr.socket_addr))
                 .count(),
             self.seed_nodes.len());
 

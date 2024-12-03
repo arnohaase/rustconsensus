@@ -1,11 +1,11 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
 use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use tokio::{select, spawn, time};
 use tokio::sync::{broadcast, RwLock};
+use tokio::{select, spawn, time};
 use tracing::{debug, info, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
@@ -163,16 +163,7 @@ impl ClusterState {
     /// extracted as API for use by [super::heartbeat::downing_strategy::DowningStrategy] implementations
     pub fn calc_leader_candidate<'a>(config: &ClusterConfig, nodes: impl Iterator<Item = &'a NodeState>) -> Option<&'a NodeState> {
         nodes
-            .filter(|s| s.membership_state.is_leader_eligible())
-            .filter(|s| {
-                if let Some(leader_eligible_roles) = &config.leader_eligible_roles {
-                    leader_eligible_roles.iter()
-                        .any(|role| s.roles.contains(role))
-                }
-                else {
-                    true
-                }
-            })
+            .filter(|s| s.is_leader_eligible(config))
             .min_by_key(|s| s.addr)
     }
 
@@ -472,6 +463,31 @@ impl NodeState {
             .all(|r| r.is_reachable)
     }
 
+    pub fn is_leader_eligible(&self, config: &ClusterConfig) -> bool {
+        use MembershipState::*;
+        let is_membership_eligible = match self.membership_state {
+            // we require a leader to be at least 'Up' to simplify logic for initial discovery: All
+            //  nodes become 'Joining' right away on startup, and depending on the discovery strategy
+            //  may or may not promote themselves to 'Up'. That logic becomes more involved if e.g.
+            //  single nodes becomes full-blown clusters on their own, promoting themselves to 'Up'.
+            Joining | WeaklyUp => false,
+            // NB: We allow a leader to be 'Exiting' to allow promotion to 'Removed' reliably during shutdown
+            Up | Leaving | Exiting => true,
+            Down | Removed => false,
+        };
+        if !is_membership_eligible {
+            return false;
+        }
+
+        if let Some(leader_eligible_roles) = &config.leader_eligible_roles {
+            leader_eligible_roles.iter()
+                .any(|role| self.roles.contains(role))
+        }
+        else {
+            true
+        }
+    }
+
     /// returns a flag whether 'self' was modified in any way
     #[must_use]
     pub fn merge(&mut self, other: &NodeState) -> bool {
@@ -595,27 +611,11 @@ pub enum MembershipState {
     Removed = 7,
 }
 impl MembershipState {
-
     pub fn is_gossip_partner(&self) -> bool {
         use MembershipState::*;
 
         match self {
             Joining | WeaklyUp | Up | Leaving | Exiting => true,
-            Down | Removed => false,
-        }
-    }
-
-    pub fn is_leader_eligible(&self) -> bool {
-        use MembershipState::*;
-
-        match self {
-            // we require a leader to be at least 'Up' to simplify logic for initial discovery: All
-            //  nodes become 'Joining' right away on startup, and depending on the discovery strategy
-            //  may or may not promote themselves to 'Up'. That logic becomes more involved if e.g.
-            //  single nodes becomes full-blown clusters on their own, promoting themselves to 'Up'.
-            Joining | WeaklyUp => false,
-            // NB: We allow a leader to be 'Exiting' to allow promotion to 'Removed' reliably during shutdown
-            Up | Leaving | Exiting => true,
             Down | Removed => false,
         }
     }
@@ -652,6 +652,7 @@ mod test {
     use std::sync::Arc;
 
     use rstest::rstest;
+    use rustc_hash::FxHashSet;
     use tokio::runtime::Runtime;
 
     use DowningStrategyDecision::*;
@@ -708,7 +709,7 @@ mod test {
     #[test]
     fn test_add_joiner() {
         let myself = test_node_addr_from_number(1);
-        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
 
         let joiner_addr = test_node_addr_from_number(5);
         cluster_state.add_joiner(joiner_addr, ["a".to_string()].into());
@@ -725,7 +726,7 @@ mod test {
     #[test]
     fn test_add_joiner_pre_existing() {
         let myself = test_node_addr_from_number(1);
-        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
 
         let joiner_addr = test_node_addr_from_number(5);
 
@@ -753,7 +754,7 @@ mod test {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
             for n in nodes {
                 cluster_state.nodes_with_state.insert(n.addr, n);
             }
@@ -779,7 +780,7 @@ mod test {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
             for n in nodes {
                 cluster_state.nodes_with_state.insert(n.addr, n);
             }
@@ -805,7 +806,7 @@ mod test {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
             for n in nodes {
                 cluster_state.nodes_with_state.insert(n.addr, n);
             }
@@ -832,7 +833,7 @@ mod test {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
             for n in nodes {
                 cluster_state.nodes_with_state.insert(n.addr, n);
             }
@@ -879,7 +880,7 @@ mod test {
                 .collect::<Vec<_>>();
 
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
             for n in initial_nodes {
                 cluster_state.nodes_with_state.insert(n.addr, n);
             }
@@ -914,7 +915,7 @@ mod test {
     #[case::removed(vec![node_state!(1[]:Removed->[]@[2]),node_state!(2[]:Up->[]@[2])], true)]
     fn test_is_converged(#[case] nodes: Vec<NodeState>, #[case] expected: bool) {
         let myself = test_node_addr_from_number(1);
-        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
         for n in nodes {
             cluster_state.nodes_with_state.insert(n.addr, n);
         }
@@ -944,7 +945,7 @@ mod test {
         let leader_candidate = leader_candidate.map(|n| test_node_addr_from_number(n));
 
         let myself = test_node_addr_from_number(1);
-        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
         for n in nodes {
             cluster_state.nodes_with_state.insert(n.addr, n);
         }
@@ -978,7 +979,7 @@ mod test {
     #[case::not_converged(vec![node_state!(1[]:Up->[]@[1,2]),node_state!(2[]:Up->[]@[1])], false)]
     fn test_am_i_leader(#[case] nodes: Vec<NodeState>, #[case] expected: bool) {
         let myself = test_node_addr_from_number(1);
-        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
         for n in nodes {
             cluster_state.nodes_with_state.insert(n.addr, n);
         }
@@ -1006,7 +1007,7 @@ mod test {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
             cluster_state.nodes_with_state.clear();
             for n in initial {
                 cluster_state.nodes_with_state.insert(n.addr, n);
@@ -1040,7 +1041,7 @@ mod test {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
 
             let mut event_subscriber = cluster_state.event_notifier.subscribe();
 
@@ -1077,7 +1078,7 @@ mod test {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
 
             // node 3 is in node 2's 'seen by' set
             cluster_state.merge_node_state(NodeState {
@@ -1157,7 +1158,7 @@ mod test {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
             cluster_state.version_counter = 8;
 
             let mut event_subscriber = cluster_state.event_notifier.subscribe();
@@ -1252,6 +1253,35 @@ mod test {
     }
 
     #[rstest]
+    #[case::joining(node_state!(1[]:Joining->[]@[1]), None, false)]
+    #[case::weakly_up(node_state!(1[]:WeaklyUp->[]@[1]), None, false)]
+    #[case::up(node_state!(1[]:Up->[]@[1]), None, true)]
+    #[case::leaving(node_state!(1[]:Leaving->[]@[1]), None, true)]
+    #[case::exiting(node_state!(1[]:Exiting->[]@[1]), None, true)]
+    #[case::down(node_state!(1[]:Down->[]@[1]), None, false)]
+    #[case::removed(node_state!(1[]:Removed->[]@[1]), None, false)]
+    #[case::missing_role(node_state!(1[]:Up->[]@[1]), Some(vec!["l"]), false)]
+    #[case::missing_role_2(node_state!(1[]:Up->[]@[1]), Some(vec!["l1", "l2"]), false)]
+    #[case::wrong_role(node_state!(1["o"]:Up->[]@[1]), Some(vec!["l"]), false)]
+    #[case::wrong_role_2(node_state!(1["o"]:Up->[]@[1]), Some(vec!["l1", "l2"]), false)]
+    #[case::matching_role(node_state!(1["l"]:Up->[]@[1]), Some(vec!["l"]), true)]
+    #[case::matching_role_2(node_state!(1["l1"]:Up->[]@[1]), Some(vec!["l1", "l2"]), true)]
+    #[case::matching_role_and_other(node_state!(1["l", "o"]:Up->[]@[1]), Some(vec!["l"]), true)]
+    #[case::matching_role_and_other_2(node_state!(1["l1", "o"]:Up->[]@[1]), Some(vec!["l1", "l2"]), true)]
+    #[case::ignore_reachability(node_state!(1[]:Up->[2:false@5]@[1]), None, true)]
+    fn test_node_state_is_leader_eligible(#[case] node_state: NodeState, #[case] required_roles: Option<Vec<&str>>, #[case] expected: bool) {
+        let mut config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr);
+        if let Some(required_roles) = required_roles {
+            let leader_eligible_roles = required_roles.iter()
+                .map(|r| r.to_string())
+                .collect::<FxHashSet<_>>();
+            config.leader_eligible_roles = Some(leader_eligible_roles);
+        }
+
+        assert_eq!(node_state.is_leader_eligible(&config), expected);
+    }
+
+    #[rstest]
     #[case::equal(node_state!(1["a"]:Up->[2:true@7]@[1,2]), node_state!(1["a"]:Up->[2:true@7]@[1,2]), node_state!(1["a"]:Up->[2:true@7]@[1,2]), false)]
     #[case::equal_merge_seen_by(node_state!(1["a"]:Up->[2:true@7]@[1,2]), node_state!(1["a"]:Up->[2:true@7]@[3]), node_state!(1["a"]:Up->[2:true@7]@[1,2,3]), false)]
     #[case::joining_up(node_state!(1[]:Joining->[]@[1,2]), node_state!(1[]:Up->[]@[3]), node_state!(1[]:Up->[]@[3]), true)]
@@ -1284,18 +1314,6 @@ mod test {
     #[case::down(Down, false)]
     fn test_membership_state_is_gossip_partner(#[case] membership_state: MembershipState, #[case] expected: bool) {
         assert_eq!(membership_state.is_gossip_partner(), expected);
-    }
-
-    #[rstest]
-    #[case::joining(Joining, false)]
-    #[case::weakly_up(WeaklyUp, false)]
-    #[case::up(Up, true)]
-    #[case::leaving(Leaving, true)]
-    #[case::exiting(Exiting, true)]
-    #[case::removed(Removed, false)]
-    #[case::down(Down, false)]
-    fn test_membership_state_is_leader_eligible(#[case] membership_state: MembershipState, #[case] expected: bool) {
-        assert_eq!(membership_state.is_leader_eligible(), expected);
     }
 
     #[rstest]

@@ -61,7 +61,7 @@ impl  Gossip {
         {
             fn hash_node_addr(sha256: &mut Sha256, addr: NodeAddr) {
                 sha256.update(addr.unique.to_le_bytes());
-                match addr.addr {
+                match addr.socket_addr {
                     SocketAddr::V4(data) => {
                         sha256.update(data.ip().to_bits().to_le_bytes());
                         sha256.update(data.port().to_le_bytes());
