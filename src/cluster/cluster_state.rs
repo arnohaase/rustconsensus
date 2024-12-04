@@ -6,7 +6,7 @@ use std::sync::Arc;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use tokio::sync::{broadcast, RwLock};
 use tokio::{select, spawn, time};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, instrument, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
@@ -463,6 +463,7 @@ impl NodeState {
             .all(|r| r.is_reachable)
     }
 
+    #[instrument(level = "trace", skip(config)) ]
     pub fn is_leader_eligible(&self, config: &ClusterConfig) -> bool {
         use MembershipState::*;
         let is_membership_eligible = match self.membership_state {
@@ -476,14 +477,18 @@ impl NodeState {
             Down | Removed => false,
         };
         if !is_membership_eligible {
+            trace!("state is not membership eligible -> false");
             return false;
         }
 
         if let Some(leader_eligible_roles) = &config.leader_eligible_roles {
-            leader_eligible_roles.iter()
-                .any(|role| self.roles.contains(role))
+            let result = leader_eligible_roles.iter()
+                .any(|role| self.roles.contains(role));
+            trace!("checking role eligibility: {}", result);
+            result
         }
         else {
+            trace!("state is membership eligible -> true");
             true
         }
     }
@@ -913,6 +918,7 @@ mod test {
     #[case::leaving(vec![node_state!(1[]:Leaving->[]@[1,2]),node_state!(2[]:Up->[]@[1,2])], true)]
     #[case::exiting(vec![node_state!(1[]:Exiting->[]@[1,2]),node_state!(2[]:Up->[]@[1,2])], true)]
     #[case::removed(vec![node_state!(1[]:Removed->[]@[2]),node_state!(2[]:Up->[]@[2])], true)]
+    //TODO how to handle 'seen by' by nodes that are not registered (yet)? Filter them out in ClusterState? Defer convergence? Can they become part of the cluster's lore without existing?
     fn test_is_converged(#[case] nodes: Vec<NodeState>, #[case] expected: bool) {
         let myself = test_node_addr_from_number(1);
         let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
@@ -940,7 +946,6 @@ mod test {
     #[case::exiting(vec![node_state!(1[]:Exiting->[]@[1,2,3]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], true, Some(1), None, true)]
     #[case::exiting_negative(vec![node_state!(1[]:Exiting->[]@[2,3]),node_state!(2[]:Up->[]@[2,3]),node_state!(3[]:Up->[]@[2,3])], false, Some(1), None, false)]
     #[case::removed(vec![node_state!(1[]:Removed->[]@[2,3]),node_state!(2[]:Up->[]@[2,3]),node_state!(3[]:Up->[]@[2,3])], true, Some(2), None, true)]
-    #[case::todo_required_roles(vec![], true, None, None, true)]
     fn test_get_leader(#[case] nodes: Vec<NodeState>, #[case] is_converged: bool, #[case] leader_candidate: Option<u16>, #[case] prev_leader: Option<u16>, #[case] is_event_expected: bool) {
         let leader_candidate = leader_candidate.map(|n| test_node_addr_from_number(n));
 

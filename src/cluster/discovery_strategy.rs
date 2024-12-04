@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use tokio::select;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument, trace};
 
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeState};
+use crate::cluster::cluster_state::{ClusterState, NodeState};
 use crate::cluster::join_messages::JoinMessage;
 use crate::messaging::messaging::MessageSender;
 use crate::messaging::node_addr::NodeAddr;
@@ -64,12 +64,19 @@ impl DiscoveryStrategy for StartAsClusterDiscoveryStrategy {
     }
 }
 
-
+/// This strategy means that I am one of the seed nodes and may promote myself to 'Up' once a quorum
+///  of these has joined (and I am the first of them)
 pub struct PartOfSeedNodeStrategy {
     seed_nodes: Vec<SocketAddr>,
 }
 impl PartOfSeedNodeStrategy {
-    pub fn new(seed_nodes: Vec<impl ToSocketAddrs>) -> anyhow::Result<PartOfSeedNodeStrategy> {
+    pub fn new(seed_nodes: Vec<impl ToSocketAddrs>, config: &ClusterConfig) -> anyhow::Result<PartOfSeedNodeStrategy> {
+        if let Some(leader_roles) = &config.leader_eligible_roles {
+            if !config.roles.iter().any(|r| leader_roles.contains(r)) {
+                return Err(anyhow!("none of this role's roles {:?} make it eligible for leadership: one of {:?} is needed", config.roles, leader_roles));
+            }
+        }
+
         let mut resolved_nodes = Vec::new();
         for tsa in seed_nodes {
             for sa in tsa.to_socket_addrs()? {
@@ -96,13 +103,18 @@ impl DiscoveryStrategy for PartOfSeedNodeStrategy {
 
         select! {
             _ = send_join_message_loop(&other_seed_nodes, messaging.clone(), config.clone()) => { Ok(()) }
-            _ = check_joined_as_seed_node(cluster_state.clone(), config.clone(), &self.seed_nodes, &myself) => { Ok(()) }
+            _ = check_joined_as_seed_node(cluster_state.clone(), config.clone(), self.seed_nodes.clone(), myself) => { Ok(()) }
             _ = sleep(config.discovery_seed_node_give_up_timeout) => { Err(anyhow!("discovery timeout")) } //TODO better message; logging
         }
     }
 }
 
-async fn check_joined_as_seed_node(cluster_state: Arc<RwLock<ClusterState>>, config: Arc<ClusterConfig>, seed_nodes: &[SocketAddr], myself: &NodeAddr) {
+/// wait until one of two conditions happen:
+/// * A quorum of seed nodes has joined, I am the first of these, and cluster state has converged
+///     --> promote myself to 'Up' to allow becoming the leader and bootstrap the cluster
+/// * Some other node has become leader eligible
+#[instrument(level = "trace", skip_all)]
+async fn check_joined_as_seed_node(cluster_state: Arc<RwLock<ClusterState>>, config: Arc<ClusterConfig>, seed_nodes: Vec<SocketAddr>, myself: NodeAddr) {
     loop {
         if is_any_node_leader_eligible(config.as_ref(), cluster_state.read().await.node_states()) {
             //TODO add message for 'joining a cluster' (e.g. before  any node is up)
@@ -110,9 +122,9 @@ async fn check_joined_as_seed_node(cluster_state: Arc<RwLock<ClusterState>>, con
             break;
         }
 
-        let seed_node_members = seed_node_members(cluster_state.read().await.node_states(), seed_nodes);
+        let seed_node_members = seed_node_members(cluster_state.read().await.node_states(), &seed_nodes);
         let has_quorum = seed_node_members.len() * 2 > seed_nodes.len();
-        let i_am_first = seed_node_members.iter().min().unwrap() == myself;
+        let i_am_first = *seed_node_members.iter().min().unwrap() == myself;
 
         //TODO documentation
         if has_quorum && i_am_first && cluster_state.read().await.is_converged() {
@@ -209,7 +221,7 @@ impl DiscoveryStrategy for JoinOthersStrategy {
 mod test {
     use super::*;
     use crate::cluster::cluster_events::ClusterEventNotifier;
-    use crate::cluster::cluster_state::NodeReachability;
+    use crate::cluster::cluster_state::{NodeReachability, MembershipState};
     use crate::messaging::messaging::{MessagingImpl, MockMessageSender};
     use crate::node_state;
     use crate::test_util::test_node_addr_from_number;
@@ -222,13 +234,9 @@ mod test {
         let myself = test_node_addr_from_number(1);
         let config = Arc::new(ClusterConfig::new(myself.socket_addr));
 
-        //TODO mock cluster state
-
         let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
         let cluster_state = Arc::new(RwLock::new(cluster_state));
         let cluster_state_for_check = cluster_state.clone();
-
-        //TODO mock Messaging
 
         let messaging = Arc::new(MessagingImpl::new(myself, b"").await.unwrap());
         let messaging_for_check = messaging.clone();
@@ -273,9 +281,106 @@ mod test {
         todo!()
     }
 
-    #[test]
-    fn test_check_joined_as_seed_node() {
-        todo!()
+    #[rstest]
+    #[case(true,  true,  true,  true)]
+    #[case(true,  true,  false, false)]
+    #[case(true,  false, true,  false)]
+    #[case(true,  false, false, false)]
+    #[case(false, true,  true,  false)]
+    #[case(false, true,  false, false)]
+    #[case(false, false, true,  false)]
+    #[case(false, false, false, false)]
+    fn test_check_joined_as_seed_node_promote_self(#[case] has_quorum: bool, #[case] is_first: bool, #[case] is_converged: bool, #[case] expected: bool) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let myself_num = if is_first { 1 } else { 2 };
+
+            let myself = test_node_addr_from_number(myself_num);
+            let other_seed = test_node_addr_from_number(3 - myself_num);
+
+            let seed_nodes = [test_node_addr_from_number(1).socket_addr, test_node_addr_from_number(2).socket_addr, test_node_addr_from_number(3).socket_addr].to_vec();
+
+            let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+            let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
+            let cluster_state = Arc::new(RwLock::new(cluster_state));
+
+            time::pause();
+
+            let join_handle = tokio::spawn(check_joined_as_seed_node(cluster_state.clone(), config, seed_nodes, myself));
+
+            sleep(Duration::from_millis(10)).await;
+            assert!(!join_handle.is_finished());
+
+            let mut node_state_template = node_state!(4[]:Joining->[]@[0]);
+            if is_converged {
+                node_state_template.seen_by.insert(test_node_addr_from_number(4));
+            }
+            if has_quorum {
+                node_state_template.seen_by.insert(other_seed);
+            }
+
+            // add some non-seed nodes to verify that quorum is counted on seed nodes only, and that
+            //  'myself' needs to be the first of the seed nodes, not all nodes
+            node_state_template.addr = test_node_addr_from_number(0);
+            cluster_state.write().await
+                .merge_node_state(node_state_template.clone()).await;
+            node_state_template.addr = test_node_addr_from_number(4);
+            cluster_state.write().await
+                .merge_node_state(node_state_template.clone()).await;
+
+            sleep(Duration::from_millis(10)).await;
+            assert!(!join_handle.is_finished());
+
+            if has_quorum {
+                node_state_template.addr = other_seed;
+                cluster_state.write().await
+                    .merge_node_state(node_state_template.clone()).await;
+
+                sleep(Duration::from_millis(10)).await;
+                assert!(!join_handle.is_finished());
+            }
+
+            node_state_template.addr = myself;
+            cluster_state.write().await
+                .merge_node_state(node_state_template.clone()).await;
+
+            sleep(Duration::from_millis(10)).await;
+            assert_eq!(join_handle.is_finished(), expected);
+            if expected {
+                let self_state = cluster_state.read().await
+                    .get_node_state(&myself).unwrap()
+                    .membership_state;
+
+                assert_eq!(self_state, MembershipState::Up);
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn test_check_joined_as_seed_node_other_leader() {
+        let myself = test_node_addr_from_number(1);
+        let seed_nodes = [myself.socket_addr, test_node_addr_from_number(2).socket_addr, test_node_addr_from_number(3).socket_addr].to_vec();
+
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
+        let cluster_state = Arc::new(RwLock::new(cluster_state));
+
+        time::pause();
+
+        let join_handle = tokio::spawn(check_joined_as_seed_node(cluster_state.clone(), config, seed_nodes, myself));
+
+        sleep(Duration::from_millis(10)).await;
+        assert!(!join_handle.is_finished());
+
+        // add some other node that is Up - NB: we do not need to wait for convergence
+        cluster_state.write().await
+            .merge_node_state(node_state!(2[]:Up->[]@[2])).await;
+
+        sleep(Duration::from_millis(10)).await;
+        assert!(join_handle.is_finished());
     }
 
     #[test]
