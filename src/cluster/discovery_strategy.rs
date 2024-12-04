@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use tokio::select;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::{debug, error, info, instrument, trace};
+use tracing::{debug, error, info, instrument};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::{ClusterState, NodeState};
@@ -404,9 +404,23 @@ mod test {
         assert_eq!(is_any_node_leader_eligible(&config, nodes.iter()), expected);
     }
 
-    #[test]
-    fn test_seed_node_members() {
-        todo!()
+    #[rstest]
+    #[case::empty(vec![], vec![], vec![])]
+    #[case::up(vec![node_state!(1[]:Up->[]@[1])], vec![1,2,3], vec![1])]
+    #[case::joining(vec![node_state!(1[]:Joining->[]@[1])], vec![1,2,3], vec![1])]
+    #[case::down(vec![node_state!(1[]:Down->[]@[1])], vec![1,2,3], vec![1])]
+    #[case::removed(vec![node_state!(1[]:Removed->[]@[1])], vec![1,2,3], vec![1])]
+    #[case::filtering(vec![node_state!(1[]:Up->[]@[1]), node_state!(2[]:Up->[]@[1]), node_state!(5[]:Up->[]@[1])], vec![1,2,3], vec![1,2])]
+    fn test_seed_node_members(#[case] nodes: Vec<NodeState>, #[case] seed_nodes: Vec<u16>, #[case] expected: Vec<u16>) {
+        let seed_nodes = seed_nodes.into_iter()
+            .map(|n| test_node_addr_from_number(n).socket_addr)
+            .collect::<Vec<_>>();
+
+        let expected = expected.into_iter()
+            .map(|n| test_node_addr_from_number(n))
+            .collect::<Vec<_>>();
+
+        assert_eq!(seed_node_members(nodes.iter(), &seed_nodes), expected);
     }
 
     #[test]
