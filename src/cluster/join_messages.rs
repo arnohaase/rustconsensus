@@ -11,7 +11,7 @@ use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::messaging::JOIN_MESSAGE_MODULE_ID;
 use crate::util::buf::{put_string, try_get_string};
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JoinMessage {
     Join{ roles: BTreeSet<String>, }
 }
@@ -27,6 +27,10 @@ impl Message for JoinMessage {
         for role in roles {
             put_string(buf, role);
         }
+    }
+
+    fn box_clone(&self) -> Box<dyn Message> {
+        Box::new(self.clone())
     }
 }
 

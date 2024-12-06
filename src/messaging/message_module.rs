@@ -6,6 +6,8 @@ use crate::messaging::envelope::Envelope;
 pub trait Message: Send + Sync + Debug + 'static {
     fn module_id(&self) -> MessageModuleId;
     fn ser(&self, buf: &mut BytesMut);
+
+    fn box_clone(&self) -> Box<dyn Message>;
 }
 
 

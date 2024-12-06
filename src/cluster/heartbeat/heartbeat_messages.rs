@@ -65,6 +65,10 @@ impl Message for HeartbeatMessage {
             HeartbeatMessage::HeartbeatResponse(data) => Self::ser_heartbeat_response(data, buf),
         }
     }
+
+    fn box_clone(&self) -> Box<dyn Message> {
+        Box::new(self.clone())
+    }
 }
 
 impl HeartbeatMessage {

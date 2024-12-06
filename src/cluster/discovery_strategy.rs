@@ -224,7 +224,7 @@ mod test {
     use crate::cluster::cluster_state::{NodeReachability, MembershipState};
     use crate::messaging::messaging::{MessagingImpl, MockMessageSender};
     use crate::node_state;
-    use crate::test_util::test_node_addr_from_number;
+    use crate::test_util::{test_node_addr_from_number, TrackingMockMessageSender};
     use rstest::rstest;
     use tokio::time;
     use MembershipState::*;
@@ -383,9 +383,33 @@ mod test {
         assert!(join_handle.is_finished());
     }
 
-    #[test]
-    fn test_send_join_message_loop() {
-        todo!()
+    #[tokio::test]
+    async fn test_send_join_message_loop() {
+        let myself = test_node_addr_from_number(1);
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+
+        let other_seed_nodes = vec![
+            test_node_addr_from_number(2).socket_addr,
+            test_node_addr_from_number(3).socket_addr,
+        ];
+
+        let messaging = Arc::new(TrackingMockMessageSender::new(myself));
+
+        time::pause();
+
+        {
+            let messaging = messaging.clone();
+            let config = config.clone();
+            tokio::spawn(async move {
+                send_join_message_loop(&other_seed_nodes, messaging, config).await;
+            });
+        }
+
+        for _ in 0..500 {
+            sleep(config.discovery_seed_node_retry_interval).await;
+            todo!()
+            // assert_eq!(messaging.sent_messages().await, vec![]);
+        }
     }
 
     #[rstest]

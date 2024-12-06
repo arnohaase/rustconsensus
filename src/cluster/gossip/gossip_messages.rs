@@ -75,6 +75,10 @@ impl Message for GossipMessage {
             GossipMessage::DownYourself => {}
         }
     }
+
+    fn box_clone(&self) -> Box<dyn Message> {
+        Box::new(self.clone())
+    }
 }
 
 

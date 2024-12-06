@@ -1,6 +1,11 @@
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::sync::Arc;
+use async_trait::async_trait;
+use tokio::sync::RwLock;
 use crate::cluster::cluster_events::{ClusterEvent, LeaderChangedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
 use crate::cluster::cluster_state::MembershipState;
+use crate::messaging::message_module::Message;
+use crate::messaging::messaging::MessageSender;
 use crate::messaging::node_addr::NodeAddr;
 
 
@@ -71,4 +76,36 @@ pub fn test_reachability_evt(node: u16, new_is_reachable: bool) -> ClusterEvent 
         old_is_reachable: !new_is_reachable,
         new_is_reachable,
     })
+}
+
+#[derive(Debug)]
+pub struct TrackingMockMessageSender {
+    myself: NodeAddr,
+    tracker: Arc<RwLock<Vec<(NodeAddr, Box<dyn Message>)>>>,
+}
+impl TrackingMockMessageSender {
+    pub fn new(myself: NodeAddr) -> Self {
+        TrackingMockMessageSender {
+            myself,
+            tracker: Default::default()
+        }
+    }
+
+    /// returns sent messages, clearing the internal buffer
+    pub async fn sent_messages(&self) -> Vec<(NodeAddr, Box<dyn Message>)> {
+        let mut lock = self.tracker.write().await;
+        std::mem::take(&mut *lock)
+    }
+}
+
+#[async_trait]
+impl MessageSender for TrackingMockMessageSender {
+    fn get_self_addr(&self) -> NodeAddr {
+        self.myself
+    }
+
+    async fn send<T: Message>(&self, to: NodeAddr, msg: &T) -> anyhow::Result<()> {
+        self.tracker.write().await.push((to, msg.box_clone()));
+        Ok(())
+    }
 }
