@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -76,8 +77,8 @@ impl Message for GossipMessage {
         }
     }
 
-    fn box_clone(&self) -> Box<dyn Message> {
-        Box::new(self.clone())
+    fn box_clone(&self) -> Arc<dyn Any + Send + Sync + 'static> {
+        Arc::new(self.clone())
     }
 }
 

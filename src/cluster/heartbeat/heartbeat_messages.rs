@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -66,8 +67,8 @@ impl Message for HeartbeatMessage {
         }
     }
 
-    fn box_clone(&self) -> Box<dyn Message> {
-        Box::new(self.clone())
+    fn box_clone(&self) -> Arc<dyn Any + Send + Sync + 'static> {
+        Arc::new(self.clone())
     }
 }
 

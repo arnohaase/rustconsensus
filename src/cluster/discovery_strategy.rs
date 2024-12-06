@@ -221,10 +221,11 @@ impl DiscoveryStrategy for JoinOthersStrategy {
 mod test {
     use super::*;
     use crate::cluster::cluster_events::ClusterEventNotifier;
-    use crate::cluster::cluster_state::{NodeReachability, MembershipState};
+    use crate::cluster::cluster_state::*;
     use crate::messaging::messaging::{MessagingImpl, MockMessageSender};
     use crate::node_state;
-    use crate::test_util::{test_node_addr_from_number, TrackingMockMessageSender};
+    use crate::test_util::message::TrackingMockMessageSender;
+    use crate::test_util::node::test_node_addr_from_number;
     use rstest::rstest;
     use tokio::time;
     use MembershipState::*;
@@ -386,7 +387,9 @@ mod test {
     #[tokio::test]
     async fn test_send_join_message_loop() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let mut config = ClusterConfig::new(myself.socket_addr);
+        config.roles.insert("abc".to_string());
+        let config = Arc::new(config);
 
         let other_seed_nodes = vec![
             test_node_addr_from_number(2).socket_addr,
@@ -407,8 +410,9 @@ mod test {
 
         for _ in 0..500 {
             sleep(config.discovery_seed_node_retry_interval).await;
-            todo!()
-            // assert_eq!(messaging.sent_messages().await, vec![]);
+            messaging.assert_message_sent(test_node_addr_from_number(2), JoinMessage::Join { roles: ["abc".to_string()].into() }).await;
+            messaging.assert_message_sent(test_node_addr_from_number(3), JoinMessage::Join { roles: ["abc".to_string()].into() }).await;
+            messaging.assert_no_remaining_messages().await;
         }
     }
 

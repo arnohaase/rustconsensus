@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use async_trait::async_trait;
@@ -29,8 +30,8 @@ impl Message for JoinMessage {
         }
     }
 
-    fn box_clone(&self) -> Box<dyn Message> {
-        Box::new(self.clone())
+    fn box_clone(&self) -> Arc<dyn Any + Send + Sync + 'static> {
+        Arc::new(self.clone())
     }
 }
 

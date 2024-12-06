@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -26,7 +27,7 @@ impl MessageModule for TestMessageModule {
     async fn on_message(&self, _envelope: &Envelope, _buf: &[u8]) {}
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TestMessage(pub u32);
 impl Message for TestMessage {
     fn module_id(&self) -> MessageModuleId {
@@ -35,6 +36,10 @@ impl Message for TestMessage {
 
     fn ser(&self, buf: &mut BytesMut) {
         buf.put_u32(self.0);
+    }
+
+    fn box_clone(&self) -> Arc<dyn Any + Send + Sync + 'static> {
+        Arc::new(self.clone())
     }
 }
 

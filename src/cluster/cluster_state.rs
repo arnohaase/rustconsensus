@@ -667,7 +667,8 @@ mod test {
     use crate::cluster::cluster_events::*;
     use crate::messaging::node_addr::NodeAddr;
     use crate::node_state;
-    use crate::test_util::*;
+    use crate::test_util::event::*;
+    use crate::test_util::node::*;
 
     use super::*;
 

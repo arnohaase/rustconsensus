@@ -1,13 +1,14 @@
+use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 use bytes::BytesMut;
 use crate::messaging::envelope::Envelope;
 
-
-pub trait Message: Send + Sync + Debug + 'static {
+pub trait Message: Send + Sync + Debug + Any {
     fn module_id(&self) -> MessageModuleId;
     fn ser(&self, buf: &mut BytesMut);
 
-    fn box_clone(&self) -> Box<dyn Message>;
+    fn box_clone(&self) -> Arc<dyn Any + Send + Sync + 'static>;
 }
 
 
