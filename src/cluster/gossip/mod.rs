@@ -54,16 +54,9 @@ async fn do_gossip<M: MessageSender>(gossip: &Gossip, messaging: &M) { //TODO mo
     let gossip_partners = gossip.gossip_partners().await;
     for (addr, msg) in gossip_partners {
         debug!("sending gossip message to {:?}", addr);
-        let _ = messaging.send(addr, msg.as_ref()).await;
+        messaging.send(addr, msg.as_ref()).await;
     }
 }
-
-//TODO extract sending a message to MessageModule
-
-async fn reply<M: MessageSender>(sender: NodeAddr, message: &GossipMessage, messaging: &M) {
-    let _ = messaging.send(sender, message).await;
-}
-
 
 async fn on_gossip_message<M: MessageSender>(msg: GossipMessage, sender: NodeAddr, gossip: &mut Gossip, messaging: &M) { //TODO move to 'gossip_messages.rs'
     use GossipMessage::*;
@@ -71,17 +64,17 @@ async fn on_gossip_message<M: MessageSender>(msg: GossipMessage, sender: NodeAdd
     match msg {
         GossipSummaryDigest(digest) => {
             if let Some(response) = gossip.on_summary_digest(&digest).await {
-                reply(sender, &GossipDetailedDigest(response), messaging).await
+                messaging.send(sender, &GossipDetailedDigest(response)).await;
             }
         }
         GossipDetailedDigest(digest) => {
             if let Some(response) = gossip.on_detailed_digest(&digest).await {
-                reply(sender, &GossipDifferingAndMissingNodes(response), messaging).await
+                messaging.send(sender, &GossipDifferingAndMissingNodes(response)).await;
             }
         }
         GossipDifferingAndMissingNodes(data) => {
             if let Some(response) = gossip.on_differing_and_missing_nodes(data).await {
-                reply(sender, &GossipNodes(response), messaging).await
+                messaging.send(sender, &GossipNodes(response)).await;
             }
         }
         GossipNodes(data) => {

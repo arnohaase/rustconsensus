@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use tokio::select;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::{debug, error, info, instrument, trace};
+use tracing::{debug, error, info, instrument};
 
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeState};
+use crate::cluster::cluster_state::{ClusterState, NodeState};
 use crate::cluster::join_messages::JoinMessage;
 use crate::messaging::messaging::MessageSender;
 use crate::messaging::node_addr::NodeAddr;
@@ -168,7 +168,7 @@ async fn send_join_message_loop<M: MessageSender>(other_seed_nodes: &[SocketAddr
     loop {
         for seed_node in other_seed_nodes {
             debug!("trying to join cluster at {}", seed_node); //TODO clearer logging
-            let _ = messaging.send(seed_node.clone().into(), &join_msg).await;
+            messaging.send(seed_node.clone().into(), &join_msg).await;
         }
         sleep(config.discovery_seed_node_retry_interval).await;
     }

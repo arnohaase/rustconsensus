@@ -81,7 +81,7 @@ pub async fn main() -> anyhow::Result<()> {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
     for i in 0u32..10 {
-        t1.send(t2.get_self_addr(), &TestMessage(i)).await.unwrap();
+        t1.try_send(t2.get_self_addr(), &TestMessage(i)).await.unwrap();
     }
     tokio::time::sleep(Duration::from_millis(500)).await;
 

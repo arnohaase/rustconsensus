@@ -58,7 +58,7 @@ impl MessageSender for TrackingMockMessageSender {
         self.myself
     }
 
-    async fn send<T: Message>(&self, to: NodeAddr, msg: &T) -> anyhow::Result<()> {
+    async fn try_send<T: Message>(&self, to: NodeAddr, msg: &T) -> anyhow::Result<()> {
         self.tracker.write().await.push((to, msg.box_clone()));
         Ok(())
     }

@@ -125,7 +125,7 @@ impl  UnreachableTracker {
             // This is a best effort to notify all affected nodes of the downing decision.
             //  We cannot reach all nodes anyway, and there may be network problems, so this is
             //  *not* a reliable notification - but it may help in the face of problems
-            let _ = messaging.send(n, &GossipMessage::DownYourself).await;
+            messaging.send(n, &GossipMessage::DownYourself).await;
         }
     }
 }

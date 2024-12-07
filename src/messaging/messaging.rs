@@ -23,7 +23,12 @@ pub const MAX_MSG_SIZE: usize = 256*1024; //TODO make this configurable
 pub trait MessageSender: Debug + Send + Sync + 'static {
     fn get_self_addr(&self) -> NodeAddr;
 
-    async fn send<T: Message>(&self, to: NodeAddr, msg: &T) -> anyhow::Result<()>;
+    async fn send<T: Message>(&self, to: NodeAddr, msg: &T) {
+        if let Err(e) = self.try_send(to, msg).await {
+            error!("Error sending message: {}", e);
+        }
+    }
+    async fn try_send<T: Message>(&self, to: NodeAddr, msg: &T) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -52,16 +57,9 @@ impl MessageSender for MessagingImpl {
         self.myself
     }
 
-    async fn send<T: Message>(&self, to: NodeAddr, msg: &T) -> anyhow::Result<()> {
+    async fn try_send<T: Message>(&self, to: NodeAddr, msg: &T) -> anyhow::Result<()> {
         let msg_module_id = msg.module_id();
-        (match self._send(to, msg_module_id, msg).await {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                error!("error sending message: {}", e);
-                Err(e)
-            }
-        })?;
-        Ok(())
+        self._send(to, msg_module_id, msg).await
     }
 }
 #[async_trait]

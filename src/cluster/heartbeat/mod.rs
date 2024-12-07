@@ -69,7 +69,7 @@ async fn on_heartbeat_message<M: MessageSender>(sender: NodeAddr, msg: Heartbeat
                 counter: data.counter,
                 timestamp_nanos: data.timestamp_nanos,
             });
-            let _ = messaging.send(sender, &response).await;
+            messaging.send(sender, &response).await;
         }
         HeartbeatMessage::HeartbeatResponse(data) => {
             debug!("received heartbeat response message");
@@ -92,6 +92,6 @@ async fn do_heartbeat<M: MessageSender>(cluster_state: &RwLock<ClusterState>, he
     let recipients = heart_beat.heartbeat_recipients(&*cluster_state.read().await);
     debug!("sending heartbeat message to {:?}", recipients);
     for recipient in recipients {
-        let _ = messaging.send(recipient, &msg).await;
+        messaging.send(recipient, &msg).await;
     }
 }
