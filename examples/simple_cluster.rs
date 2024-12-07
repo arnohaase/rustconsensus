@@ -7,7 +7,7 @@ use tracing::Level;
 
 use rustconsensus::cluster::cluster::Cluster;
 use rustconsensus::cluster::cluster_config::ClusterConfig;
-use rustconsensus::cluster::discovery_strategy::PartOfSeedNodeStrategy;
+use rustconsensus::cluster::discovery_strategy::PartOfSeedNodesStrategy;
 use rustconsensus::cluster::heartbeat::downing_strategy::QuorumOfSeedNodesStrategy;
 
 fn init_logging() {
@@ -31,7 +31,7 @@ async fn new_node(num_nodes: usize, n: usize) -> anyhow::Result<()> {
 
     let seed_nodes = (0..num_nodes).map(|n| addr(n)).collect::<Vec<_>>();
 
-    let discovery_strategy = PartOfSeedNodeStrategy::new(seed_nodes.clone(), cluster.config.as_ref())?;
+    let discovery_strategy = PartOfSeedNodesStrategy::new(seed_nodes.clone(), cluster.config.as_ref())?;
 
     cluster.run(discovery_strategy, QuorumOfSeedNodesStrategy { seed_nodes }).await
 }

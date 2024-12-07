@@ -1,4 +1,4 @@
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use tokio::select;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, trace};
 
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_state::{ClusterState, NodeState};
+use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeState};
 use crate::cluster::join_messages::JoinMessage;
 use crate::messaging::messaging::MessageSender;
 use crate::messaging::node_addr::NodeAddr;
@@ -64,32 +64,32 @@ impl DiscoveryStrategy for StartAsClusterDiscoveryStrategy {
     }
 }
 
-/// This strategy means that I am one of the seed nodes and may promote myself to 'Up' once a quorum
-///  of these has joined (and I am the first of them)
-pub struct PartOfSeedNodeStrategy {
+pub struct PartOfSeedNodesStrategy {
+    /// This strategy means that I am one of the seed nodes and may promote myself to 'Up' once a quorum
+    ///  of these has joined (and I am the first of them).
+    ///
+    /// NB: The list of seed nodes is Vec<SocketAddr> and *not* Vec<ToSocketAddrs> to have a well-defined
+    ///      number of nodes which can serve as basis for quora decisions
     seed_nodes: Vec<SocketAddr>,
 }
-impl PartOfSeedNodeStrategy {
-    pub fn new(seed_nodes: Vec<impl ToSocketAddrs>, config: &ClusterConfig) -> anyhow::Result<PartOfSeedNodeStrategy> {
+impl PartOfSeedNodesStrategy {
+    pub fn new(seed_nodes: Vec<SocketAddr>, config: &ClusterConfig) -> anyhow::Result<PartOfSeedNodesStrategy> {
+        if !seed_nodes.contains(&config.self_addr) {
+            return Err(anyhow!("self {:?} is not a seed node {:?}", config.self_addr, seed_nodes));
+        }
+
         if let Some(leader_roles) = &config.leader_eligible_roles {
             if !config.roles.iter().any(|r| leader_roles.contains(r)) {
                 return Err(anyhow!("none of this role's roles {:?} make it eligible for leadership: one of {:?} is needed", config.roles, leader_roles));
             }
         }
-
-        let mut resolved_nodes = Vec::new();
-        for tsa in seed_nodes {
-            for sa in tsa.to_socket_addrs()? {
-                resolved_nodes.push(sa);
-            }
-        }
-        Ok(PartOfSeedNodeStrategy {
-            seed_nodes: resolved_nodes,
+        Ok(PartOfSeedNodesStrategy {
+            seed_nodes,
         })
     }
 }
 #[async_trait]
-impl DiscoveryStrategy for PartOfSeedNodeStrategy {
+impl DiscoveryStrategy for PartOfSeedNodesStrategy {
     async fn do_discovery<M: MessageSender>(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) -> anyhow::Result<()> {
         let myself = cluster_state.read().await.myself();
         let other_seed_nodes = self.seed_nodes.iter()
@@ -104,7 +104,10 @@ impl DiscoveryStrategy for PartOfSeedNodeStrategy {
         select! {
             _ = send_join_message_loop(&other_seed_nodes, messaging.clone(), config.clone()) => { Ok(()) }
             _ = check_joined_as_seed_node(cluster_state.clone(), config.clone(), self.seed_nodes.clone(), myself) => { Ok(()) }
-            _ = sleep(config.discovery_seed_node_give_up_timeout) => { Err(anyhow!("discovery timeout")) } //TODO better message; logging
+            _ = sleep(config.discovery_seed_node_give_up_timeout) => {
+                error!("discovery of seed nodes timed out, giving up");
+                Err(anyhow!("discovery of seed nodes timed out, giving up"))
+            }
         }
     }
 }
@@ -144,6 +147,11 @@ async fn check_joined_other_seed_nodes(cluster_state: Arc<RwLock<ClusterState>>,
             .node_states()
             .any(|n| seed_nodes.contains(&n.addr.socket_addr))
         {
+            // Seeing one of the seed nodes in our own cluster state means that someone gossipped it
+            //  back - and since we didn't publish our address except by sending Join messages to
+            //  seed nodes, that meant that some seed nodes are now aware of us. That takes care
+            //  of discovery, and regular gossip should do the rest.
+
             info!("discovery successful, joined the cluster");
             break
         }
@@ -178,27 +186,23 @@ fn seed_node_members<'a>(all_nodes: impl Iterator<Item=&'a NodeState>, seed_node
 }
 
 //TODO documentation
-pub fn create_join_seed_nodes_strategy(seed_nodes: impl ToSocketAddrs) -> anyhow::Result<impl DiscoveryStrategy> {
-    let seed_nodes = seed_nodes.to_socket_addrs()?.collect::<Vec<_>>();
-    Ok(JoinOthersStrategy {
+pub fn create_join_seed_nodes_strategy(seed_nodes: Vec<SocketAddr>) -> JoinOthersStrategy {
+    JoinOthersStrategy {
         seed_nodes,
-    })
+    }
 }
 
+/// This discovery strategy expects to join one of a set of well-known nodes (typically seed nodes)
+///  without being part of that set itself. Behavior is similar to [PartOfSeedNodesStrategy], but
+///  here a node will never promote itself to 'up' if a quorum of seed nodes is reached.
 pub struct JoinOthersStrategy {
     seed_nodes: Vec<SocketAddr>,
 }
 impl JoinOthersStrategy {
-    pub fn new(seed_nodes: Vec<impl ToSocketAddrs>) -> anyhow::Result<JoinOthersStrategy> {
-        let mut resolved_nodes = Vec::new();
-        for tsa in seed_nodes {
-            for sa in tsa.to_socket_addrs()? {
-                resolved_nodes.push(sa);
-            }
+    pub fn new(seed_nodes: Vec<SocketAddr>) -> JoinOthersStrategy {
+        JoinOthersStrategy {
+            seed_nodes,
         }
-        Ok(JoinOthersStrategy {
-            seed_nodes: resolved_nodes,
-        })
     }
 }
 #[async_trait]
@@ -212,7 +216,10 @@ impl DiscoveryStrategy for JoinOthersStrategy {
         select! {
             _ = send_join_message_loop(&self.seed_nodes, messaging.clone(), config.clone()) => { Ok(()) }
             _ = check_joined_other_seed_nodes(cluster_state.clone(), &self.seed_nodes) => { Ok(()) }
-            _ = sleep(config.discovery_seed_node_give_up_timeout) => { Err(anyhow!("discovery timeout")) } //TODO better message; logging
+            _ = sleep(config.discovery_seed_node_give_up_timeout) => {
+                error!("discovery of seed nodes timed out, giving up");
+                Err(anyhow!("discovery of seed nodes timed out, giving up"))
+            }
         }
     }
 }
@@ -277,9 +284,153 @@ mod test {
         assert!(cluster_state.write().await.am_i_leader());
     }
 
-    #[test]
-    fn test_part_of_seed_nodes_strategy() {
-        todo!()
+    #[tokio::test]
+    async fn test_part_of_seed_nodes_strategy_join_loop() {
+        let myself = test_node_addr_from_number(1);
+        let mut config = ClusterConfig::new(myself.socket_addr);
+        config.roles = ["xyz".to_string()].into();
+        let config = Arc::new(config);
+        let strategy = PartOfSeedNodesStrategy::new(vec![
+            myself.socket_addr,
+            test_node_addr_from_number(2).socket_addr,
+            test_node_addr_from_number(3).socket_addr,
+        ], config.as_ref()).unwrap();
+
+        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+        let messaging = Arc::new(TrackingMockMessageSender::new(myself));
+
+        time::pause();
+
+        {
+            let config = config.clone();
+            let cluster_state = cluster_state.clone();
+            let messaging = messaging.clone();
+            tokio::spawn(async move {
+                strategy.do_discovery(config, cluster_state, messaging).await
+            })
+        };
+
+        for _ in 0..20 {
+            sleep(config.discovery_seed_node_retry_interval).await;
+
+            messaging.assert_message_sent(test_node_addr_from_number(2), JoinMessage::Join { roles: config.roles.clone() }).await;
+            messaging.assert_message_sent(test_node_addr_from_number(3), JoinMessage::Join { roles: config.roles.clone() }).await;
+            messaging.assert_no_remaining_messages().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_part_of_seed_nodes_strategy_promote_self() {
+        let myself = test_node_addr_from_number(1);
+        let mut config = ClusterConfig::new(myself.socket_addr);
+        config.roles = ["xyz".to_string()].into();
+        let config = Arc::new(config);
+        let strategy = PartOfSeedNodesStrategy::new(vec![
+            myself.socket_addr,
+            test_node_addr_from_number(2).socket_addr,
+            test_node_addr_from_number(3).socket_addr,
+        ], config.as_ref()).unwrap();
+
+        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+        let messaging = Arc::new(TrackingMockMessageSender::new(myself));
+
+        time::pause();
+
+        let handle = {
+            let config = config.clone();
+            let cluster_state = cluster_state.clone();
+            let messaging = messaging.clone();
+            tokio::spawn(async move {
+                strategy.do_discovery(config, cluster_state, messaging).await
+            })
+        };
+
+        for _ in 0..20 {
+            sleep(config.discovery_seed_node_retry_interval).await;
+
+            messaging.assert_message_sent(test_node_addr_from_number(2), JoinMessage::Join { roles: config.roles.clone() }).await;
+            messaging.assert_message_sent(test_node_addr_from_number(3), JoinMessage::Join { roles: config.roles.clone() }).await;
+            messaging.assert_no_remaining_messages().await;
+        }
+
+        cluster_state.write().await
+            .merge_node_state(node_state!(1["xyz"]:Joining->[]@[1,2])).await;
+        cluster_state.write().await
+            .merge_node_state(node_state!(2[]:Joining->[]@[1,2])).await;
+
+        sleep(Duration::from_millis(10)).await;
+        assert!(handle.is_finished());
+        assert!(handle.await.is_ok());
+        assert_eq!(cluster_state.read().await
+            .get_node_state(&myself).unwrap().membership_state, Up);
+    }
+
+    #[tokio::test]
+    async fn test_part_of_seed_nodes_strategy_timeout() {
+        time::pause();
+
+        let myself = test_node_addr_from_number(1);
+        let mut config = ClusterConfig::new(myself.socket_addr);
+        config.roles = ["xyz".to_string()].into();
+        let config = Arc::new(config);
+        let strategy = PartOfSeedNodesStrategy::new(vec![
+            myself.socket_addr,
+            test_node_addr_from_number(2).socket_addr,
+            test_node_addr_from_number(3).socket_addr,
+        ], config.as_ref()).unwrap();
+
+        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+        let messaging = Arc::new(TrackingMockMessageSender::new(myself));
+
+        let handle = {
+            let config = config.clone();
+            let cluster_state = cluster_state.clone();
+            let messaging = messaging.clone();
+            tokio::spawn(async move {
+                strategy.do_discovery(config, cluster_state, messaging).await
+            })
+        };
+
+        sleep(config.discovery_seed_node_give_up_timeout + Duration::from_secs(1)).await;
+        assert!(handle.is_finished());
+        assert!(handle.await.unwrap().is_err());
+        assert_eq!(cluster_state.read().await
+            .get_node_state(&myself).unwrap().membership_state, Joining);
+    }
+
+    #[rstest]
+    #[case::simple(vec![1,2], vec![], vec![], true)]
+    #[case::self_not_seed_node(vec![2,3], vec![], vec![], false)]
+    #[case::self_leader_role(vec![1,2], vec!["a"], vec!["a"], true)]
+    #[case::self_leader_role_2(vec![1,2], vec!["a"], vec!["a", "b"], true)]
+    #[case::self_not_leader_role(vec![1,2], vec!["a"], vec![], false)]
+    #[case::self_not_leader_role_2(vec![1,2], vec!["a"], vec!["b"], false)]
+    #[case::several_leader_roles_1(vec![1,2], vec!["a","b"], vec!["a"], true)]
+    #[case::several_leader_roles_1_plus(vec![1,2], vec!["a","b"], vec!["a", "x"], true)]
+    #[case::several_leader_roles_2(vec![1,2], vec!["a","b"], vec!["b"], true)]
+    #[case::several_leader_roles_2_plus(vec![1,2], vec!["a","b"], vec!["b", "x"], true)]
+    #[case::several_leader_roles_both(vec![1,2], vec!["a","b"], vec!["a", "b"], true)]
+    #[case::several_leader_roles_both_plus(vec![1,2], vec!["a","b"], vec!["a", "b", "x"], true)]
+    #[case::several_leader_roles_neither(vec![1,2], vec!["a","b"], vec![], false)]
+    fn test_part_of_seed_nodes_strategy_new(#[case] seed_nodes: Vec<u16>, #[case] leader_roles: Vec<&str>, #[case] self_roles: Vec<&str>, #[case] expected: bool) {
+        let mut config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr);
+
+        if leader_roles.len() > 0 {
+            config.leader_eligible_roles = Some(
+                leader_roles.into_iter()
+                    .map(|role| role.to_string())
+                    .collect()
+            );
+        }
+        config.roles = self_roles.into_iter()
+            .map(|role| role.to_string())
+            .collect();
+
+        let seed_nodes = seed_nodes.into_iter()
+            .map(|n| test_node_addr_from_number(n).socket_addr)
+            .collect::<Vec<_>>();
+
+        assert_eq!(PartOfSeedNodesStrategy::new(seed_nodes, &config).is_ok(), expected);
     }
 
     #[rstest]
@@ -373,7 +524,7 @@ mod test {
 
         let join_handle = tokio::spawn(check_joined_as_seed_node(cluster_state.clone(), config, seed_nodes, myself));
 
-        sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(30000)).await;
         assert!(!join_handle.is_finished());
 
         // add some other node that is Up - NB: we do not need to wait for convergence
@@ -451,8 +602,90 @@ mod test {
         assert_eq!(seed_node_members(nodes.iter(), &seed_nodes), expected);
     }
 
-    #[test]
-    fn test_join_others_strategy() {
-        todo!()
+    #[tokio::test]
+    async fn test_join_others_strategy_success() {
+        let myself = test_node_addr_from_number(1);
+        let mut config = ClusterConfig::new(myself.socket_addr);
+        config.roles.insert("abc".to_string());
+        let config = Arc::new(config);
+
+        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+
+        let messaging = Arc::new(TrackingMockMessageSender::new(myself));
+
+        let strategy = JoinOthersStrategy::new(vec![
+            test_node_addr_from_number(2).socket_addr,
+            test_node_addr_from_number(3).socket_addr,
+        ]);
+
+        time::pause();
+
+        let handle = {
+            let config = config.clone();
+            let cluster_state = cluster_state.clone();
+            let messaging = messaging.clone();
+            tokio::spawn(async move {
+                strategy.do_discovery(config, cluster_state, messaging).await
+            })
+        };
+
+        for _ in 0..10 {
+            sleep(config.discovery_seed_node_retry_interval).await;
+            messaging.assert_message_sent(test_node_addr_from_number(2), JoinMessage::Join { roles: ["abc".to_string()].into() }).await;
+            messaging.assert_message_sent(test_node_addr_from_number(3), JoinMessage::Join { roles: ["abc".to_string()].into() }).await;
+            messaging.assert_no_remaining_messages().await;
+        }
+        assert!(!handle.is_finished());
+
+        cluster_state.write().await
+            .merge_node_state(node_state!(4[]:Joining->[]@[1,2,3,4])).await; // not a seed node
+
+        for _ in 0..10 {
+            sleep(config.discovery_seed_node_retry_interval).await;
+            messaging.assert_message_sent(test_node_addr_from_number(2), JoinMessage::Join { roles: ["abc".to_string()].into() }).await;
+            messaging.assert_message_sent(test_node_addr_from_number(3), JoinMessage::Join { roles: ["abc".to_string()].into() }).await;
+            messaging.assert_no_remaining_messages().await;
+        }
+        assert!(!handle.is_finished());
+
+        cluster_state.write().await
+            .merge_node_state(node_state!(3[]:Joining->[]@[1,2,3,4])).await; // Joining is enough
+
+        sleep(Duration::from_millis(10)).await;
+        assert!(handle.is_finished());
+        assert!(handle.await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_join_others_strategy_timeout() {
+        let myself = test_node_addr_from_number(1);
+        let mut config = ClusterConfig::new(myself.socket_addr);
+        config.roles.insert("abc".to_string());
+        let config = Arc::new(config);
+
+        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+
+        let messaging = Arc::new(TrackingMockMessageSender::new(myself));
+
+        let strategy = JoinOthersStrategy::new(vec![
+            test_node_addr_from_number(2).socket_addr,
+            test_node_addr_from_number(3).socket_addr,
+        ]);
+
+        time::pause();
+
+        let handle = {
+            let config = config.clone();
+            let cluster_state = cluster_state.clone();
+            let messaging = messaging.clone();
+            tokio::spawn(async move {
+                strategy.do_discovery(config, cluster_state, messaging).await
+            })
+        };
+
+        sleep(config.discovery_seed_node_give_up_timeout + Duration::from_secs(1)).await;
+
+        assert!(handle.is_finished());
+        assert!(handle.await.unwrap().is_err());
     }
 }

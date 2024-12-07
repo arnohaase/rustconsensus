@@ -93,7 +93,7 @@ impl NodeAddr {
     }
 }
 
-impl From<SocketAddr> for NodeAddr { //TODO ToSocketAddrs
+impl From<SocketAddr> for NodeAddr {
     fn from(addr: SocketAddr) -> Self {
         //TODO overarching clock concept
         let unique = SystemTime::now().duration_since(UNIX_EPOCH)
