@@ -13,8 +13,8 @@ use tracing::{debug, error, info, trace, warn};
 use crate::messaging::envelope::{Checksum, Envelope};
 use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::node_addr::NodeAddr;
-use crate::messaging::transport::{MessageHandler, Transport, UdpTransport};
-
+use crate::messaging::transport::{MessageHandler, Transport};
+use crate::messaging::transport::udp::UdpTransport;
 
 pub const MAX_MSG_SIZE: usize = 256*1024; //TODO make this configurable
 

@@ -41,17 +41,6 @@ impl Debug for MessageModuleId {
     }
 }
 
-// impl From<&str> for MessageModuleId {
-//     fn from(value: &str) -> Self {
-//         let bytes = value.as_bytes();
-//         assert!(bytes.len() <= 8, "a message module id must have at most 8 bytes");
-//         let mut buf = [0u8;8];
-//         buf[..bytes.len()].copy_from_slice(bytes);
-//         buf.into()
-//     }
-// }
-
-
 /// Messages are pluggable, and they are organized in [MessageModule]s. Each module has its own
 ///  (single) type of messages, it takes care of serializing / deserializing them, and for handling
 ///  received messages.

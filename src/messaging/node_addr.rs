@@ -106,3 +106,11 @@ impl From<SocketAddr> for NodeAddr {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test_node_addr() {
+        todo!()
+    }
+}
