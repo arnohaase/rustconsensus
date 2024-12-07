@@ -297,5 +297,53 @@ impl  Gossip {
 
 #[cfg(test)]
 mod test {
+    #[test]
+    fn test_nodes_by_differing_state() {
+        todo!()
+    }
 
+    #[test]
+    fn test_gossip_summary_digest() {
+        todo!()
+    }
+
+    #[test]
+    fn test_gossip_detailed_digest() {
+        todo!()
+    }
+
+    #[test]
+    fn test_gossip_detailed_digest_with_given_nonce() {
+        todo!()
+    }
+
+    #[test]
+    fn test_gossip_partners() {
+        todo!()
+    }
+
+    #[test]
+    fn test_on_summary_digest() {
+        todo!()
+    }
+
+    #[test]
+    fn test_on_detailed_digest() {
+        todo!()
+    }
+
+    #[test]
+    fn test_on_differing_and_missing_nodes() {
+        todo!()
+    }
+
+    #[test]
+    fn test_on_nodes() {
+        todo!()
+    }
+
+    #[test]
+    fn test_down_yourself() {
+        todo!()
+    }
 }

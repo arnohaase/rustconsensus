@@ -58,7 +58,7 @@ async fn do_gossip<M: MessageSender>(gossip: &Gossip, messaging: &M) { //TODO mo
     }
 }
 
-async fn on_gossip_message<M: MessageSender>(msg: GossipMessage, sender: NodeAddr, gossip: &mut Gossip, messaging: &M) { //TODO move to 'gossip_messages.rs'
+async fn on_gossip_message<M: MessageSender>(msg: GossipMessage, sender: NodeAddr, gossip: &mut Gossip, messaging: &M) {
     use GossipMessage::*;
 
     match msg {
@@ -83,5 +83,23 @@ async fn on_gossip_message<M: MessageSender>(msg: GossipMessage, sender: NodeAdd
         DownYourself => {
             gossip.down_yourself().await
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test_run_gossip() {
+        todo!()
+    }
+
+    #[test]
+    fn test_do_gossip() {
+        todo!()
+    }
+
+    #[test]
+    fn test_on_gossip_message() {
+        todo!()
     }
 }

@@ -19,7 +19,7 @@ use crate::util::buf::{put_string, try_get_string};
 
 pub(crate) const GOSSIP_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"CtrGossp");
 
-//TODO make the message module infrastructure reusable
+//TODO make message module infrastructure reusable
 
 pub struct GossipMessageModule {
     gossip: mpsc::Sender<(NodeAddr, GossipMessage)>,
@@ -615,5 +615,3 @@ mod test {
         assert_eq!(msg, deser_msg);
     }
 }
-
-
