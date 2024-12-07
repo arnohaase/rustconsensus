@@ -180,6 +180,9 @@ impl MessageHandler for ReceivedMessageHandler {
 
                 if let Some(message_module) = self.message_modules.read().await.get(&envelope.message_module_id) {
                     let message_module = message_module.clone();
+                    //TODO better spawn this? What about message ordering?
+                    //TODO decouple through a spsc channel with backpressure?
+                    //TODO or keep it simple like this, relying on handlers not doing expensive work on this thread?
                     message_module.on_message(&envelope, msg_buf).await;
                 }
                 else {
