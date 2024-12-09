@@ -109,7 +109,6 @@ impl ClusterState {
         self.promote_myself(MembershipState::Up).await
     }
 
-    //TODO unit test
     pub async fn promote_myself_to_down(&mut self) {
         self.promote_myself(MembershipState::Down).await
     }

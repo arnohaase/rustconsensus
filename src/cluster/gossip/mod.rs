@@ -6,7 +6,7 @@ use tracing::debug;
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
-use crate::cluster::gossip::gossip_logic::Gossip;
+use crate::cluster::gossip::gossip_logic::{Gossip, GossipRandom};
 use crate::cluster::gossip::gossip_messages::{GossipMessage, GossipMessageModule};
 use crate::messaging::messaging::{MessageSender, Messaging};
 use crate::messaging::node_addr::NodeAddr;
@@ -49,7 +49,7 @@ pub async fn run_gossip<M: Messaging>(config: Arc<ClusterConfig>, messaging: Arc
     }
 }
 
-async fn do_gossip<M: MessageSender>(gossip: &Gossip, messaging: &M) { //TODO move somewhere else
+async fn do_gossip<M: MessageSender, R: GossipRandom>(gossip: &Gossip<R>, messaging: &M) { //TODO move somewhere else
     debug!("periodic gossip");
     let gossip_partners = gossip.gossip_partners().await;
     for (addr, msg) in gossip_partners {
@@ -58,7 +58,7 @@ async fn do_gossip<M: MessageSender>(gossip: &Gossip, messaging: &M) { //TODO mo
     }
 }
 
-async fn on_gossip_message<M: MessageSender>(msg: GossipMessage, sender: NodeAddr, gossip: &mut Gossip, messaging: &M) {
+async fn on_gossip_message<M: MessageSender, R: GossipRandom>(msg: GossipMessage, sender: NodeAddr, gossip: &mut Gossip<R>, messaging: &M) {
     use GossipMessage::*;
 
     match msg {
@@ -81,7 +81,7 @@ async fn on_gossip_message<M: MessageSender>(msg: GossipMessage, sender: NodeAdd
             gossip.on_nodes(data).await
         }
         DownYourself => {
-            gossip.down_yourself().await
+            gossip.down_myself().await
         }
     }
 }
