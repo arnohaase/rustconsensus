@@ -248,7 +248,6 @@ impl <R: GossipRandom> Gossip<R> {
         }
     }
 
-    //TODO unit test
     pub async fn on_differing_and_missing_nodes(&self, other_data: GossipDifferingAndMissingNodesData) -> Option<GossipNodesData> {
         let differing_keys = other_data.differing.iter()
             .map(|n| n.addr)
@@ -342,10 +341,11 @@ mod test {
     use tracing::debug;
     use crate::cluster::cluster_config::ClusterConfig;
     use crate::cluster::cluster_events::ClusterEventNotifier;
-    use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeReachability};
+    use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeReachability, NodeState};
     use crate::cluster::cluster_state::MembershipState::Up;
     use crate::cluster::gossip::gossip_logic::{gossip_detailed_digest_with_given_nonce, Gossip, MockGossipRandom};
     use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipNodesData, GossipSummaryDigestData};
+    use crate::messaging::node_addr::NodeAddr;
     use crate::node_state;
     use crate::test_util::node::test_node_addr_from_number;
 
@@ -462,9 +462,54 @@ mod test {
         });
     }
 
-    #[test]
-    fn test_on_detailed_digest() {
-        todo!()
+    #[rstest]
+    #[case::stable(vec![(1,12416313083010759684), (2,12416313083010759684)], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], vec![], vec![])]
+    #[case::local_only(vec![(1,12416313083010759684)], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], vec![node_state!(2[]:Up->[]@[1,2])], vec![])]
+    #[case::remote_only(vec![(1,12416313083010759684), (2,12416313083010759684)], vec![node_state!(1[]:Up->[]@[1,2])], vec![], vec![2])]
+    #[case::different(vec![(1,12416313083010759684), (2,123)], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], vec![node_state!(2[]:Up->[]@[1,2])], vec![])]
+    #[case::mix(vec![(1,12416313083010759684), (2,12416313083010759684), (3,123)], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(3[]:Up->[]@[1,2]), node_state!(4[]:Up->[]@[1,2])], vec![node_state!(3[]:Up->[]@[1,2]), node_state!(4[]:Up->[]@[1,2])], vec![2])]
+    fn test_on_detailed_digest(
+        #[case] nodes_in_gossip: Vec<(u16, u64)>,
+        #[case] local_nodes: Vec<NodeState>,
+        #[case] expected_differing: Vec<NodeState>,
+        #[case] expected_missing: Vec<u16>,
+    ) {
+        let expected_missing = expected_missing.into_iter()
+            .map(|n| test_node_addr_from_number(n))
+            .collect::<Vec<_>>();
+
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let myself = test_node_addr_from_number(1);
+            let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+            let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+            for n in local_nodes {
+                cluster_state.write().await
+                    .merge_node_state(n).await;
+            }
+            let gossip = Gossip::<MockGossipRandom>::new_with_random(myself, config, cluster_state.clone());
+
+            let context = MockGossipRandom::next_u32_context();
+            context.expect()
+                .returning(move || 7);
+
+            let actual_response = gossip.on_detailed_digest(&GossipDetailedDigestData {
+                nonce: 7,
+                nodes: nodes_in_gossip.into_iter()
+                    .map(|(n,h)| (test_node_addr_from_number(n), h))
+                    .collect(),
+            }).await;
+
+            if expected_differing.is_empty() && expected_missing.is_empty() {
+                assert!(actual_response.is_none());
+            }
+            else {
+                let actual_response = actual_response.unwrap();
+
+                assert_eq!(actual_response.differing, expected_differing);
+                assert_eq!(actual_response.missing, expected_missing);
+            }
+        });
     }
 
     #[test]
