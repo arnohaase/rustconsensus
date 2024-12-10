@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, warn};
 
 pub struct UdpTransport {
     self_addr: SocketAddr,

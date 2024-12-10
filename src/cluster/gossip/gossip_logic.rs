@@ -16,37 +16,16 @@ use super::gossip_messages::*;
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::{ClusterState, NodeState};
 use crate::messaging::node_addr::NodeAddr;
+use crate::util::random::{Random, RngRandom};
 
-#[mockall::automock]
-pub trait GossipRandom {
-    fn next_u32() -> u32;
-    fn gen_f64_range(range: Range<f64>) -> f64;
-    fn gen_usize_range(range: Range<usize>) -> usize;
-}
-pub struct RngGossipRandom {}
-impl GossipRandom for RngGossipRandom {
-    fn next_u32() -> u32 {
-        rand::thread_rng().next_u32()
-    }
-
-    fn gen_f64_range(range: Range<f64>) -> f64 {
-        rand::thread_rng().gen_range(range)
-    }
-
-    fn gen_usize_range(range: Range<usize>) -> usize {
-        rand::thread_rng().gen_range(range)
-    }
-}
-
-
-pub struct Gossip<R: GossipRandom> {
+pub struct Gossip<R: Random> {
     config: Arc<ClusterConfig>,
     myself: NodeAddr,
     cluster_state: Arc<RwLock<ClusterState>>,
     pd: PhantomData<R>,
 }
-impl Gossip<RngGossipRandom> {
-    pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>) -> Gossip<RngGossipRandom> {
+impl Gossip<RngRandom> {
+    pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>) -> Gossip<RngRandom> {
         Gossip {
             config,
             myself,
@@ -55,7 +34,7 @@ impl Gossip<RngGossipRandom> {
         }
     }
 }
-impl <R: GossipRandom> Gossip<R> {
+impl <R: Random> Gossip<R> {
     pub fn new_with_random(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>) -> Gossip<R> {
         Gossip {
             config,
@@ -229,6 +208,7 @@ impl <R: GossipRandom> Gossip<R> {
         let differing: Vec<NodeState> = own_digest.nodes.iter()
             .filter(|(addr, &hash)| Some(&hash) != other_digest.nodes.get(addr))
             .flat_map(|(addr, _)| cluster_state.get_node_state(addr))
+            .cloned()
             .collect();
 
         // nodes that are apparently present on the remote node but not locally
@@ -264,6 +244,9 @@ impl <R: GossipRandom> Gossip<R> {
 
         let mut nodes = Vec::new();
         for differing_addr in differing_keys {
+            // These nodes 'should' always exist, we just merged them - but this is the robust and
+            //  idiomatic way of accessing them, and there might be some cleanup logic during merging
+            //  at some point
             if let Some(state) = cluster_state.get_node_state(&differing_addr) {
                 nodes.push(state.clone());
             }
@@ -338,18 +321,15 @@ mod test {
     use rstest::rstest;
     use tokio::runtime::Builder;
     use tokio::sync::RwLock;
-    use tracing::debug;
     use crate::cluster::cluster_config::ClusterConfig;
     use crate::cluster::cluster_events::ClusterEventNotifier;
     use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeReachability, NodeState};
     use crate::cluster::cluster_state::MembershipState::Up;
-    use crate::cluster::gossip::gossip_logic::{gossip_detailed_digest_with_given_nonce, Gossip, MockGossipRandom};
-    use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipNodesData, GossipSummaryDigestData};
-    use crate::messaging::node_addr::NodeAddr;
+    use crate::cluster::gossip::gossip_logic::{gossip_detailed_digest_with_given_nonce, Gossip};
+    use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipNodesData, GossipSummaryDigestData};
     use crate::node_state;
     use crate::test_util::node::test_node_addr_from_number;
-
-    static MOCK_RANDOM_MUTEX: Mutex<()> = Mutex::new(());
+    use crate::util::random::{MockRandom, MOCK_RANDOM_MUTEX};
 
     #[test]
     fn test_nodes_by_differing_state() {
@@ -375,10 +355,10 @@ mod test {
     #[case(7, vec![(1, 12337464493871681589), (2, 6689209898252340538)])]
     #[case(9, vec![(1, 2509790823383955335), (2, 2735948127633228801)])]
     fn test_gossip_detailed_digest(#[case] nonce: u32, #[case] nodes: Vec<(u16, u64)>) {
-        let lock = MOCK_RANDOM_MUTEX.lock(); // automock expectations for static methods are global, so we avoid races by locking
-
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async move {
+            let _lock = MOCK_RANDOM_MUTEX.lock();
+
             let nodes = nodes.into_iter()
                 .map(|(n, d)| (test_node_addr_from_number(n), d))
                 .collect::<BTreeMap<_, _>>();
@@ -389,11 +369,11 @@ mod test {
             cluster_state.write().await
                 .merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
 
-            let ctx = MockGossipRandom::next_u32_context();
+            let ctx = MockRandom::next_u32_context();
             ctx.expect()
                 .returning(move || nonce);
 
-            let gossip = Gossip::<MockGossipRandom>::new_with_random(myself, config.clone(), cluster_state.clone());
+            let gossip = Gossip::<MockRandom>::new_with_random(myself, config.clone(), cluster_state.clone());
 
             let digest = gossip.gossip_detailed_digest().await;
 
@@ -433,16 +413,16 @@ mod test {
     fn test_on_summary_digest(#[case] digest: [u8;32], #[case] expected: Option<Vec<(u16,u64)>>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
-            let lock = MOCK_RANDOM_MUTEX.lock();
+            let _lock = MOCK_RANDOM_MUTEX.lock();
 
             let myself = test_node_addr_from_number(1);
             let config = Arc::new(ClusterConfig::new(myself.socket_addr));
             let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
             cluster_state.write().await
                 .merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
-            let gossip = Gossip::<MockGossipRandom>::new_with_random(myself, config, cluster_state.clone());
+            let gossip = Gossip::<MockRandom>::new_with_random(myself, config, cluster_state.clone());
 
-            let context = MockGossipRandom::next_u32_context();
+            let context = MockRandom::next_u32_context();
             context.expect()
                 .returning(|| 7);
 
@@ -478,8 +458,10 @@ mod test {
             .map(|n| test_node_addr_from_number(n))
             .collect::<Vec<_>>();
 
-        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = Builder::new_current_thread().build().unwrap();
         rt.block_on(async {
+            let _lock = MOCK_RANDOM_MUTEX.lock();
+
             let myself = test_node_addr_from_number(1);
             let config = Arc::new(ClusterConfig::new(myself.socket_addr));
             let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
@@ -487,9 +469,9 @@ mod test {
                 cluster_state.write().await
                     .merge_node_state(n).await;
             }
-            let gossip = Gossip::<MockGossipRandom>::new_with_random(myself, config, cluster_state.clone());
+            let gossip = Gossip::<MockRandom>::new_with_random(myself, config, cluster_state.clone());
 
-            let context = MockGossipRandom::next_u32_context();
+            let context = MockRandom::next_u32_context();
             context.expect()
                 .returning(move || 7);
 
@@ -512,9 +494,57 @@ mod test {
         });
     }
 
-    #[test]
-    fn test_on_differing_and_missing_nodes() {
-        todo!()
+    #[rstest]
+
+
+
+    #[case::todo(vec![],vec![],vec![],vec![],vec![])]
+    fn test_on_differing_and_missing_nodes(
+        #[case] local_nodes: Vec<NodeState>,
+        #[case] msg_differing: Vec<NodeState>,
+        #[case] msg_missing: Vec<u16>,
+        #[case] expected_merged: Vec<NodeState>,
+        #[case] expected_response: Vec<NodeState>,
+    ) {
+        let msg_missing = msg_missing.into_iter()
+            .map(|n| test_node_addr_from_number(n))
+            .collect::<Vec<_>>();
+
+        let rt = Builder::new_current_thread().build().unwrap();
+        rt.block_on(async {
+            let myself = test_node_addr_from_number(1);
+            let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+            let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+            for n in local_nodes {
+                cluster_state.write().await
+                    .merge_node_state(n).await;
+            }
+            let gossip = Gossip::new(myself, config, cluster_state.clone());
+
+            let actual_response = gossip.on_differing_and_missing_nodes(GossipDifferingAndMissingNodesData {
+                differing: msg_differing,
+                missing: msg_missing,
+            }).await;
+
+
+            let actual_nodes = cluster_state.read().await
+                .node_states()
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(actual_nodes, expected_merged);
+
+            if expected_response.is_empty() {
+                assert!(actual_response.is_none());
+            }
+            else {
+                assert_eq!(actual_response, Some(GossipNodesData {
+                    nodes: expected_response,
+                }));
+            }
+        });
+
+        // merge provided nodes
+        // return missing and modified (after merging) nodes, if any
     }
 
     #[tokio::test]
@@ -534,12 +564,12 @@ mod test {
         assert_eq!(
             cluster_state.read().await
                 .get_node_state(&myself).unwrap(),
-            node_state!(1[]:Up->[]@[1,2]),
+            &node_state!(1[]:Up->[]@[1,2]),
         );
         assert_eq!(
             cluster_state.read().await
                 .get_node_state(&test_node_addr_from_number(2)).unwrap(),
-            node_state!(2[]:Up->[]@[1,2]),
+            &node_state!(2[]:Up->[]@[1,2]),
         );
     }
 

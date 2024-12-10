@@ -84,9 +84,8 @@ impl ClusterState {
         self.nodes_with_state.values()
     }
 
-    pub fn get_node_state(&self, addr: &NodeAddr) -> Option<NodeState> {
+    pub fn get_node_state(&self, addr: &NodeAddr) -> Option<&NodeState> {
         self.nodes_with_state.get(addr)
-            .cloned()
     }
 
     pub fn add_joiner(&mut self, addr: NodeAddr, roles: BTreeSet<String>) {
@@ -706,7 +705,7 @@ mod test {
         );
         assert_eq!(
             cluster_state.get_node_state(&myself),
-            Some(node_state),
+            Some(&node_state),
         );
     }
 
@@ -718,7 +717,7 @@ mod test {
         let joiner_addr = test_node_addr_from_number(5);
         cluster_state.add_joiner(joiner_addr, ["a".to_string()].into());
 
-        assert_eq!(cluster_state.get_node_state(&joiner_addr), Some(NodeState {
+        assert_eq!(cluster_state.get_node_state(&joiner_addr), Some(&NodeState {
             addr: joiner_addr,
             membership_state: Joining,
             roles: ["a".to_string()].into(),
@@ -746,7 +745,7 @@ mod test {
 
         cluster_state.add_joiner(joiner_addr, ["a".to_string()].into());
 
-        assert_eq!(cluster_state.get_node_state(&joiner_addr), Some(pre_existing_state));
+        assert_eq!(cluster_state.get_node_state(&joiner_addr), Some(&pre_existing_state));
     }
 
     #[rstest]
@@ -766,7 +765,7 @@ mod test {
 
             cluster_state.promote_myself_to_up().await;
 
-            assert_eq!(cluster_state.get_node_state(&myself), Some(expected));
+            assert_eq!(cluster_state.get_node_state(&myself), Some(&expected));
             for expected in events {
                 let actual = event_subscriber.try_recv().unwrap();
                 assert_eq!(actual, expected);
@@ -792,7 +791,7 @@ mod test {
 
             cluster_state.promote_myself_to_down().await;
 
-            assert_eq!(cluster_state.get_node_state(&myself), Some(expected));
+            assert_eq!(cluster_state.get_node_state(&myself), Some(&expected));
             for expected in events {
                 let actual = event_subscriber.try_recv().unwrap();
                 assert_eq!(actual, expected);
@@ -818,7 +817,7 @@ mod test {
 
             cluster_state.promote_myself_to_weakly_up().await;
 
-            assert_eq!(cluster_state.get_node_state(&myself), Some(expected));
+            assert_eq!(cluster_state.get_node_state(&myself), Some(&expected));
             for expected in events {
                 let actual = event_subscriber.try_recv().unwrap();
                 assert_eq!(actual, expected);
@@ -847,7 +846,7 @@ mod test {
 
             cluster_state.promote_node(addr, to_state).await;
 
-            assert_eq!(cluster_state.get_node_state(&addr), new_state);
+            assert_eq!(cluster_state.get_node_state(&addr), new_state.as_ref());
             for expected in events {
                 let actual = event_subscriber.try_recv().unwrap();
                 assert_eq!(actual, expected);
@@ -894,7 +893,7 @@ mod test {
             assert_eq!(downed_nodes, expected_downed_nodes);
 
             for exp in expected_state {
-                assert_eq!(cluster_state.get_node_state(&exp.addr), Some(exp));
+                assert_eq!(cluster_state.get_node_state(&exp.addr), Some(&exp));
             }
 
             for exp in expected_events {
@@ -1055,7 +1054,7 @@ mod test {
 
             cluster_state.merge_node_state(new_state).await;
 
-            assert_eq!(cluster_state.get_node_state(&expected.addr), Some(expected.clone()));
+            assert_eq!(cluster_state.get_node_state(&expected.addr), Some(&expected));
 
             if is_update {
                 let evt = event_subscriber.try_recv().unwrap();
