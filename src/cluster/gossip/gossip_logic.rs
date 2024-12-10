@@ -2,10 +2,9 @@ use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::net::SocketAddr;
-use std::ops::Range;
 use std::sync::Arc;
 
-use rand::{Rng, RngCore};
+use rand::Rng;
 use rustc_hash::FxHasher;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
@@ -237,33 +236,32 @@ impl <R: Random> Gossip<R> {
             differing_keys,
             other_data.missing);
 
+        let mut response_nodes = Vec::new();
+
         let mut cluster_state = self.cluster_state.write().await;
         for s in other_data.differing {
+            let other_node = s.clone();
             cluster_state.merge_node_state(s).await;
-        }
 
-        let mut nodes = Vec::new();
-        for differing_addr in differing_keys {
-            // These nodes 'should' always exist, we just merged them - but this is the robust and
-            //  idiomatic way of accessing them, and there might be some cleanup logic during merging
-            //  at some point
-            if let Some(state) = cluster_state.get_node_state(&differing_addr) {
-                nodes.push(state.clone());
+            if let Some(merged) = cluster_state.get_node_state(&other_node.addr) {
+                if merged != &other_node {
+                    response_nodes.push(merged.clone());
+                }
             }
         }
 
         for missing in &other_data.missing {
             if let Some(state) = cluster_state.get_node_state(missing) {
-                nodes.push(state.clone());
+                response_nodes.push(state.clone());
             }
         }
 
-        if nodes.is_empty() {
+        if response_nodes.is_empty() {
             None
         }
         else {
             Some(GossipNodesData {
-                nodes,
+                nodes: response_nodes,
             })
         }
     }
@@ -316,20 +314,20 @@ fn gossip_detailed_digest_with_given_nonce(cluster_state: &ClusterState, nonce: 
 
 #[cfg(test)]
 mod test {
-    use std::collections::BTreeMap;
-    use std::sync::{Arc, Mutex};
-    use rstest::rstest;
-    use tokio::runtime::Builder;
-    use tokio::sync::RwLock;
     use crate::cluster::cluster_config::ClusterConfig;
     use crate::cluster::cluster_events::ClusterEventNotifier;
+    use crate::cluster::cluster_state::MembershipState::*;
     use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeReachability, NodeState};
-    use crate::cluster::cluster_state::MembershipState::Up;
     use crate::cluster::gossip::gossip_logic::{gossip_detailed_digest_with_given_nonce, Gossip};
     use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipNodesData, GossipSummaryDigestData};
     use crate::node_state;
     use crate::test_util::node::test_node_addr_from_number;
     use crate::util::random::{MockRandom, MOCK_RANDOM_MUTEX};
+    use rstest::rstest;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use tokio::runtime::Builder;
+    use tokio::sync::RwLock;
 
     #[test]
     fn test_nodes_by_differing_state() {
@@ -495,10 +493,54 @@ mod test {
     }
 
     #[rstest]
-
-
-
-    #[case::todo(vec![],vec![],vec![],vec![],vec![])]
+    #[case::newer_locally(
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,3])],
+        vec![node_state!(2[]:Joining->[]@[1,2])],
+        vec![],
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,3])],
+        vec![node_state!(2[]:Up->[]@[1,3])])]
+    #[case::newer_remote(
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Joining->[]@[1,3])],
+        vec![node_state!(2[]:Up->[]@[2,3])],
+        vec![],
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2,3])],
+        vec![node_state!(2[]:Up->[]@[1,2,3])])]
+    #[case::newer_remote_seen_by_self( // should not happen regularly - this is a robustness corner case
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Joining->[]@[1,3])],
+        vec![node_state!(2[]:Up->[]@[1,2,3])],
+        vec![],
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2,3])],
+        vec![])]
+    #[case::not_present_locally( // should not happen regularly - this is a robustness corner case
+        vec![node_state!(1[]:Up->[]@[1,2])],
+        vec![node_state!(2[]:Up->[]@[2,3])],
+        vec![],
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2,3])],
+        vec![node_state!(2[]:Up->[]@[1,2,3])])]
+    #[case::same( // should not happen regularly - this is a robustness corner case
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])],
+        vec![node_state!(2[]:Up->[]@[1,2])],
+        vec![],
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])],
+        vec![])]
+    #[case::missing(
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(3[]:Up->[]@[1,3])],
+        vec![],
+        vec![3],
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(3[]:Up->[]@[1,3])],
+        vec![node_state!(3[]:Up->[]@[1,3])])]
+    #[case::non_existing_missing( // should not happen regularly - this is a robustness corner case
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(3[]:Up->[]@[1,3])],
+        vec![],
+        vec![4],
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(3[]:Up->[]@[1,3])],
+        vec![])]
+    #[case::mixed(
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])],
+        vec![node_state!(3[]:Joining->[]@[2,3])],
+        vec![2],
+        vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2]), node_state!(3[]:Joining->[]@[1,2,3])],
+        vec![node_state!(3[]:Joining->[]@[1,2,3]), node_state!(2[]:Up->[]@[1,2])])]
     fn test_on_differing_and_missing_nodes(
         #[case] local_nodes: Vec<NodeState>,
         #[case] msg_differing: Vec<NodeState>,
@@ -525,7 +567,6 @@ mod test {
                 differing: msg_differing,
                 missing: msg_missing,
             }).await;
-
 
             let actual_nodes = cluster_state.read().await
                 .node_states()

@@ -1302,8 +1302,8 @@ mod test {
     #[case::state_and_roles(node_state!(1[]:Up->[]@[1,2]), node_state!(1["a"]:Joining->[]@[3]), node_state!(1["a"]:Up->[]@[]), true)]
     #[case::roles_and_reachability(node_state!(1["a"]:Up->[]@[1,2]), node_state!(1[]:Up->[3:true@6]@[3]), node_state!(1["a"]:Up->[3:true@6]@[]), true)]
     fn test_node_state_merge(#[case] mut first: NodeState, #[case] second: NodeState, #[case] expected_merged: NodeState, #[case] expected_was_self_changed: bool) {
-        let ordering = first.merge(&second);
-        assert_eq!(ordering, expected_was_self_changed);
+        let was_changed = first.merge(&second);
+        assert_eq!(was_changed, expected_was_self_changed);
         assert_eq!(first, expected_merged);
     }
 
