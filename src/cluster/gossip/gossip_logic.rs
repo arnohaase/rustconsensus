@@ -127,14 +127,11 @@ impl <R: Random> Gossip<R> {
         }
     }
 
-
-
     async fn gossip_detailed_digest(&self) -> GossipDetailedDigestData {
         let nonce = R::next_u32();
         gossip_detailed_digest_with_given_nonce(&*self.cluster_state.read().await, nonce)
     }
 
-    //TODO unit test
     pub async fn gossip_partners(&self) -> Vec<(NodeAddr, Arc<GossipMessage>)> {
         let mut result = Vec::with_capacity(self.config.num_gossip_partners);
 

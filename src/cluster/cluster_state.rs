@@ -919,6 +919,10 @@ mod test {
 
     #[test]
     fn test_is_node_converged() {
+
+        // state.is_gossip_eligible()
+        // seen_by.len() == num_convergence_nodes
+
         todo!()
     }
 
