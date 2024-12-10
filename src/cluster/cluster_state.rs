@@ -189,11 +189,24 @@ impl ClusterState {
         self.get_leader() == Some(self.myself)
     }
 
-    pub fn is_converged(&self) -> bool {
-        let num_convergence_nodes = self.nodes_with_state.values()
-            .filter(|s| s.membership_state.is_gossip_partner())
-            .count();
 
+    fn num_convergence_nodes(&self) -> usize {
+        self.nodes_with_state.values()
+            .filter(|s| s.membership_state.is_gossip_partner())
+            .count()
+    }
+
+    pub fn is_node_converged(&self, addr: NodeAddr) -> bool {
+        if let Some(node) = self.get_node_state(&addr) {
+            node.seen_by.len() == self.num_convergence_nodes()
+        }
+        else {
+            false
+        }
+    }
+
+    pub fn is_converged(&self) -> bool {
+        let num_convergence_nodes = self.num_convergence_nodes();
         self.nodes_with_state.values()
             .all(|s| s.seen_by.len() == num_convergence_nodes)
     }
@@ -902,6 +915,11 @@ mod test {
             }
             assert!(event_subscriber.is_empty());
         });
+    }
+
+    #[test]
+    fn test_is_node_converged() {
+        todo!()
     }
 
     #[rstest]

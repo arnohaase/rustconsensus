@@ -9,7 +9,6 @@ use rustc_hash::FxHasher;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 use tracing::{debug, trace};
-
 use super::gossip_messages::*;
 
 use crate::cluster::cluster_config::ClusterConfig;
@@ -43,8 +42,19 @@ impl <R: Random> Gossip<R> {
         }
     }
 
-    //TODO unit test
-    async fn nodes_by_differing_state(&self) -> (Vec<NodeAddr>, Vec<NodeAddr>) {
+    /// separates nodes into two groups based on their "seen by" sets:
+    ///
+    ///  * nodes with all nodes in their "seen by" sets, i.e. nodes about which there is potential
+    ///     consensus
+    ///  * nodes with an incomplete "seen by" set, i.e. nodes about there is guaranteed to be no
+    ///     consensus
+    ///
+    /// Nodes without consensus are given a higher probability for being gossip targets.
+    ///
+    /// NB: Since this function is about picking targets for gossip, only potential gossip partners
+    ///      are included - i.e. myself is excluded as well as unreachable nodes or those with
+    ///      non-gossip-eligible membership states.
+    async fn gossip_candidates_by_differing_state(&self) -> (Vec<NodeAddr>, Vec<NodeAddr>) {
         let cluster_state = self.cluster_state.read().await;
 
         let mut maybe_same = Vec::new();
@@ -56,12 +66,12 @@ impl <R: Random> Gossip<R> {
             .filter(|n| n.membership_state.is_gossip_partner())
             .map(|n| n.addr)
         {
-            if cluster_state.node_states()
-                .all(|s| s.seen_by.contains(&candidate))
-            {
+            if cluster_state.is_node_converged(candidate) {
+                debug!("+ {:?}", candidate);
                 maybe_same.push(candidate);
             }
             else {
+                debug!("- {:?}", candidate);
                 proven_different.push(candidate);
             }
         }
@@ -128,7 +138,7 @@ impl <R: Random> Gossip<R> {
     pub async fn gossip_partners(&self) -> Vec<(NodeAddr, Arc<GossipMessage>)> {
         let mut result = Vec::with_capacity(self.config.num_gossip_partners);
 
-        let (mut maybe_same, mut proven_different) = self.nodes_by_differing_state().await;
+        let (mut maybe_same, mut proven_different) = self.gossip_candidates_by_differing_state().await;
 
         let mut rand = rand::thread_rng();
         let mut summary_digest_message = None;
@@ -329,9 +339,32 @@ mod test {
     use tokio::runtime::Builder;
     use tokio::sync::RwLock;
 
-    #[test]
-    fn test_nodes_by_differing_state() {
-        todo!()
+    #[tokio::test]
+    async fn test_gossip_candidates_by_differing_state() {
+        let myself = test_node_addr_from_number(1);
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+
+        {
+            let mut cl = cluster_state.write().await;
+            cl.merge_node_state(node_state!(2[]:Up->[]@[1,2,3,4,5])).await;
+            cl.merge_node_state(node_state!(3[]:Up->[]@[1,  3,4  ])).await;        // non-converged
+            cl.merge_node_state(node_state!(4[]:Up->[]@[1,2,3,4  ])).await;        // non-converged (unreachable must have seen)
+            cl.merge_node_state(node_state!(5[]:Up->[1:false@6]@[1,2,3,4])).await; // unreachable
+            cl.merge_node_state(node_state!(6[]:Down->[]@[1,2,3,4,5])).await;      // non-gossip membership state
+        }
+
+        let gossip = Gossip::new(myself, config.clone(), cluster_state.clone());
+
+        let (converged, not_converged) = gossip.gossip_candidates_by_differing_state().await;
+
+        assert_eq!(converged, vec![
+            test_node_addr_from_number(2),
+        ]);
+        assert_eq!(not_converged, vec![
+            test_node_addr_from_number(3),
+            test_node_addr_from_number(4),
+        ]);
     }
 
     #[tokio::test]
