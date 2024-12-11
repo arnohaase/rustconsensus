@@ -8,7 +8,7 @@ use hyper::{Error, Response};
 use hyper_util::rt::TokioIo;
 use rustconsensus::cluster::cluster::Cluster;
 use rustconsensus::cluster::cluster_config::ClusterConfig;
-use rustconsensus::cluster::discovery_strategy::{JoinOtherNodesStrategy, PartOfSeedNodesStrategy};
+use rustconsensus::cluster::discovery_strategy::SeedNodesStrategy;
 use rustconsensus::cluster::heartbeat::downing_strategy::QuorumOfSeedNodesStrategy;
 use rustconsensus::messaging::messaging::Messaging;
 use std::net::SocketAddr;
@@ -66,7 +66,7 @@ pub async fn main() -> anyhow::Result<()> {
     let cluster = Arc::new(Cluster::new(cluster_config.clone()).await?);
 
     let http_addr: SocketAddr = args.http_address.parse()?;
-    let discovery_strategy = PartOfSeedNodesStrategy::new(seed_nodes.clone(), cluster_config.as_ref())?;
+    let discovery_strategy = SeedNodesStrategy::new(seed_nodes.clone(), cluster_config.as_ref())?;
     let downing_strategy = QuorumOfSeedNodesStrategy { seed_nodes };
 
     select! {

@@ -64,51 +64,69 @@ impl DiscoveryStrategy for StartAsClusterDiscoveryStrategy {
     }
 }
 
-pub struct PartOfSeedNodesStrategy {
-    /// This strategy means that I am one of the seed nodes and may promote myself to 'Up' once a quorum
-    ///  of these has joined (and I am the first of them).
-    ///
+/// This strategy means that there is a fixed list of seed nodes, which is the same across the cluster,
+///  and which is used for discovery.
+///
+/// If 'myself' is one of the seed nodes, it may promote itself to 'Up' once a quorum of seed nodes
+///  has joined (if it has the 'smallest' address).
+///
+/// If 'myself' is not one of the seed nodes, discovery is done once the join request is acknowledged
+///  by one of the seed nodes.
+pub struct SeedNodesStrategy {
     /// NB: The list of seed nodes is Vec<SocketAddr> and *not* Vec<ToSocketAddrs> to have a well-defined
     ///      number of nodes which can serve as basis for quora decisions
     seed_nodes: Vec<SocketAddr>,
+    am_i_seed_node: bool,
 }
-impl PartOfSeedNodesStrategy {
-    pub fn new(seed_nodes: Vec<SocketAddr>, config: &ClusterConfig) -> anyhow::Result<PartOfSeedNodesStrategy> {
-        if !seed_nodes.contains(&config.self_addr) {
-            return Err(anyhow!("self {:?} is not a seed node {:?}", config.self_addr, seed_nodes));
-        }
+impl SeedNodesStrategy {
+    pub fn new(seed_nodes: Vec<SocketAddr>, config: &ClusterConfig) -> anyhow::Result<SeedNodesStrategy> {
+        let am_i_seed_node = seed_nodes.contains(&config.self_addr);
 
-        if let Some(leader_roles) = &config.leader_eligible_roles {
-            if !config.roles.iter().any(|r| leader_roles.contains(r)) {
-                return Err(anyhow!("none of this role's roles {:?} make it eligible for leadership: one of {:?} is needed", config.roles, leader_roles));
+        if am_i_seed_node {
+            if let Some(leader_roles) = &config.leader_eligible_roles {
+                if !config.roles.iter().any(|r| leader_roles.contains(r)) {
+                    return Err(anyhow!("none of this role's roles {:?} make it eligible for leadership: one of {:?} is needed", config.roles, leader_roles));
+                }
             }
         }
-        Ok(PartOfSeedNodesStrategy {
+
+        Ok(SeedNodesStrategy {
             seed_nodes,
+            am_i_seed_node,
         })
     }
 }
 #[async_trait]
-impl DiscoveryStrategy for PartOfSeedNodesStrategy {
+impl DiscoveryStrategy for SeedNodesStrategy {
     async fn do_discovery<M: MessageSender>(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) -> anyhow::Result<()> {
         let myself = cluster_state.read().await.myself();
-        let other_seed_nodes = self.seed_nodes.iter()
-            .filter(|&&n| n != myself.socket_addr)
-            .cloned()
-            .collect::<Vec<_>>();
 
-        if other_seed_nodes.len() == self.seed_nodes.len() {
-            return Err(anyhow!("list of seed nodes {:?} does not contain this node's address {:?}", self.seed_nodes, myself));
-        }
+        if self.am_i_seed_node {
+            let other_seed_nodes = self.seed_nodes.iter()
+                .filter(|&&n| n != myself.socket_addr)
+                .cloned()
+                .collect::<Vec<_>>();
 
-        select! {
-            _ = send_join_message_loop(&other_seed_nodes, messaging.clone(), config.clone()) => { Ok(()) }
-            _ = check_joined_as_seed_node(cluster_state.clone(), config.clone(), self.seed_nodes.clone(), myself) => { Ok(()) }
-            _ = sleep(config.discovery_seed_node_give_up_timeout) => {
-                error!("discovery of seed nodes timed out, giving up");
-                Err(anyhow!("discovery of seed nodes timed out, giving up"))
+            select! {
+                _ = send_join_message_loop(&other_seed_nodes, messaging.clone(), config.clone()) => { Ok(()) }
+                _ = check_joined_as_seed_node(cluster_state.clone(), config.clone(), self.seed_nodes.clone(), myself) => { Ok(()) }
+                _ = sleep(config.discovery_seed_node_give_up_timeout) => {
+                    error!("discovery of seed nodes timed out, giving up");
+                    Err(anyhow!("discovery of seed nodes timed out, giving up"))
+                }
             }
         }
+        else {
+            select! {
+                _ = send_join_message_loop(&self.seed_nodes, messaging.clone(), config.clone()) => { Ok(()) }
+                _ = check_joined_other_seed_nodes(cluster_state.clone(), &self.seed_nodes) => { Ok(()) }
+                _ = sleep(config.discovery_seed_node_give_up_timeout) => {
+                    error!("discovery of seed nodes timed out, giving up");
+                    Err(anyhow!("discovery of seed nodes timed out, giving up"))
+                }
+            }
+        }
+
     }
 }
 
@@ -185,38 +203,6 @@ fn seed_node_members<'a>(all_nodes: impl Iterator<Item=&'a NodeState>, seed_node
         .collect()
 }
 
-/// This discovery strategy expects to join one of a set of well-known nodes
-///  without being part of that set itself. Behavior is similar to [PartOfSeedNodesStrategy], but
-///  here a node will never promote itself to 'up' if a quorum of seed nodes is reached.
-pub struct JoinOtherNodesStrategy {
-    seed_nodes: Vec<SocketAddr>,
-}
-impl JoinOtherNodesStrategy {
-    pub fn new(seed_nodes: Vec<SocketAddr>) -> JoinOtherNodesStrategy {
-        JoinOtherNodesStrategy {
-            seed_nodes,
-        }
-    }
-}
-#[async_trait]
-impl DiscoveryStrategy for JoinOtherNodesStrategy {
-    async fn do_discovery<M: MessageSender>(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) -> anyhow::Result<()> {
-        let myself = cluster_state.read().await.myself().socket_addr;
-        if self.seed_nodes.contains(&myself) {
-            return Err(anyhow!("this node's address {:?} is listed as one of the seed nodes {:?} although the strategy is meant for cases where it isn't", myself, self.seed_nodes));
-        }
-
-        select! {
-            _ = send_join_message_loop(&self.seed_nodes, messaging.clone(), config.clone()) => { Ok(()) }
-            _ = check_joined_other_seed_nodes(cluster_state.clone(), &self.seed_nodes) => { Ok(()) }
-            _ = sleep(config.discovery_seed_node_give_up_timeout) => {
-                error!("discovery of seed nodes timed out, giving up");
-                Err(anyhow!("discovery of seed nodes timed out, giving up"))
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,7 +269,7 @@ mod tests {
         let mut config = ClusterConfig::new(myself.socket_addr);
         config.roles = ["xyz".to_string()].into();
         let config = Arc::new(config);
-        let strategy = PartOfSeedNodesStrategy::new(vec![
+        let strategy = SeedNodesStrategy::new(vec![
             myself.socket_addr,
             test_node_addr_from_number(2).socket_addr,
             test_node_addr_from_number(3).socket_addr,
@@ -318,7 +304,7 @@ mod tests {
         let mut config = ClusterConfig::new(myself.socket_addr);
         config.roles = ["xyz".to_string()].into();
         let config = Arc::new(config);
-        let strategy = PartOfSeedNodesStrategy::new(vec![
+        let strategy = SeedNodesStrategy::new(vec![
             myself.socket_addr,
             test_node_addr_from_number(2).socket_addr,
             test_node_addr_from_number(3).socket_addr,
@@ -366,7 +352,7 @@ mod tests {
         let mut config = ClusterConfig::new(myself.socket_addr);
         config.roles = ["xyz".to_string()].into();
         let config = Arc::new(config);
-        let strategy = PartOfSeedNodesStrategy::new(vec![
+        let strategy = SeedNodesStrategy::new(vec![
             myself.socket_addr,
             test_node_addr_from_number(2).socket_addr,
             test_node_addr_from_number(3).socket_addr,
@@ -393,7 +379,6 @@ mod tests {
 
     #[rstest]
     #[case::simple(vec![1,2], vec![], vec![], true)]
-    #[case::self_not_seed_node(vec![2,3], vec![], vec![], false)]
     #[case::self_leader_role(vec![1,2], vec!["a"], vec!["a"], true)]
     #[case::self_leader_role_2(vec![1,2], vec!["a"], vec!["a", "b"], true)]
     #[case::self_not_leader_role(vec![1,2], vec!["a"], vec![], false)]
@@ -423,7 +408,7 @@ mod tests {
             .map(|n| test_node_addr_from_number(n).socket_addr)
             .collect::<Vec<_>>();
 
-        assert_eq!(PartOfSeedNodesStrategy::new(seed_nodes, &config).is_ok(), expected);
+        assert_eq!(SeedNodesStrategy::new(seed_nodes, &config).is_ok(), expected);
     }
 
     #[rstest]
@@ -606,10 +591,10 @@ mod tests {
 
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
-        let strategy = JoinOtherNodesStrategy::new(vec![
+        let strategy = SeedNodesStrategy::new(vec![
             test_node_addr_from_number(2).socket_addr,
             test_node_addr_from_number(3).socket_addr,
-        ]);
+        ], config.as_ref()).unwrap();
 
         time::pause();
 
@@ -660,10 +645,10 @@ mod tests {
 
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
-        let strategy = JoinOtherNodesStrategy::new(vec![
+        let strategy = SeedNodesStrategy::new(vec![
             test_node_addr_from_number(2).socket_addr,
             test_node_addr_from_number(3).socket_addr,
-        ]);
+        ], config.as_ref()).unwrap();
 
         time::pause();
 
