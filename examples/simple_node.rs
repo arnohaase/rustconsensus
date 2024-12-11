@@ -85,14 +85,16 @@ async fn run_http_server<M: Messaging>(addr: SocketAddr, cluster: Arc<Cluster<M>
         let (stream, _) = listener.accept().await?;
         let io = TokioIo::new(stream);
 
-        let counter = counter.clone();
-
+        let cluster = cluster.clone();
         let service = service_fn (move |_req| {
-            let count = counter.fetch_add(1, Ordering::AcqRel);
+            let cluster = cluster.clone();
             async move {
                 Ok::<_, Error>(Response::new(Full::new(Bytes::from(format!(
-                    "Request #{}",
-                    count
+                    "Leader: {:?}\nam_i_leader: {}\nis_converged: {}\nNodes: {:?}",
+                    cluster.get_leader().await,
+                    cluster.am_i_leader().await,
+                    cluster.is_converged().await,
+                    cluster.get_nodes().await,
                 )))))
             }
         });

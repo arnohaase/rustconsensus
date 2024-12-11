@@ -79,7 +79,7 @@ impl <M: Messaging> Cluster<M> {
         self.event_notifier.subscribe()
     }
 
-    pub async fn nodes(&self) -> Vec<NodeState> {
+    pub async fn get_nodes(&self) -> Vec<NodeState> {
         self.cluster_state.read().await
             .node_states()
             .cloned()
