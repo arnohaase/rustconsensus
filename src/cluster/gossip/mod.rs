@@ -129,9 +129,12 @@ async fn on_gossip_message<M: MessageSender>(msg: GossipMessage, sender: NodeAdd
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
     use mockall::predicate::eq;
+    use rstest::rstest;
+    use tokio::runtime::Builder;
     use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipMessage, GossipNodesData, GossipSummaryDigestData};
-    use crate::cluster::gossip::{on_gossip_message, MockGossipApi};
+    use crate::cluster::gossip::{do_gossip, on_gossip_message, MockGossipApi};
     use crate::node_state;
     use crate::test_util::message::TrackingMockMessageSender;
     use crate::test_util::node::test_node_addr_from_number;
@@ -141,9 +144,33 @@ mod test {
         todo!()
     }
 
-    #[test]
-    fn test_do_gossip() {
-        todo!()
+    #[rstest]
+    #[case::empty(vec![])]
+    #[case::one(vec![(2, GossipMessage::DownYourself)])]
+    #[case::two(vec![(27, GossipMessage::GossipNodes(GossipNodesData{nodes: vec![]})), (4, GossipMessage::DownYourself)])]
+    fn test_do_gossip(#[case] gossip_partners: Vec<(u16, GossipMessage)>) {
+        let gossip_partners = gossip_partners.into_iter()
+            .map(|(n, m)| (test_node_addr_from_number(n), Arc::new(m)))
+            .collect::<Vec<_>>();
+
+        let rt = Builder::new_current_thread().build().unwrap();
+        rt.block_on(async {
+            let myself = test_node_addr_from_number(1);
+
+            let mut gossip = MockGossipApi::new();
+            gossip.expect_gossip_partners()
+                .once()
+                .return_const(gossip_partners.clone());
+
+            let messaging = TrackingMockMessageSender::new(myself);
+
+            do_gossip(&gossip, &messaging).await;
+
+            for (addr, msg) in gossip_partners {
+                messaging.assert_message_sent(addr, msg.as_ref().clone()).await;
+            }
+            messaging.assert_no_remaining_messages().await;
+        });
     }
 
     #[tokio::test]

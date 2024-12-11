@@ -50,7 +50,6 @@ impl NodeAddr {
         }
     }
 
-    //TODO unit test
     pub fn ser(&self, buf: &mut impl BufMut) {
         buf.put_u32(self.unique);
         match &self.socket_addr {
@@ -67,7 +66,6 @@ impl NodeAddr {
         }
     }
 
-    //TODO unit test
     pub fn try_deser(buf: &mut impl Buf) -> anyhow::Result<NodeAddr> {
         let unique = buf.try_get_u32()?;
 
@@ -109,8 +107,19 @@ impl From<SocketAddr> for NodeAddr {
 
 #[cfg(test)]
 mod test {
-    #[test]
-    fn test_node_addr() {
-        todo!()
+    use rstest::rstest;
+    use crate::messaging::node_addr::NodeAddr;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+    use bytes::BytesMut;
+
+    #[rstest]
+    #[case(NodeAddr { unique: 5, socket_addr: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 9876).into() })]
+    #[case(NodeAddr { unique: 758964, socket_addr: "4.5.6.7:89".parse().unwrap() })]
+    #[case(NodeAddr { unique: 3456, socket_addr: "[2001:db8::1]:8080".parse().unwrap() })]
+    fn test_ser_deser(#[case] addr: NodeAddr) {
+        let mut buf = BytesMut::new();
+        addr.ser(&mut buf);
+        let deser = NodeAddr::try_deser(&mut buf);
+        assert_eq!(deser.unwrap(), addr);
     }
 }
