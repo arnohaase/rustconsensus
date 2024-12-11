@@ -668,7 +668,7 @@ mod test {
 
     use rstest::rstest;
     use rustc_hash::FxHashSet;
-    use tokio::runtime::Runtime;
+    use tokio::runtime::{Builder, Runtime};
 
     use DowningStrategyDecision::*;
     use MembershipState::*;
@@ -917,13 +917,31 @@ mod test {
         });
     }
 
-    #[test]
-    fn test_is_node_converged() {
-
-        // state.is_gossip_eligible()
-        // seen_by.len() == num_convergence_nodes
-
-        todo!()
+    #[rstest]
+    #[case::simple_2(vec![node_state!(2[]:Up->[]@[1,2])], true)]
+    #[case::simple_3(vec![node_state!(2[]:Up->[]@[1,2,3]), node_state!(3[]:Up->[]@[1,3])], true)]
+    #[case::simple_3_incomplete(vec![node_state!(2[]:Up->[]@[1,3]), node_state!(3[]:Up->[]@[1,3])], false)]
+    #[case::joining  (vec![node_state!(2[]:Joining-> []@[1,2])], true)]
+    #[case::weakly_up(vec![node_state!(2[]:WeaklyUp->[]@[1,2])], true)]
+    #[case::leaving  (vec![node_state!(2[]:Leaving-> []@[1,2])], true)]
+    #[case::exiting  (vec![node_state!(2[]:Exiting-> []@[1,2])], true)]
+    #[case::down     (vec![node_state!(2[]:Down->    []@[1])], true)] //NB: 'down' node cannot see itself
+    #[case::removed  (vec![node_state!(2[]:Removed-> []@[1])], true)] //NB: 'removed' node cannot see itself
+    #[case::other_joining  (vec![node_state!(2[]:Up->[]@[1,2,3]), node_state!(3[]:Joining-> []@[1])], true)]
+    #[case::other_weakly_up(vec![node_state!(2[]:Up->[]@[1,2,3]), node_state!(3[]:WeaklyUp->[]@[1])], true)]
+    #[case::other_up       (vec![node_state!(2[]:Up->[]@[1,2,3]), node_state!(3[]:WeaklyUp->[]@[1])], true)]
+    #[case::other_leaving  (vec![node_state!(2[]:Up->[]@[1,2,3]), node_state!(3[]:Leaving-> []@[1])], true)]
+    #[case::other_exiting  (vec![node_state!(2[]:Up->[]@[1,2,3]), node_state!(3[]:Exiting-> []@[1])], true)]
+    #[case::other_down     (vec![node_state!(2[]:Up->[]@[1,2]),   node_state!(3[]:Down->    []@[1])], true)] //NB: 'down' node cannot see
+    #[case::other_removed  (vec![node_state!(2[]:Up->[]@[1,2]),   node_state!(3[]:Removed-> []@[1])], true)] //NB: 'removed' node cannot see
+    #[case::non_existing(vec![], false)] // should not happen, robustness corner case test
+    fn test_is_node_converged(#[case] nodes: Vec<NodeState>, #[case] expected: bool) {
+        let myself = test_node_addr_from_number(1);
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+        for n in nodes {
+            cluster_state.nodes_with_state.insert(n.addr, n);
+        }
+        assert_eq!(cluster_state.is_node_converged(test_node_addr_from_number(2)), expected);
     }
 
     #[rstest]
