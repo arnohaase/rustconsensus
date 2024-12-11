@@ -90,7 +90,7 @@ async fn run_http_server<M: Messaging>(addr: SocketAddr, cluster: Arc<Cluster<M>
             let cluster = cluster.clone();
             async move {
                 Ok::<_, Error>(Response::new(Full::new(Bytes::from(format!(
-                    "Leader: {:?}\nam_i_leader: {}\nis_converged: {}\nNodes: {:?}",
+                    "leader: {:?}\nam_i_leader: {}\nis_converged: {}\nnodes: {:?}",
                     cluster.get_leader().await,
                     cluster.am_i_leader().await,
                     cluster.is_converged().await,

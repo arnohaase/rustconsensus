@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{Debug, Formatter, Pointer};
 use std::sync::Arc;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use tokio::sync::{broadcast, RwLock};
@@ -574,7 +575,7 @@ impl NodeState {
     }
 }
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+#[derive(Clone, Hash, Eq, PartialEq)]
 pub struct NodeReachability {
     /// a node reporting a change in heartbeat for a node attaches a strictly monotonous
     ///  counter so that heartbeat can be merged in a coordination-free fashion
@@ -582,6 +583,11 @@ pub struct NodeReachability {
     /// only `reachable=false` is really of interest, heartbeat being the default. But storing
     ///  heartbeat is necessary to spread that information by gossip.
     pub is_reachable: bool,
+}
+impl Debug for NodeReachability {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}", self.is_reachable, self.counter_of_reporter)
+    }
 }
 
 /// see https://doc.akka.io/docs/akka/current/typed/cluster-membership.html
