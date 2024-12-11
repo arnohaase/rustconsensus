@@ -1,5 +1,5 @@
 use std::sync::Arc;
-
+use async_trait::async_trait;
 use tokio::{select, time};
 use tokio::sync::{mpsc, RwLock};
 use tracing::debug;
@@ -7,13 +7,53 @@ use tracing::debug;
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
 use crate::cluster::gossip::gossip_logic::Gossip;
-use crate::cluster::gossip::gossip_messages::{GossipMessage, GossipMessageModule};
+use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipMessage, GossipMessageModule, GossipNodesData, GossipSummaryDigestData};
 use crate::messaging::messaging::{MessageSender, Messaging};
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::random::Random;
 
 pub mod gossip_messages;
 mod gossip_logic;
+
+
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+trait GossipApi {
+    async fn on_summary_digest(&self, data: &GossipSummaryDigestData) -> Option<GossipDetailedDigestData>;
+    async fn on_detailed_digest(&self, data: &GossipDetailedDigestData) -> Option<GossipDifferingAndMissingNodesData>;
+    async fn on_differing_and_missing_nodes(&self, data: GossipDifferingAndMissingNodesData) -> Option<GossipNodesData>;
+    async fn on_nodes(&self, data: GossipNodesData);
+    async fn down_myself(&self);
+
+    async fn gossip_partners(&self) -> Vec<(NodeAddr, Arc<GossipMessage>)>;
+}
+
+#[async_trait]
+impl <R: Random> GossipApi for Gossip<R> {
+    async fn on_summary_digest(&self, data: &GossipSummaryDigestData) -> Option<GossipDetailedDigestData> {
+        Self::on_summary_digest(self, data).await
+    }
+
+    async fn on_detailed_digest(&self, data: &GossipDetailedDigestData) -> Option<GossipDifferingAndMissingNodesData> {
+        Self::on_detailed_digest(&self, data).await
+    }
+
+    async fn on_differing_and_missing_nodes(&self, data: GossipDifferingAndMissingNodesData) -> Option<GossipNodesData> {
+        Self::on_differing_and_missing_nodes(&self, data).await
+    }
+
+    async fn on_nodes(&self, data: GossipNodesData) {
+        Self::on_nodes(self, data).await
+    }
+
+    async fn down_myself(&self) {
+        Self::down_myself(self).await
+    }
+
+    async fn gossip_partners(&self) -> Vec<(NodeAddr, Arc<GossipMessage>)> {
+        Self::gossip_partners(self).await
+    }
+}
 
 
 pub async fn run_gossip<M: Messaging>(config: Arc<ClusterConfig>, messaging: Arc<M>, cluster_state: Arc<RwLock<ClusterState>>) -> anyhow::Result<()> {
@@ -50,7 +90,7 @@ pub async fn run_gossip<M: Messaging>(config: Arc<ClusterConfig>, messaging: Arc
     }
 }
 
-async fn do_gossip<M: MessageSender, R: Random>(gossip: &Gossip<R>, messaging: &M) { //TODO move somewhere else
+async fn do_gossip<M: MessageSender>(gossip: &impl GossipApi, messaging: &M) { //TODO move somewhere else
     debug!("periodic gossip");
     let gossip_partners = gossip.gossip_partners().await;
     for (addr, msg) in gossip_partners {
@@ -59,7 +99,7 @@ async fn do_gossip<M: MessageSender, R: Random>(gossip: &Gossip<R>, messaging: &
     }
 }
 
-async fn on_gossip_message<M: MessageSender, R: Random>(msg: GossipMessage, sender: NodeAddr, gossip: &mut Gossip<R>, messaging: &M) {
+async fn on_gossip_message<M: MessageSender>(msg: GossipMessage, sender: NodeAddr, gossip: &mut impl GossipApi, messaging: &M) {
     use GossipMessage::*;
 
     match msg {
@@ -89,6 +129,13 @@ async fn on_gossip_message<M: MessageSender, R: Random>(msg: GossipMessage, send
 
 #[cfg(test)]
 mod test {
+    use mockall::predicate::eq;
+    use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipMessage, GossipNodesData, GossipSummaryDigestData};
+    use crate::cluster::gossip::{on_gossip_message, MockGossipApi};
+    use crate::node_state;
+    use crate::test_util::message::TrackingMockMessageSender;
+    use crate::test_util::node::test_node_addr_from_number;
+
     #[test]
     fn test_run_gossip() {
         todo!()
@@ -99,8 +146,189 @@ mod test {
         todo!()
     }
 
-    #[test]
-    fn test_on_gossip_message() {
-        todo!()
+    #[tokio::test]
+    async fn test_gossip_message_summary_digest() {
+        let myself = test_node_addr_from_number(1);
+        let data = GossipSummaryDigestData {
+            full_sha256_digest: [7;32],
+        };
+        let response_data = GossipDetailedDigestData {
+            nonce: 123,
+            nodes: [(test_node_addr_from_number(5), 9988)].into(),
+        };
+        let addr = test_node_addr_from_number(7);
+
+        let mut gossip = MockGossipApi::new();
+        gossip.expect_on_summary_digest()
+            .once()
+            .with(eq(data.clone()))
+            .return_const(Some(response_data.clone()));
+
+        let messaging = TrackingMockMessageSender::new(myself);
+
+        on_gossip_message(GossipMessage::GossipSummaryDigest(data.clone()), addr, &mut gossip, &messaging).await;
+
+        messaging.assert_message_sent(addr, GossipMessage::GossipDetailedDigest(response_data)).await;
+        messaging.assert_no_remaining_messages().await;
+    }
+
+    #[tokio::test]
+    async fn test_gossip_message_summary_digest_none() {
+        let myself = test_node_addr_from_number(1);
+        let data = GossipSummaryDigestData {
+            full_sha256_digest: [7;32],
+        };
+        let addr = test_node_addr_from_number(7);
+
+        let mut gossip = MockGossipApi::new();
+        gossip.expect_on_summary_digest()
+            .once()
+            .with(eq(data.clone()))
+            .return_const(None);
+
+        let messaging = TrackingMockMessageSender::new(myself);
+
+        on_gossip_message(GossipMessage::GossipSummaryDigest(data.clone()), addr, &mut gossip, &messaging).await;
+
+        messaging.assert_no_remaining_messages().await;
+    }
+
+    #[tokio::test]
+    async fn test_gossip_message_detailed_digest() {
+        let myself = test_node_addr_from_number(1);
+        let data = GossipDetailedDigestData {
+            nonce: 123,
+            nodes: [(test_node_addr_from_number(5), 9988)].into(),
+        };
+        let addr = test_node_addr_from_number(7);
+        let response_data = GossipDifferingAndMissingNodesData {
+            differing: vec![],
+            missing: vec![test_node_addr_from_number(3)],
+        };
+
+        let mut gossip = MockGossipApi::new();
+        gossip.expect_on_detailed_digest()
+            .once()
+            .with(eq(data.clone()))
+            .return_const(Some(response_data.clone()));
+
+        let messaging = TrackingMockMessageSender::new(myself);
+
+        on_gossip_message(GossipMessage::GossipDetailedDigest(data.clone()), addr, &mut gossip, &messaging).await;
+
+        messaging.assert_message_sent(addr, GossipMessage::GossipDifferingAndMissingNodes(response_data)).await;
+        messaging.assert_no_remaining_messages().await;
+    }
+
+    #[tokio::test]
+    async fn test_gossip_message_detailed_digest_none() {
+        let myself = test_node_addr_from_number(1);
+        let data = GossipDetailedDigestData {
+            nonce: 123,
+            nodes: [(test_node_addr_from_number(5), 9988)].into(),
+        };
+        let addr = test_node_addr_from_number(7);
+
+        let mut gossip = MockGossipApi::new();
+        gossip.expect_on_detailed_digest()
+            .once()
+            .with(eq(data.clone()))
+            .return_const(None);
+
+        let messaging = TrackingMockMessageSender::new(myself);
+
+        on_gossip_message(GossipMessage::GossipDetailedDigest(data.clone()), addr, &mut gossip, &messaging).await;
+
+        messaging.assert_no_remaining_messages().await;
+    }
+
+    #[tokio::test]
+    async fn test_gossip_message_differing_and_missing_nodes() {
+        use crate::cluster::cluster_state::MembershipState::Up;
+
+        let myself = test_node_addr_from_number(1);
+        let data = GossipDifferingAndMissingNodesData {
+            differing: vec![],
+            missing: vec![test_node_addr_from_number(3)],
+        };
+        let addr = test_node_addr_from_number(7);
+        let response_data = GossipNodesData {
+            nodes: vec![node_state!(3[]:Up->[]@[1,3])],
+        };
+
+        let mut gossip = MockGossipApi::new();
+        gossip.expect_on_differing_and_missing_nodes()
+            .once()
+            .with(eq(data.clone()))
+            .return_const(Some(response_data.clone()));
+
+        let messaging = TrackingMockMessageSender::new(myself);
+
+        on_gossip_message(GossipMessage::GossipDifferingAndMissingNodes(data.clone()), addr, &mut gossip, &messaging).await;
+
+        messaging.assert_message_sent(addr, GossipMessage::GossipNodes(response_data)).await;
+        messaging.assert_no_remaining_messages().await;
+    }
+
+    #[tokio::test]
+    async fn test_gossip_message_differing_and_missing_nodes_none() {
+        let myself = test_node_addr_from_number(1);
+        let data = GossipDifferingAndMissingNodesData {
+            differing: vec![],
+            missing: vec![test_node_addr_from_number(3)],
+        };
+        let addr = test_node_addr_from_number(7);
+
+        let mut gossip = MockGossipApi::new();
+        gossip.expect_on_differing_and_missing_nodes()
+            .once()
+            .with(eq(data.clone()))
+            .return_const(None);
+
+        let messaging = TrackingMockMessageSender::new(myself);
+
+        on_gossip_message(GossipMessage::GossipDifferingAndMissingNodes(data.clone()), addr, &mut gossip, &messaging).await;
+
+        messaging.assert_no_remaining_messages().await;
+    }
+
+    #[tokio::test]
+    async fn test_gossip_nodes() {
+        use crate::cluster::cluster_state::MembershipState::Up;
+
+        let myself = test_node_addr_from_number(1);
+        let data = GossipNodesData {
+            nodes: vec![node_state!(3[]:Up->[]@[1,3])],
+        };
+        let addr = test_node_addr_from_number(7);
+
+        let mut gossip = MockGossipApi::new();
+        gossip.expect_on_nodes()
+            .once()
+            .with(eq(data.clone()))
+            .return_const(());
+
+        let messaging = TrackingMockMessageSender::new(myself);
+
+        on_gossip_message(GossipMessage::GossipNodes(data.clone()), addr, &mut gossip, &messaging).await;
+
+        messaging.assert_no_remaining_messages().await;
+    }
+
+    #[tokio::test]
+    async fn test_gossip_down_yourself() {
+        let myself = test_node_addr_from_number(1);
+        let addr = test_node_addr_from_number(7);
+
+        let mut gossip = MockGossipApi::new();
+        gossip.expect_down_myself()
+            .once()
+            .return_const(());
+
+        let messaging = TrackingMockMessageSender::new(myself);
+
+        on_gossip_message(GossipMessage::DownYourself, addr, &mut gossip, &messaging).await;
+
+        messaging.assert_no_remaining_messages().await;
     }
 }

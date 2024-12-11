@@ -4,7 +4,6 @@ use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use rand::Rng;
 use rustc_hash::FxHasher;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
@@ -137,7 +136,6 @@ impl <R: Random> Gossip<R> {
 
         let (mut maybe_same, mut proven_different) = self.gossip_candidates_by_differing_state().await;
 
-        let mut rand = rand::thread_rng();
         let mut summary_digest_message = None;
         let mut detailed_digest_message = None;
 
@@ -155,11 +153,11 @@ impl <R: Random> Gossip<R> {
                 false
             }
             else {
-                rand.gen_range(0.0 .. 1.0) < self.config.gossip_with_differing_state_probability
+                R::gen_f64_range(0.0 .. 1.0) < self.config.gossip_with_differing_state_probability
             };
 
             if use_proven_different {
-                let idx = rand.gen_range(0..proven_different.len());
+                let idx = R::gen_usize_range(0..proven_different.len());
                 let addr = proven_different.remove(idx);
                 let msg = if let Some(msg) = &detailed_digest_message {
                     Arc::clone(msg)
@@ -173,7 +171,7 @@ impl <R: Random> Gossip<R> {
                 result.push((addr, msg));
             }
             else {
-                let idx = rand.gen_range(0..maybe_same.len());
+                let idx = R::gen_usize_range(0..maybe_same.len());
                 let addr = maybe_same.remove(idx);
                 let msg = if let Some(msg) = &summary_digest_message {
                     Arc::clone(msg)

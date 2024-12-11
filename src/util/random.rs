@@ -9,7 +9,7 @@ use std::ops::Range;
 pub static MOCK_RANDOM_MUTEX: Mutex<()> = Mutex::new(());
 
 #[cfg_attr(test, mockall::automock)]
-pub trait Random {
+pub trait Random: Send + Sync {
     fn next_u32() -> u32;
     fn gen_f64_range(range: Range<f64>) -> f64;
     fn gen_usize_range(range: Range<usize>) -> usize;

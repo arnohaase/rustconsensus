@@ -668,7 +668,7 @@ mod test {
 
     use rstest::rstest;
     use rustc_hash::FxHashSet;
-    use tokio::runtime::{Builder, Runtime};
+    use tokio::runtime::Runtime;
 
     use DowningStrategyDecision::*;
     use MembershipState::*;
