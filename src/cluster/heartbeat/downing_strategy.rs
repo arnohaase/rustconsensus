@@ -74,11 +74,12 @@ impl DowningStrategy for QuorumOfSeedNodesStrategy {
             .count();
 
         info!("{} of {} seed nodes are in the cluster, {} of them are reachable",
-            num_reachable_seed_nodes,
             node_states.iter()
                 .filter(|s| self.seed_nodes.contains(&s.addr.socket_addr))
                 .count(),
-            self.seed_nodes.len());
+            self.seed_nodes.len(),
+            num_reachable_seed_nodes,
+        );
 
         quorum_decision(num_reachable_seed_nodes, self.seed_nodes.len())
     }
@@ -128,10 +129,10 @@ impl DowningStrategy for QuorumOfRoleStrategy {
             .count();
 
         info!("{} of {} nodes in the cluster have role {}, {} of them are reachable",
-            num_reachable_nodes,
             node_states.len(),
             self.required_role,
             num_nodes_with_role,
+            num_reachable_nodes,
         );
 
         quorum_decision(num_reachable_nodes, num_nodes_with_role)

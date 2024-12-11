@@ -111,8 +111,8 @@ impl DiscoveryStrategy for SeedNodesStrategy {
                 _ = send_join_message_loop(&other_seed_nodes, messaging.clone(), config.clone()) => { Ok(()) }
                 _ = check_joined_as_seed_node(cluster_state.clone(), config.clone(), self.seed_nodes.clone(), myself) => { Ok(()) }
                 _ = sleep(config.discovery_seed_node_give_up_timeout) => {
-                    error!("discovery of seed nodes timed out, giving up");
-                    Err(anyhow!("discovery of seed nodes timed out, giving up"))
+                    error!("discovery of seed nodes timed out, no quorum of seed nodes reached: giving up");
+                    Err(anyhow!("discovery of seed nodes timed out, no quorum of seed nodes reached: giving up"))
                 }
             }
         }
