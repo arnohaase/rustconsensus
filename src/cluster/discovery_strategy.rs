@@ -185,28 +185,21 @@ fn seed_node_members<'a>(all_nodes: impl Iterator<Item=&'a NodeState>, seed_node
         .collect()
 }
 
-//TODO documentation
-pub fn create_join_seed_nodes_strategy(seed_nodes: Vec<SocketAddr>) -> JoinOthersStrategy {
-    JoinOthersStrategy {
-        seed_nodes,
-    }
-}
-
-/// This discovery strategy expects to join one of a set of well-known nodes (typically seed nodes)
+/// This discovery strategy expects to join one of a set of well-known nodes
 ///  without being part of that set itself. Behavior is similar to [PartOfSeedNodesStrategy], but
 ///  here a node will never promote itself to 'up' if a quorum of seed nodes is reached.
-pub struct JoinOthersStrategy {
+pub struct JoinOtherNodesStrategy {
     seed_nodes: Vec<SocketAddr>,
 }
-impl JoinOthersStrategy {
-    pub fn new(seed_nodes: Vec<SocketAddr>) -> JoinOthersStrategy {
-        JoinOthersStrategy {
+impl JoinOtherNodesStrategy {
+    pub fn new(seed_nodes: Vec<SocketAddr>) -> JoinOtherNodesStrategy {
+        JoinOtherNodesStrategy {
             seed_nodes,
         }
     }
 }
 #[async_trait]
-impl DiscoveryStrategy for JoinOthersStrategy {
+impl DiscoveryStrategy for JoinOtherNodesStrategy {
     async fn do_discovery<M: MessageSender>(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) -> anyhow::Result<()> {
         let myself = cluster_state.read().await.myself().socket_addr;
         if self.seed_nodes.contains(&myself) {
@@ -613,7 +606,7 @@ mod tests {
 
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
-        let strategy = JoinOthersStrategy::new(vec![
+        let strategy = JoinOtherNodesStrategy::new(vec![
             test_node_addr_from_number(2).socket_addr,
             test_node_addr_from_number(3).socket_addr,
         ]);
@@ -667,7 +660,7 @@ mod tests {
 
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
-        let strategy = JoinOthersStrategy::new(vec![
+        let strategy = JoinOtherNodesStrategy::new(vec![
             test_node_addr_from_number(2).socket_addr,
             test_node_addr_from_number(3).socket_addr,
         ]);

@@ -6,7 +6,7 @@ use tracing::{debug, error};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier};
-use crate::cluster::cluster_state::{ClusterState, run_administrative_tasks_loop};
+use crate::cluster::cluster_state::{ClusterState, run_administrative_tasks_loop, NodeState};
 use crate::cluster::discovery_strategy::{DiscoveryStrategy, run_discovery};
 use crate::cluster::gossip::run_gossip;
 use crate::cluster::heartbeat::downing_strategy::DowningStrategy;
@@ -79,5 +79,31 @@ impl <M: Messaging> Cluster<M> {
         self.event_notifier.subscribe()
     }
 
-    //TODO external API for accessing state
+    pub async fn nodes(&self) -> Vec<NodeState> {
+        self.cluster_state.read().await
+            .node_states()
+            .cloned()
+            .collect()
+    }
+
+    pub async fn get_node_state(&self, addr: NodeAddr) -> Option<NodeState> {
+        self.cluster_state.read().await
+            .get_node_state(&addr)
+            .cloned()
+    }
+
+    pub async fn is_converged(&self) -> bool {
+        self.cluster_state.read().await
+            .is_converged()
+    }
+
+    pub async fn get_leader(&self) -> Option<NodeAddr> {
+        self.cluster_state.write().await
+            .get_leader()
+    }
+
+    pub async fn am_i_leader(&self) -> bool {
+        self.cluster_state.write().await
+            .am_i_leader()
+    }
 }

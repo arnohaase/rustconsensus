@@ -4,7 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dev-dependencies]
+clap = "*"
+clap_derive = "*"
 ctor = "*"
+http-body-util = "*"
+hyper = { version = "*", features = ["full"] }
+hyper-util = {  version = "*", features = ["full"] }
 mockall = { version = "*" }
 rstest = "*"
 tokio = { version = "*", features = ["full", "test-util"]}

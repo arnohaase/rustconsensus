@@ -1,52 +1,46 @@
-use std::any::Any;
+#![deny(warnings)]
 
-trait Message: Any {
-    // fn as_any(&self) -> &dyn Any;
-}
+use std::net::SocketAddr;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
-impl<T: Any> Message for T {
-    // fn as_any(&self) -> &dyn Any {
-    //     self
-    // }
-}
+use bytes::Bytes;
+use http_body_util::Full;
+use hyper::{server::conn::http1, service::service_fn};
+use hyper::{Error, Response};
+use hyper_util::rt::TokioIo;
+use tokio::net::TcpListener;
 
-struct MyMessage {
-    content: String,
-}
 
-impl MyMessage {
-    fn new(content: &str) -> Self {
-        MyMessage {
-            content: content.to_string(),
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // pretty_env_logger::init();
+    let addr: SocketAddr = ([127, 0, 0, 1], 3000).into();
+
+    let counter = Arc::new(AtomicUsize::new(0));
+
+    let listener = TcpListener::bind(addr).await?;
+    println!("Listening on http://{}", addr);
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let io = TokioIo::new(stream);
+
+        let counter = counter.clone();
+
+        let service = service_fn (move |_req| {
+            let count = counter.fetch_add(1, Ordering::AcqRel);
+            async move {
+                Ok::<_, Error>(Response::new(Full::new(Bytes::from(format!(
+                    "Request #{}",
+                    count
+                )))))
+            }
+        });
+
+        if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
+            println!("Error serving connection: {:?}", err);
         }
     }
-}
-
-fn main() {
-    // Create a Vec<Box<dyn Message>>
-    let mut messages: Vec<Box<dyn Message>> = Vec::new();
-
-    messages.push(Box::new(MyMessage::new("Hello")));
-    messages.push(Box::new(MyMessage::new("World")));
-
-    // let comparison_message = MyMessage::new("Hello");
-
-    // let first_message = messages.remove(0);
-    // if let Ok(cast_message) = first_message.downcast::<MyMessage>() {
-    //
-    // }
-
-
-        // if let Some(my_message) = first_message.as_any().downcast_ref::<Box<MyMessage>>() {
-        //     if my_message.content == comparison_message.content {
-        //         println!("The messages are equal!");
-        //     } else {
-        //         println!("The messages are different.");
-        //     }
-        // } else {
-        //     println!("The first message is not of type MyMessage.");
-        // }
-    // } else {
-    //     println!("The Vec is empty.");
-    // }
 }
