@@ -136,7 +136,7 @@ pub struct HeartbeatResponseData {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use rstest::*;
 
     use HeartbeatMessage::*;
@@ -154,5 +154,10 @@ mod test {
         println!("S {:?}", buf);
         let deser_msg = HeartbeatMessage::deser(&buf).unwrap();
         assert_eq!(msg, deser_msg);
+    }
+
+    #[test]
+    fn test_heartbeat_module() {
+        todo!()
     }
 }

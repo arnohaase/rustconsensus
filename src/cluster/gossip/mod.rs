@@ -128,7 +128,7 @@ async fn on_gossip_message<M: MessageSender>(msg: GossipMessage, sender: NodeAdd
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::sync::Arc;
     use mockall::predicate::eq;
     use rstest::rstest;

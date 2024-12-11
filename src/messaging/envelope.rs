@@ -73,7 +73,7 @@ impl Envelope {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
 

@@ -318,7 +318,7 @@ fn gossip_detailed_digest_with_given_nonce(cluster_state: &ClusterState, nonce: 
 
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crate::cluster::cluster_config::ClusterConfig;
     use crate::cluster::cluster_events::ClusterEventNotifier;
     use crate::cluster::cluster_state::MembershipState::*;

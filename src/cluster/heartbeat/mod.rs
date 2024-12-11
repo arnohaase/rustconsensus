@@ -95,3 +95,11 @@ async fn do_heartbeat<M: MessageSender>(cluster_state: &RwLock<ClusterState>, he
         messaging.send(recipient, &msg).await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_heartbeat_loop() {
+        todo!()
+    }
+}

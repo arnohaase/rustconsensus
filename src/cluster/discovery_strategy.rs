@@ -225,7 +225,7 @@ impl DiscoveryStrategy for JoinOthersStrategy {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use crate::cluster::cluster_events::ClusterEventNotifier;
     use crate::cluster::cluster_state::*;

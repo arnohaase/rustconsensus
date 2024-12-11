@@ -61,7 +61,7 @@ pub trait MessageModule: 'static + Sync + Send {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use rstest::rstest;
     use super::*;
 

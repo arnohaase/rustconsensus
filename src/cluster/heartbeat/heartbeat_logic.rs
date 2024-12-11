@@ -292,3 +292,11 @@ impl PartialOrd for SortedByHash {
         Some(self.cmp(other))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_heartbeat_logic() {
+        todo!()
+    }
+}

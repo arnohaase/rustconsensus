@@ -83,7 +83,7 @@ impl MessageModule for JoinMessageModule {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use rstest::rstest;
     use super::*;
 

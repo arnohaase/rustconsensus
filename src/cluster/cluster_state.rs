@@ -660,7 +660,7 @@ impl Crdt for MembershipState {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::net::SocketAddr;
     use std::str::FromStr;

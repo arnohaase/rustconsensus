@@ -106,7 +106,7 @@ impl From<SocketAddr> for NodeAddr {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use rstest::rstest;
     use crate::messaging::node_addr::NodeAddr;
     use std::net::{Ipv4Addr, SocketAddrV4};

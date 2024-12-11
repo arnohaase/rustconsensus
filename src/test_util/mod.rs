@@ -12,7 +12,7 @@ pub mod event;
 
 
 #[cfg(test)]
-mod test {
+mod tests {
     use tracing::Level;
 
     #[ctor::ctor]

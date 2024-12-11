@@ -83,7 +83,7 @@ impl <T: Clone + Ord + PartialOrd + Eq + PartialEq> Crdt for BTreeSet<T> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use rstest::rstest;
     use super::*;
     use CrdtOrdering::*;
