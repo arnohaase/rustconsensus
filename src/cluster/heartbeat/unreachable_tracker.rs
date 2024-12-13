@@ -38,9 +38,11 @@ impl  UnreachableTracker {
         }
     }
 
+    //TODO unit test
     pub async fn update_reachability<M: MessageSender>(&mut self, node: NodeAddr, is_reachable: bool, messaging: Arc<M>) {
         let was_fully_reachable = self.unreachable_nodes.is_empty();
 
+        // start with the actual update - that's the simple part:
         let modified = if is_reachable {
             self.unreachable_nodes.remove(&node)
         }
@@ -122,7 +124,8 @@ impl  UnreachableTracker {
 
                 // not canceled -> shut down the whole cluster
                 warn!("unreachable for {:?} without reaching a stable configuration: shutting down the entire cluster", timeout_period);
-                // we want the downing of all nodes to be atomic
+
+                // we want the downing of all nodes to be atomic, so we keep the lock across both calls
                 let mut cs_lock = cluster_state.write().await;
                 Self::on_downing_decision(cs_lock.deref_mut(), DowningStrategyDecision::DownUs, messaging.as_ref()).await;
                 Self::on_downing_decision(cs_lock.deref_mut(), DowningStrategyDecision::DownThem, messaging.as_ref()).await;
