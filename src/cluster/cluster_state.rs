@@ -214,7 +214,7 @@ impl ClusterState {
 
     /// This is the internal handler for all changes to a given node state. It updates the 'seen by'
     ///  set and sends change events.
-    async fn send_state_changed_events(old_state: Option<MembershipState>, s: &mut NodeState, was_self_modified: bool, event_notifier: Arc<ClusterEventNotifier>) {
+    async fn send_state_changed_events(old_state: Option<MembershipState>, was_reachable: bool, s: &NodeState, was_self_modified: bool, event_notifier: Arc<ClusterEventNotifier>) {
         if !was_self_modified {
             return;
         }
@@ -233,6 +233,13 @@ impl ClusterState {
             event_notifier.send_event(ClusterEvent::NodeAdded(NodeAddedData {
                 addr: s.addr,
                 state: s.membership_state
+            }));
+        }
+        if was_reachable != s.is_reachable() {
+            event_notifier.send_event(ClusterEvent::ReachabilityChanged(ReachabilityChangedData {
+                addr: s.addr,
+                old_is_reachable: was_reachable,
+                new_is_reachable: !was_reachable,
             }));
         }
     }
@@ -286,11 +293,12 @@ impl ClusterState {
             Entry::Occupied(mut e) => {
                 trace!("merging external node state {:?} into existing state {:?}", node_state, e.get());
                 let old_state = e.get().membership_state;
+                let was_reachable = e.get().is_reachable();
                 let was_self_changed = e.get_mut().merge(&node_state);
                 if is_myself_still_gossipping {
                     e.get_mut().seen_by.insert(self.myself);
                 }
-                Self::send_state_changed_events(Some(old_state), e.get_mut(), was_self_changed, self.event_notifier.clone()).await;
+                Self::send_state_changed_events(Some(old_state), was_reachable, e.get(), was_self_changed, self.event_notifier.clone()).await;
                 if !node_state.membership_state.is_gossip_partner() {
                     debug!("node {:?} is not a gossip partner any more, removing from all 'seen by' sets", node_state.addr);
                     self.on_node_removed_from_gossip(&node_state.addr);
@@ -303,7 +311,7 @@ impl ClusterState {
                     node_state.seen_by.insert(self.myself);
                 }
 
-                Self::send_state_changed_events(None, &mut node_state, true, self.event_notifier.clone()).await;
+                Self::send_state_changed_events(None, true, &node_state, true, self.event_notifier.clone()).await;
 
                 let new_membership_state = node_state.membership_state;
                 let addr = node_state.addr;
@@ -326,7 +334,7 @@ impl ClusterState {
         self.event_notifier.send_event(event);
     }
 
-    pub async fn update_current_reachability(&mut self, reachability: &BTreeMap<NodeAddr, bool>) {
+    pub async fn update_reachability_from_myself(&mut self, reachability: &BTreeMap<NodeAddr, bool>) {
         trace!("updating reachability from myself to {:?}", reachability);
         let mut lazy_version_counter = LazyCounterVersion::new(self);
         let is_myself_still_gossipping = self.is_myself_still_gossipping();
@@ -1081,12 +1089,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case::add(None, node_state!(2[]:Joining->[]@[3]), node_state!(2[]:Joining->[]@[1,3]), true, false, true)]
-    #[case::same(Some(node_state!(2[]:Joining->[]@[1,3,4])), node_state!(2[]:Joining->[]@[1,3,4]), node_state!(2[]:Joining->[]@[1,3,4]), false, false, false)]
-    #[case::same_merge_seen_by(Some(node_state!(2[]:Joining->[]@[1,4])), node_state!(2[]:Joining->[]@[3]), node_state!(2[]:Joining->[]@[1,3,4]), false, false, false)]
-    #[case::older(Some(node_state!(2[]:Up->[]@[1,4])), node_state!(2[]:Joining->[]@[3]), node_state!(2[]:Up->[]@[1,4]), false, false, false)]
-    #[case::newer(Some(node_state!(2[]:Joining->[]@[1,4])), node_state!(2[]:Up->[]@[3]), node_state!(2[]:Up->[]@[1,3]), false, true, true)]
-    fn test_merge_node_state(#[case] prev: Option<NodeState>, #[case] new_state: NodeState, #[case] expected: NodeState, #[case] is_add: bool, #[case] is_state_change: bool, #[case] is_update: bool) {
+    #[case::add(None, node_state!(2[]:Joining->[]@[3]), node_state!(2[]:Joining->[]@[1,3]), vec![test_updated_evt(2), test_added_evt(2, Joining)])]
+    #[case::same(Some(node_state!(2[]:Joining->[]@[1,3,4])), node_state!(2[]:Joining->[]@[1,3,4]), node_state!(2[]:Joining->[]@[1,3,4]), vec![])]
+    #[case::same_merge_seen_by(Some(node_state!(2[]:Joining->[]@[1,4])), node_state!(2[]:Joining->[]@[3]), node_state!(2[]:Joining->[]@[1,3,4]), vec![])]
+    #[case::older(Some(node_state!(2[]:Up->[]@[1,4])), node_state!(2[]:Joining->[]@[3]), node_state!(2[]:Up->[]@[1,4]), vec![])]
+    #[case::newer(Some(node_state!(2[]:Joining->[]@[1,4])), node_state!(2[]:Up->[]@[3]), node_state!(2[]:Up->[]@[1,3]), vec![test_updated_evt(2), test_state_evt(2, Joining, Up)])]
+    #[case::become_unreachable(Some(node_state!(2[]:Up->[]@[1,4])), node_state!(2[]:Up->[5:false@6]@[3]), node_state!(2[]:Up->[5:false@6]@[1,3]), vec![test_updated_evt(2), test_reachability_evt(2, false)])]
+    #[case::become_reachable(Some(node_state!(2[]:Up->[5:false@6]@[1,4])), node_state!(2[]:Up->[5:true@9]@[3]), node_state!(2[]:Up->[5:true@9]@[1,3]), vec![test_updated_evt(2), test_reachability_evt(2, true)])]
+    #[case::stay_unreachable(Some(node_state!(2[]:Up->[4:false@8]@[1,4])), node_state!(2[]:Up->[5:false@6]@[3]), node_state!(2[]:Up->[4:false@8,5:false@6]@[1]), vec![test_updated_evt(2)])]
+    #[case::star_reachable(Some(node_state!(2[]:Up->[4:true@8]@[1,4])), node_state!(2[]:Up->[5:true@9]@[3]), node_state!(2[]:Up->[4:true@8,5:true@9]@[1]), vec![test_updated_evt(2)])]
+    fn test_merge_node_state(#[case] prev: Option<NodeState>, #[case] new_state: NodeState, #[case] expected: NodeState, #[case] expected_events: Vec<ClusterEvent>) {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
@@ -1102,17 +1114,11 @@ mod tests {
 
             assert_eq!(cluster_state.get_node_state(&expected.addr), Some(&expected));
 
-            if is_update {
-                let evt = event_subscriber.try_recv().unwrap();
-                assert_eq!(evt, ClusterEvent::NodeUpdated(NodeUpdatedData { addr: expected.addr }));
-            }
-            if is_state_change {
-                let evt = event_subscriber.try_recv().unwrap();
-                assert_eq!(evt, ClusterEvent::NodeStateChanged(NodeStateChangedData { addr: expected.addr, old_state: prev.unwrap().membership_state, new_state: expected.membership_state }));
-            }
-            if is_add {
-                let evt = event_subscriber.try_recv().unwrap();
-                assert_eq!(evt, ClusterEvent::NodeAdded(NodeAddedData { addr: expected.addr, state: expected.membership_state }));
+            for exp in expected_events {
+                info!("--> {:?}", exp);
+
+                let actual = event_subscriber.try_recv().unwrap();
+                assert_eq!(actual, exp);
             }
             assert!(event_subscriber.is_empty());
         });
@@ -1234,7 +1240,7 @@ mod tests {
             let initial_nodes: Vec<NodeAddr> = cluster_state.nodes_with_state.keys().cloned().collect();
 
             // execute code under test
-            cluster_state.update_current_reachability(&new_reachability).await;
+            cluster_state.update_reachability_from_myself(&new_reachability).await;
 
             for (addr, (counter_of_reporter, is_reachable)) in expected_reachability {
                 let node = cluster_state.nodes_with_state.get(&test_node_addr_from_number(addr)).unwrap();

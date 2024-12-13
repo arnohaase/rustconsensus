@@ -81,7 +81,7 @@ async fn on_heartbeat_message<M: MessageSender, D: ReachabilityDecider>(sender: 
 async fn update_reachability_from_here<D: ReachabilityDecider>(cluster_state: &RwLock<ClusterState>, heart_beat: &HeartBeat<D>) {
     let current_reachability = heart_beat.get_current_reachability();
     cluster_state.write().await
-        .update_current_reachability(&current_reachability)
+        .update_reachability_from_myself(&current_reachability)
         .await;
 }
 

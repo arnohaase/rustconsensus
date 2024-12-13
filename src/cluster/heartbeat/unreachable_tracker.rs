@@ -5,7 +5,7 @@ use rustc_hash::FxHashSet;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
@@ -14,6 +14,10 @@ use crate::cluster::heartbeat::downing_strategy::{DowningStrategy, DowningStrate
 use crate::messaging::messaging::MessageSender;
 use crate::messaging::node_addr::NodeAddr;
 
+
+/// The [UnreachableTracker] picks up work when nodes are declared 'unreachable', either locally
+///  by a reachability decider, or remotely via gossip. It tracks stability of overall node
+///  reachability and invokes the [DowningStrategy] to resolve long-term unreachability.
 pub struct UnreachableTracker  {
     config: Arc<ClusterConfig>,
     cluster_state: Arc<RwLock<ClusterState>>,
@@ -46,6 +50,13 @@ impl  UnreachableTracker {
 
         if !modified {
             return;
+        }
+
+        if is_reachable {
+            debug!("node {:?} became reachable", node)
+        }
+        else {
+            debug!("node {:?} became unreachable", node)
         }
 
         // Handle min stability period before downing: We want to base our downing decision on

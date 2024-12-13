@@ -29,7 +29,7 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
             reference_time: Instant::now(),
             registry: HeartbeatRegistry {
                 config,
-                trackers: Default::default(),
+                per_node: Default::default(),
             },
         }
     }
@@ -111,7 +111,7 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
     }
 
     pub fn get_current_reachability(&self) -> BTreeMap<NodeAddr, bool> {
-        self.registry.trackers.iter()
+        self.registry.per_node.iter()
             .map(|(addr, tracker)| (addr, tracker.is_reachable()))
             .map(|(addr, b)| (addr.clone(), b))
             .collect()
@@ -121,38 +121,30 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
 
 struct HeartbeatRegistry<D: ReachabilityDecider> {
     config: Arc<ClusterConfig>,
-    trackers: BTreeMap<NodeAddr, D>,
+    per_node: BTreeMap<NodeAddr, D>,
 }
 impl <D: ReachabilityDecider> HeartbeatRegistry<D> {
     //TODO unit test
     fn on_heartbeat_response(&mut self, other: NodeAddr, rtt: Duration) {
-        match self.trackers.entry(other) {
+        match self.per_node.entry(other) {
             Entry::Occupied(mut e) => e.get_mut().on_heartbeat(rtt),
             Entry::Vacant(e) => {
                 let tracker = D::new(self.config.as_ref(), rtt);
                 e.insert(tracker);
             }
         }
-
-        // trace!("heartbeat response: rtt={}ms, moving avg rtt={}ms, moving stddev rtt={}ms",
-        //     (rtt_nanos as f64) / 1000000.0,
-        //     self.trackers.get(&other).unwrap()
-        //         .moving_mean_rtt_millis.expect("was just set"),
-        //     self.trackers.get(&other).unwrap()
-        //         .moving_variance_rtt_millis_squared.sqrt(),
-        // );
     }
 
     //TODO unit test
     fn clean_up_untracked_nodes(&mut self, heartbeat_recipients: &[NodeAddr]) {
-        let untracked_nodes = self.trackers.keys()
+        let untracked_nodes = self.per_node.keys()
             .filter(|addr| !heartbeat_recipients.contains(addr))
             .cloned()
             .collect::<Vec<_>>();
 
         for addr in untracked_nodes {
             debug!("heartbeat was previously exchanged with {:?}, is not tracked any more", addr);
-            self.trackers.remove(&addr);
+            self.per_node.remove(&addr);
         }
     }
 }
