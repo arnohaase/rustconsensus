@@ -67,7 +67,6 @@ async fn on_heartbeat_message<M: MessageSender, D: ReachabilityDecider>(sender: 
         HeartbeatMessage::Heartbeat(data) => {
             debug!("received heartbeat message");
             let response = HeartbeatMessage::HeartbeatResponse(HeartbeatResponseData {
-                counter: data.counter,
                 timestamp_nanos: data.timestamp_nanos,
             });
             messaging.send(sender, &response).await;
@@ -88,7 +87,7 @@ async fn update_reachability_from_here<D: ReachabilityDecider>(cluster_state: &R
 
 async fn do_heartbeat<M: MessageSender, D: ReachabilityDecider>(cluster_state: &RwLock<ClusterState>, heart_beat: &mut HeartBeat<D>, messaging: &M) {
     debug!("periodic heartbeat");
-    let msg = heart_beat.new_heartbeat_message();
+    let msg = heart_beat.create_heartbeat_message();
     let msg = HeartbeatMessage::Heartbeat(msg);
     let recipients = heart_beat.heartbeat_recipients(&*cluster_state.read().await);
     debug!("sending heartbeat message to {:?}", recipients);

@@ -81,12 +81,10 @@ impl HeartbeatMessage {
     }
 
     fn ser_heartbeat(data: &HeartbeatData, buf: &mut impl BufMut) {
-        buf.put_u32(data.counter);
         buf.put_u64(data.timestamp_nanos);
     }
 
     fn ser_heartbeat_response(data: &HeartbeatResponseData, buf: &mut impl BufMut) {
-        buf.put_u32(data.counter);
         buf.put_u64(data.timestamp_nanos);
     }
 
@@ -102,21 +100,17 @@ impl HeartbeatMessage {
 
 
     fn deser_heartbeat(mut buf: &[u8]) -> anyhow::Result<HeartbeatMessage> {
-        let counter = buf.try_get_u32()?;
         let timestamp_nanos = buf.try_get_u64()?;
 
         Ok(HeartbeatMessage::Heartbeat(HeartbeatData {
-            counter,
             timestamp_nanos,
         }))
     }
 
     fn deser_heartbeat_response(mut buf: &[u8]) -> anyhow::Result<HeartbeatMessage> {
-        let counter = buf.try_get_u32()?;
         let timestamp_nanos = buf.try_get_u64()?;
 
         Ok(HeartbeatMessage::HeartbeatResponse(HeartbeatResponseData {
-            counter,
             timestamp_nanos,
         }))
     }
@@ -125,13 +119,11 @@ impl HeartbeatMessage {
 
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub struct HeartbeatData {
-    pub counter: u32,
     pub timestamp_nanos: u64,
 }
 
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub struct HeartbeatResponseData {
-    pub counter: u32,
     pub timestamp_nanos: u64,
 }
 
@@ -144,8 +136,8 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case::heartbeat(Heartbeat(HeartbeatData { counter: 1, timestamp_nanos: 5}), ID_HEARTBEAT)]
-    #[case::heartbeat_response(HeartbeatResponse(HeartbeatResponseData { counter: 1, timestamp_nanos: 5}), ID_HEARTBEAT_RESPONSE)]
+    #[case::heartbeat(Heartbeat(HeartbeatData { timestamp_nanos: 5}), ID_HEARTBEAT)]
+    #[case::heartbeat_response(HeartbeatResponse(HeartbeatResponseData { timestamp_nanos: 5}), ID_HEARTBEAT_RESPONSE)]
     fn test_ser_cluster_message(#[case] msg: HeartbeatMessage, #[case] msg_id: u8) {
         assert_eq!(msg.id(), msg_id);
 

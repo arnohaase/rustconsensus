@@ -19,8 +19,7 @@ pub struct ClusterConfig {
     pub unconverged_gossip_interval: Duration,
 
     pub num_heartbeat_partners_per_node: usize,
-    pub ignore_heartbeat_response_after_n_counter_increments: u32,
-    pub ignore_heartbeat_response_after_n_seconds: u32,
+    pub ignore_heartbeat_response_after: Duration,
     /// >0 and < 1
     pub rtt_moving_avg_new_weight: f64,
     pub rtt_min_std_dev: Duration,
@@ -53,8 +52,7 @@ impl ClusterConfig {
             converged_gossip_interval: Duration::from_secs(1),
             unconverged_gossip_interval: Duration::from_millis(250),
             num_heartbeat_partners_per_node: 9,
-            ignore_heartbeat_response_after_n_counter_increments: 4,
-            ignore_heartbeat_response_after_n_seconds: 4,
+            ignore_heartbeat_response_after: Duration::from_secs(4),
             rtt_moving_avg_new_weight: 0.5,
             rtt_min_std_dev: Duration::from_millis(20),
             heartbeat_interval: Duration::from_secs(1),

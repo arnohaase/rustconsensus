@@ -18,7 +18,6 @@ use crate::messaging::node_addr::NodeAddr;
 pub struct HeartBeat<D: ReachabilityDecider> {
     myself: NodeAddr,
     config: Arc<ClusterConfig>,
-    counter: u32,
     reference_time: Instant,
     registry: HeartbeatRegistry<D>,
 }
@@ -27,7 +26,6 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
         HeartBeat {
             myself,
             config: config.clone(),
-            counter: 0,
             reference_time: Instant::now(),
             registry: HeartbeatRegistry {
                 config,
@@ -41,6 +39,8 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
         let mut result = Vec::new();
         let mut num_reachable = 0;
 
+        // shuffle the ordering of nodes to improve the likelihood of physically and topologically
+        //  distant nodes monitoring each other
         let node_ring = cluster_state.node_states()
             .map(|s| SortedByHash(s.addr))
             .collect::<BTreeSet<_>>();
@@ -69,57 +69,45 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
         result
     }
 
-    pub fn new_heartbeat_message(&mut self) -> HeartbeatData {
-        self.counter += 1;
+    pub fn create_heartbeat_message(&mut self) -> HeartbeatData {
         HeartbeatData {
-            counter: self.counter,
-            timestamp_nanos: self.timestamp_nanos_now(),
-        }
-    }
-
-    fn timestamp_nanos_now(&mut self) -> u64 {
-        match Instant::now().duration_since(self.reference_time).as_nanos().try_into() {
-            Ok(nanos) => nanos,
-            Err(e) => {
-                error!("system clock appears to have jumped widely - trying to readjust: {}", e);
-                self.reference_time = Instant::now();
-                u64::MAX //TODO
-            }
+            timestamp_nanos: self.now_as_nanos(),
         }
     }
 
     //TODO unit test
+    /// The heartbeat protocol is request / response based: A sends a heartbeat message to monitored
+    ///  node B, which echos the message back to A. This makes the protocol coordination free: Only
+    ///  A needs to know that it monitors B, while B does not need to know which nodes are monitoring
+    ///  it.
+    ///
+    /// This method is called in A when it receives a response from B: This means there was a
+    ///  'successful' heartbeat, and B is (more or less) reachable from A.
     pub fn on_heartbeat_response(&mut self, response: &HeartbeatResponseData, from: NodeAddr) {
-        // Start with some sanity checks: if the response has a version that is too old, or too much
-        //  time has passed since the heartbeat was sent, we ignore the response.
-        // We filter out these outliers to avoid polluting our network RTT measurements,
+        let rtt = self.timestamp_from_nanos(response.timestamp_nanos).elapsed();
 
-        let received_counter = response.counter as u64; // to avoid wrap-around in a simple and robust fashion
-        if received_counter + self.config.ignore_heartbeat_response_after_n_counter_increments as u64 <= self.counter as u64 {
-            warn!("received heartbeat response with outdated version from {:?} - ignoring", from);
+        // Start with some sanity checks: if too much time has passed since the heartbeat was sent,
+        //  we ignore the response: Round trips that take forever and a day are the same as lost
+        //  messages from an application perspective.
+        if rtt.is_zero() {
+            warn!("heartbeat from {:?}) arrived before it was sent - this points to manipulations at the network level", from);
             return;
         }
-
-        let received_timestamp_nanos = response.timestamp_nanos;
-        if received_timestamp_nanos + self.config.ignore_heartbeat_response_after_n_seconds as u64 * 1_000_000_000 < self.timestamp_nanos_now() { //TODO check overflow
+        if rtt > self.config.ignore_heartbeat_response_after {
             warn!("received heartbeat response that took too long from {:?} - ignoring", from);
             return;
         }
 
-        match self.timestamp_nanos_now().checked_sub(response.timestamp_nanos) {
-            None => {
-                warn!("system clock apparently went backwards - this is not supposed to happen");
-                return;
-            }
-            Some(rtt_nanos) => {
-                let rtt = Duration::from_nanos(rtt_nanos);
-                if rtt > Duration::from_secs(self.config.ignore_heartbeat_response_after_n_seconds as u64) { //TODO Duration in the config
-                    warn!("received heartbeat response that took too long from {:?} - ignoring", from);
-                    return;
-                }
-                self.registry.on_heartbeat_response(from, rtt);
-            }
-        };
+        self.registry.on_heartbeat_response(from, rtt);
+    }
+
+    //TODO unit test
+    fn now_as_nanos(&self) -> u64 {
+        self.reference_time.elapsed().as_nanos() as u64  //TODO overflow
+    }
+    //TODO unit test
+    fn timestamp_from_nanos(&self, nanos: u64) -> Instant {
+        self.reference_time + Duration::from_nanos(nanos)
     }
 
     pub fn get_current_reachability(&self) -> BTreeMap<NodeAddr, bool> {
@@ -136,8 +124,6 @@ struct HeartbeatRegistry<D: ReachabilityDecider> {
     trackers: BTreeMap<NodeAddr, D>,
 }
 impl <D: ReachabilityDecider> HeartbeatRegistry<D> {
-    //TODO clean up untracked remotes
-
     //TODO unit test
     fn on_heartbeat_response(&mut self, other: NodeAddr, rtt: Duration) {
         match self.trackers.entry(other) {
