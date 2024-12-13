@@ -38,7 +38,6 @@ impl  UnreachableTracker {
         }
     }
 
-    //TODO unit test
     pub async fn update_reachability<M: MessageSender>(&mut self, node: NodeAddr, is_reachable: bool, messaging: Arc<M>) {
         let was_fully_reachable = self.unreachable_nodes.is_empty();
 
@@ -295,11 +294,5 @@ mod tests {
             .get_node_state(&test_node_addr_from_number(3)).unwrap()
             .membership_state;
         assert_eq!(membership_state, MembershipState::Down);
-    }
-
-
-    #[test]
-    fn test_unreachable_tracker() {
-        todo!()
     }
 }
