@@ -1,29 +1,29 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
 use std::collections::btree_map::Entry;
-use std::f64::consts::PI;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::Arc;
-
+use std::time::Duration;
 use rustc_hash::FxHasher;
 use tokio::time::Instant;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
 use crate::cluster::heartbeat::heartbeat_messages::{HeartbeatData, HeartbeatResponseData};
+use crate::cluster::heartbeat::reachability_decider::ReachabilityDecider;
 use crate::messaging::node_addr::NodeAddr;
 
-pub struct HeartBeat {
+pub struct HeartBeat<D: ReachabilityDecider> {
     myself: NodeAddr,
     config: Arc<ClusterConfig>,
     counter: u32,
     reference_time: Instant,
-    registry: HeartbeatRegistry,
+    registry: HeartbeatRegistry<D>,
 }
-impl HeartBeat {
-    pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>) -> HeartBeat {
+impl <D: ReachabilityDecider> HeartBeat<D> {
+    pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>) -> HeartBeat<D> {
         HeartBeat {
             myself,
             config: config.clone(),
@@ -112,11 +112,12 @@ impl HeartBeat {
                 return;
             }
             Some(rtt_nanos) => {
-                if rtt_nanos > self.config.ignore_heartbeat_response_after_n_seconds as u64 * 1_000_000_000 {
+                let rtt = Duration::from_nanos(rtt_nanos);
+                if rtt > Duration::from_secs(self.config.ignore_heartbeat_response_after_n_seconds as u64) { //TODO Duration in the config
                     warn!("received heartbeat response that took too long from {:?} - ignoring", from);
                     return;
                 }
-                self.registry.on_heartbeat_response(from, rtt_nanos);
+                self.registry.on_heartbeat_response(from, rtt);
             }
         };
     }
@@ -130,31 +131,30 @@ impl HeartBeat {
 }
 
 
-struct HeartbeatRegistry {
+struct HeartbeatRegistry<D: ReachabilityDecider> {
     config: Arc<ClusterConfig>,
-    trackers: BTreeMap<NodeAddr, HeartbeatTracker>,
+    trackers: BTreeMap<NodeAddr, D>,
 }
-impl HeartbeatRegistry {
+impl <D: ReachabilityDecider> HeartbeatRegistry<D> {
     //TODO clean up untracked remotes
 
     //TODO unit test
-    fn on_heartbeat_response(&mut self, other: NodeAddr, rtt_nanos: u64) {
+    fn on_heartbeat_response(&mut self, other: NodeAddr, rtt: Duration) {
         match self.trackers.entry(other) {
-            Entry::Occupied(mut e) => e.get_mut().on_heartbeat_roundtrip(rtt_nanos),
+            Entry::Occupied(mut e) => e.get_mut().on_heartbeat(rtt),
             Entry::Vacant(e) => {
-                let mut tracker = HeartbeatTracker::new(self.config.clone());
-                tracker.on_heartbeat_roundtrip(rtt_nanos);
+                let tracker = D::new(self.config.as_ref(), rtt);
                 e.insert(tracker);
             }
         }
 
-        trace!("heartbeat response: rtt={}ms, moving avg rtt={}ms, moving stddev rtt={}ms",
-            (rtt_nanos as f64) / 1000000.0,
-            self.trackers.get(&other).unwrap()
-                .moving_mean_rtt_millis.expect("was just set"),
-            self.trackers.get(&other).unwrap()
-                .moving_variance_rtt_millis_squared.sqrt(),
-        );
+        // trace!("heartbeat response: rtt={}ms, moving avg rtt={}ms, moving stddev rtt={}ms",
+        //     (rtt_nanos as f64) / 1000000.0,
+        //     self.trackers.get(&other).unwrap()
+        //         .moving_mean_rtt_millis.expect("was just set"),
+        //     self.trackers.get(&other).unwrap()
+        //         .moving_variance_rtt_millis_squared.sqrt(),
+        // );
     }
 
     //TODO unit test
@@ -168,102 +168,6 @@ impl HeartbeatRegistry {
             debug!("heartbeat was previously exchanged with {:?}, is not tracked any more", addr);
             self.trackers.remove(&addr);
         }
-    }
-}
-
-
-struct HeartbeatTracker {
-    moving_mean_rtt_millis: Option<f64>,
-    moving_variance_rtt_millis_squared: f64, //TODO lower bound during evaluation to avoid anomalies
-    last_seen: Instant,
-    config: Arc<ClusterConfig>,
-}
-impl HeartbeatTracker {
-    fn new(config: Arc<ClusterConfig>) -> HeartbeatTracker {
-        HeartbeatTracker {
-            moving_mean_rtt_millis: None,
-            moving_variance_rtt_millis_squared: 0.0,
-            last_seen: Instant::now(),
-            config,
-        }
-    }
-
-    //TODO unit test
-    fn on_heartbeat_roundtrip(&mut self, rtt_nanos: u64) {
-        self.last_seen = Instant::now();
-
-        let rtt_millis = (rtt_nanos as f64) / 1000000.0;
-
-        if let Some(prev) = self.moving_mean_rtt_millis {
-            // calculate moving avg / variance
-            let alpha = self.config.rtt_moving_avg_new_weight;
-
-            let mean = rtt_millis * alpha + prev * (1.0 - alpha);
-            self.moving_mean_rtt_millis = Some(mean);
-
-            let s = (mean - rtt_millis).powi(2);
-            self.moving_variance_rtt_millis_squared = s * alpha + self.moving_variance_rtt_millis_squared * (1.0 - alpha);
-        }
-        else {
-            // first RTT response
-            self.moving_mean_rtt_millis = Some(rtt_millis);
-            self.moving_variance_rtt_millis_squared = 0.0;
-        }
-    }
-
-    const MAX_PHI: f64 = 1e9;
-
-    //TODO unit test
-    fn phi(&self) -> f64 {
-        let nanos_since_last_seen = Instant::now().duration_since(self.last_seen).as_nanos() as f64;
-
-        let rtt_mean_nanos = self.moving_mean_rtt_millis.unwrap_or(0.0) * 1000000.0;
-
-        let mut rtt_std_dev_millis = self.moving_variance_rtt_millis_squared.sqrt();
-        let min_std_dev_millis = (self.config.rtt_min_std_dev.as_nanos() as f64) / 1000000.0;
-        if rtt_std_dev_millis < min_std_dev_millis {
-            rtt_std_dev_millis = min_std_dev_millis;
-        }
-
-        let millis_overdue = (
-            nanos_since_last_seen
-            - self.config.heartbeat_interval.as_nanos() as f64
-            - self.config.heartbeat_grace_period.as_nanos() as f64
-            - rtt_mean_nanos
-        ) / 1000000.0;
-
-        if millis_overdue < 0.0 {
-            return 0.0;
-        }
-
-        fn gaussian(x: f64, sigma: f64) -> f64 {
-            let exponent = -x.powi(2) / (2.0 * sigma.powi(2));
-            let coefficient = 1.0 / (sigma * (2.0 * PI).sqrt());
-            coefficient * exponent.exp()
-        }
-
-        //TODO logarithm?
-
-        let g = gaussian(millis_overdue, rtt_std_dev_millis);
-        if g < 1.0 / Self::MAX_PHI {
-            return Self::MAX_PHI;
-        }
-        1.0 / g
-    }
-
-    pub fn is_reachable(&self) -> bool {
-        let phi = self.phi();
-        let result = phi < self.config.reachability_phi_threshold;
-
-        // trace!("heartbeat for {:?}: rtt={}ms, variance={}ms, phi={} -> {}",
-        //     self.tracked_node,
-        //     self.moving_mean_rtt.unwrap_or(0.0)/ 1000000.0,
-        //     self.moving_variance_rtt / 1000000.0,
-        //     phi,
-        //     result,
-        // );
-
-        result
     }
 }
 
@@ -295,6 +199,20 @@ impl PartialOrd for SortedByHash {
 
 #[cfg(test)]
 mod tests {
+    use crate::cluster::cluster_config::ClusterConfig;
+    use crate::test_util::node::test_node_addr_from_number;
+    use std::time::Duration;
+
+    fn new_config() -> ClusterConfig {
+        let mut config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr);
+        config.rtt_moving_avg_new_weight = 0.5;
+        config.rtt_min_std_dev = Duration::from_millis(20);
+        config.heartbeat_interval = Duration::from_secs(1);
+        config.heartbeat_grace_period = Duration::from_secs(1);
+        config
+    }
+
+
     #[test]
     fn test_heartbeat_logic() {
         todo!()

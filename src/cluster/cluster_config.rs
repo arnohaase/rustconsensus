@@ -55,7 +55,7 @@ impl ClusterConfig {
             num_heartbeat_partners_per_node: 9,
             ignore_heartbeat_response_after_n_counter_increments: 4,
             ignore_heartbeat_response_after_n_seconds: 4,
-            rtt_moving_avg_new_weight: 0.95,
+            rtt_moving_avg_new_weight: 0.5,
             rtt_min_std_dev: Duration::from_millis(20),
             heartbeat_interval: Duration::from_secs(1),
             heartbeat_grace_period: Duration::from_secs(1),
