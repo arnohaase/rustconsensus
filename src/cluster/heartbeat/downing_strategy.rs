@@ -48,6 +48,7 @@ use crate::cluster::heartbeat::downing_strategy::DowningStrategyDecision::{DownT
 ///
 /// inconsistent sets of nodes: no convergence, unreachability can happen during promotion
 /// --> >= Up provides a particularly window of uncertainty because the change requires a leader
+#[mockall::automock]
 pub trait DowningStrategy: Debug + Send + Sync {
     fn decide(
         &self,
@@ -55,6 +56,7 @@ pub trait DowningStrategy: Debug + Send + Sync {
     ) -> DowningStrategyDecision;
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum DowningStrategyDecision {
     DownUs,
     DownThem,

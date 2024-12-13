@@ -134,7 +134,9 @@ impl  UnreachableTracker {
     }
 
     async fn on_downing_decision<M: MessageSender>(cluster_state: &mut ClusterState, downing_strategy_decision: DowningStrategyDecision, messaging: &M) {
+        info!("downing decision: {:?}", downing_strategy_decision);
         let downed_nodes = cluster_state.apply_downing_decision(downing_strategy_decision).await;
+        info!("downing nodes {:?}", downed_nodes);
         for n in downed_nodes {
             // This is a best effort to notify all affected nodes of the downing decision.
             //  We cannot reach all nodes anyway, and there may be network problems, so this is
@@ -146,6 +148,156 @@ impl  UnreachableTracker {
 
 #[cfg(test)]
 mod tests {
+    use crate::cluster::cluster_config::ClusterConfig;
+    use crate::cluster::cluster_events::ClusterEventNotifier;
+    use crate::cluster::cluster_state::MembershipState::Up;
+    use crate::cluster::cluster_state::*;
+    use crate::cluster::heartbeat::downing_strategy::{DowningStrategyDecision, MockDowningStrategy};
+    use crate::cluster::heartbeat::unreachable_tracker::UnreachableTracker;
+    use crate::node_state;
+    use crate::test_util::message::TrackingMockMessageSender;
+    use crate::test_util::node::test_node_addr_from_number;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use rstest::rstest;
+    use tokio::runtime::Builder;
+    use tokio::sync::RwLock;
+    use tokio::time;
+    use crate::cluster::gossip::gossip_messages::GossipMessage;
+
+    #[tokio::test(start_paused = true)]
+    async fn test_update_unreachable_set() {
+        let myself = test_node_addr_from_number(1);
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+
+        let downing_strategy = Arc::new(MockDowningStrategy::new());
+        let messaging = Arc::new(TrackingMockMessageSender::new(myself));
+
+        let mut tracker = UnreachableTracker::new(config, cluster_state, downing_strategy);
+
+        tracker.update_reachability(test_node_addr_from_number(2), true, messaging.clone()).await;
+        assert!(tracker.unreachable_nodes.is_empty());
+
+        tracker.update_reachability(test_node_addr_from_number(2), false, messaging.clone()).await;
+        assert_eq!(tracker.unreachable_nodes.iter().cloned().collect::<Vec<_>>(), vec![test_node_addr_from_number(2)]);
+
+        tracker.update_reachability(test_node_addr_from_number(2), true, messaging.clone()).await;
+        assert!(tracker.unreachable_nodes.is_empty());
+
+        time::advance(Duration::from_secs(1000)).await;
+    }
+
+    #[rstest]
+    #[case::them(DowningStrategyDecision::DownThem, vec![2])]
+    #[case::us(DowningStrategyDecision::DownUs, vec![1,3])]
+    fn test_downing(#[case] decision: DowningStrategyDecision, #[case] expected_downed_nodes: Vec<u16>) {
+        let expected_downed_nodes = expected_downed_nodes.into_iter()
+            .map(|n| test_node_addr_from_number(n))
+            .collect::<Vec<_>>();
+
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            time::pause();
+
+            let myself = test_node_addr_from_number(1);
+            let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+            let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+            cluster_state.write().await
+                .merge_node_state(node_state!(2[]:Up->[3:false@9]@[1,2,3])).await;
+            cluster_state.write().await
+                .merge_node_state(node_state!(3[]:Up->[]@[1,2,3])).await;
+
+            let mut downing_strategy = MockDowningStrategy::new();
+            downing_strategy.expect_decide()
+                .once()
+                .return_const(decision);
+            let downing_strategy = Arc::new(downing_strategy);
+            let messaging = Arc::new(TrackingMockMessageSender::new(myself));
+
+            let mut tracker = UnreachableTracker::new(config, cluster_state.clone(), downing_strategy);
+
+            tracker.update_reachability(test_node_addr_from_number(2), false, messaging.clone()).await;
+
+            // reachability changes reset timers
+            time::sleep(Duration::from_secs(4)).await;
+            tracker.update_reachability(test_node_addr_from_number(3), false, messaging.clone()).await;
+            time::sleep(Duration::from_secs(4)).await;
+            tracker.update_reachability(test_node_addr_from_number(3), true, messaging.clone()).await;
+            time::sleep(Duration::from_secs(4)).await;
+            // sending an update that does not change anything does not reset timers
+            tracker.update_reachability(test_node_addr_from_number(2), false, messaging.clone()).await;
+            time::sleep(Duration::from_millis(1001)).await;
+
+            for n in expected_downed_nodes {
+                let membership_state = cluster_state.read().await
+                    .get_node_state(&n).unwrap()
+                    .membership_state;
+                assert_eq!(membership_state, MembershipState::Down);
+                messaging.assert_message_sent(n, GossipMessage::DownYourself).await;
+            }
+
+            messaging.assert_no_remaining_messages().await;
+        });
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_unstable_shutdown() {
+        let myself = test_node_addr_from_number(1);
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+        cluster_state.write().await
+            .merge_node_state(node_state!(2[]:Up->[3:false@9]@[1,2,3])).await;
+        cluster_state.write().await
+            .merge_node_state(node_state!(3[]:Up->[]@[1,2,3])).await;
+
+        let downing_strategy = Arc::new(MockDowningStrategy::new());
+        let messaging = Arc::new(TrackingMockMessageSender::new(myself));
+
+        let mut tracker = UnreachableTracker::new(config, cluster_state.clone(), downing_strategy);
+
+        tracker.update_reachability(test_node_addr_from_number(2), false, messaging.clone()).await;
+        time::sleep(Duration::from_secs(4)).await;
+        // unstable timeout timer is restarted when all nodes become reachable again
+        tracker.update_reachability(test_node_addr_from_number(2), true, messaging.clone()).await;
+        time::sleep(Duration::from_secs(4)).await;
+
+        tracker.update_reachability(test_node_addr_from_number(2), false, messaging.clone()).await;
+        time::sleep(Duration::from_secs(4)).await;
+        tracker.update_reachability(test_node_addr_from_number(3), false, messaging.clone()).await;
+        time::sleep(Duration::from_secs(4)).await;
+        tracker.update_reachability(test_node_addr_from_number(3), true, messaging.clone()).await;
+        time::sleep(Duration::from_secs(4)).await;
+        tracker.update_reachability(test_node_addr_from_number(3), false, messaging.clone()).await;
+        time::sleep(Duration::from_secs(4)).await;
+        tracker.update_reachability(test_node_addr_from_number(3), true, messaging.clone()).await;
+
+        messaging.assert_no_remaining_messages().await;
+
+        time::sleep(Duration::from_millis(4001)).await;
+
+        messaging.assert_message_sent(test_node_addr_from_number(1), GossipMessage::DownYourself).await;
+        messaging.assert_message_sent(test_node_addr_from_number(3), GossipMessage::DownYourself).await;
+        messaging.assert_message_sent(test_node_addr_from_number(2), GossipMessage::DownYourself).await;
+        messaging.assert_no_remaining_messages().await;
+
+        let membership_state = cluster_state.read().await
+            .get_node_state(&test_node_addr_from_number(1)).unwrap()
+            .membership_state;
+        assert_eq!(membership_state, MembershipState::Down);
+
+        let membership_state = cluster_state.read().await
+            .get_node_state(&test_node_addr_from_number(2)).unwrap()
+            .membership_state;
+        assert_eq!(membership_state, MembershipState::Down);
+
+        let membership_state = cluster_state.read().await
+            .get_node_state(&test_node_addr_from_number(3)).unwrap()
+            .membership_state;
+        assert_eq!(membership_state, MembershipState::Down);
+    }
+
+
     #[test]
     fn test_unreachable_tracker() {
         todo!()
