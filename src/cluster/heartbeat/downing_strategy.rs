@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::sync::Arc;
+#[cfg(test)] use mockall::automock;
 use tracing::info;
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::{ClusterState, NodeState};
@@ -48,7 +49,7 @@ use crate::cluster::heartbeat::downing_strategy::DowningStrategyDecision::{DownT
 ///
 /// inconsistent sets of nodes: no convergence, unreachability can happen during promotion
 /// --> >= Up provides a particularly window of uncertainty because the change requires a leader
-#[mockall::automock]
+#[cfg_attr(test, automock)]
 pub trait DowningStrategy: Debug + Send + Sync {
     fn decide(
         &self,
