@@ -92,7 +92,7 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
             return;
         }
         if rtt > self.config.ignore_heartbeat_response_after {
-            warn!("received heartbeat response that took too long from {:?} - ignoring", from);
+            warn!("received heartbeat response from {:?} that took longer than the timeout of {:?} - ignoring", from, self.config.ignore_heartbeat_response_after);
             return;
         }
 
@@ -190,7 +190,7 @@ mod tests {
     use std::time::Duration;
     use tokio::time;
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn test_heartbeat_recipients() {
         let myself = test_node_addr_from_number(1);
         let mut config = ClusterConfig::new(myself.socket_addr);
@@ -245,9 +245,36 @@ mod tests {
         ]);
     }
 
-    #[test]
-    fn test_on_heartbeat_response() {
-        todo!()
+    #[tokio::test(start_paused = true)]
+    async fn test_on_heartbeat_response() {
+        let myself = test_node_addr_from_number(1);
+        let mut config = ClusterConfig::new(myself.socket_addr);
+        config.ignore_heartbeat_response_after = Duration::from_secs(1);
+        // config.num_heartbeat_partners_per_node = 3;
+        let config = Arc::new(config);
+
+        let mut heartbeat = HeartBeat::<FixedTimeoutDecider>::new(myself, config.clone());
+
+        time::sleep(Duration::from_millis(100)).await;
+
+        heartbeat.on_heartbeat_response(&HeartbeatResponseData {
+            timestamp_nanos: 100,
+        }, test_node_addr_from_number(2));
+        assert_eq!(heartbeat.get_current_reachability_from_here(), [(test_node_addr_from_number(2), true)].into());
+
+        time::sleep(Duration::from_millis(1000)).await;
+
+        // RTT too lang, ignoring
+        heartbeat.on_heartbeat_response(&HeartbeatResponseData {
+            timestamp_nanos: 0,
+        }, test_node_addr_from_number(3));
+        assert_eq!(heartbeat.get_current_reachability_from_here(), [(test_node_addr_from_number(2), true)].into());
+
+        // 'negative' RTT, ignoring
+        heartbeat.on_heartbeat_response(&HeartbeatResponseData {
+            timestamp_nanos: 100_000_000_000,
+        }, test_node_addr_from_number(3));
+        assert_eq!(heartbeat.get_current_reachability_from_here(), [(test_node_addr_from_number(2), true)].into());
     }
 
     #[tokio::test(start_paused = true)]
