@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use rustc_hash::FxHasher;
 use tokio::time::Instant;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
@@ -34,7 +34,8 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
         }
     }
 
-    //TODO unit test
+    /// calculate heartbeat recipients based on the cluster's configuration, cleaning up internal
+    ///  data structures on the way
     pub fn heartbeat_recipients(&mut self, cluster_state: &ClusterState) -> Vec<NodeAddr> {
         let mut result = Vec::new();
         let mut num_reachable = 0;
@@ -55,13 +56,9 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
             }
 
             result.push(candidate.0.clone());
-            if let Some(state) = cluster_state.get_node_state(&candidate.0) {
-                if state.is_reachable() {
-                    num_reachable += 1;
-                }
-            }
-            else {
-                error!("node ring for heartbeat out of sync with cluster state"); //TODO
+            let state = cluster_state.get_node_state(&candidate.0).unwrap();
+            if state.is_reachable() {
+                num_reachable += 1;
             }
         }
 
@@ -75,7 +72,6 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
         }
     }
 
-    //TODO unit test
     /// The heartbeat protocol is request / response based: A sends a heartbeat message to monitored
     ///  node B, which echos the message back to A. This makes the protocol coordination free: Only
     ///  A needs to know that it monitors B, while B does not need to know which nodes are monitoring
@@ -101,20 +97,15 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
         self.registry.on_heartbeat_response(from, rtt);
     }
 
-    //TODO unit test
     fn now_as_nanos(&self) -> u64 {
         self.reference_time.elapsed().as_nanos() as u64  //TODO overflow
     }
-    //TODO unit test
     fn timestamp_from_nanos(&self, nanos: u64) -> Instant {
         self.reference_time + Duration::from_nanos(nanos)
     }
 
-    pub fn get_current_reachability(&self) -> BTreeMap<NodeAddr, bool> {
-        self.registry.per_node.iter()
-            .map(|(addr, tracker)| (addr, tracker.is_reachable()))
-            .map(|(addr, b)| (addr.clone(), b))
-            .collect()
+    pub fn get_current_reachability_from_here(&self) -> BTreeMap<NodeAddr, bool> {
+        self.registry.get_current_reachability()
     }
 }
 
@@ -124,7 +115,6 @@ struct HeartbeatRegistry<D: ReachabilityDecider> {
     per_node: BTreeMap<NodeAddr, D>,
 }
 impl <D: ReachabilityDecider> HeartbeatRegistry<D> {
-    //TODO unit test
     fn on_heartbeat_response(&mut self, other: NodeAddr, rtt: Duration) {
         match self.per_node.entry(other) {
             Entry::Occupied(mut e) => e.get_mut().on_heartbeat(rtt),
@@ -135,7 +125,6 @@ impl <D: ReachabilityDecider> HeartbeatRegistry<D> {
         }
     }
 
-    //TODO unit test
     fn clean_up_untracked_nodes(&mut self, heartbeat_recipients: &[NodeAddr]) {
         let untracked_nodes = self.per_node.keys()
             .filter(|addr| !heartbeat_recipients.contains(addr))
@@ -146,6 +135,13 @@ impl <D: ReachabilityDecider> HeartbeatRegistry<D> {
             debug!("heartbeat was previously exchanged with {:?}, is not tracked any more", addr);
             self.per_node.remove(&addr);
         }
+    }
+
+    fn get_current_reachability(&self) -> BTreeMap<NodeAddr, bool> {
+        self.per_node.iter()
+            .map(|(addr, tracker)| (addr, tracker.is_reachable()))
+            .map(|(addr, r)| (addr.clone(), r))
+            .collect()
     }
 }
 
@@ -177,22 +173,67 @@ impl PartialOrd for SortedByHash {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
     use crate::cluster::cluster_config::ClusterConfig;
     use crate::test_util::node::test_node_addr_from_number;
     use std::time::Duration;
-
-    fn new_config() -> ClusterConfig {
-        let mut config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr);
-        config.rtt_moving_avg_new_weight = 0.5;
-        config.rtt_min_std_dev = Duration::from_millis(20);
-        config.heartbeat_interval = Duration::from_secs(1);
-        config.heartbeat_grace_period = Duration::from_secs(1);
-        config
-    }
-
+    use tokio::time;
+    use crate::cluster::heartbeat::heartbeat_logic::HeartbeatRegistry;
+    use crate::cluster::heartbeat::reachability_decider::FixedTimeoutDecider;
 
     #[test]
-    fn test_heartbeat_logic() {
+    fn test_heartbeat_recipients() {
         todo!()
+    }
+
+    #[test]
+    fn test_on_heartbeat_response() {
+        todo!()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_registry() {
+        let myself = test_node_addr_from_number(1);
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+
+        let mut registry = HeartbeatRegistry::<FixedTimeoutDecider> {
+            config: config.clone(),
+            per_node: BTreeMap::default(),
+        };
+
+        for n in [2,3,4,5] {
+            registry.on_heartbeat_response(test_node_addr_from_number(n), Duration::from_secs(1));
+        }
+
+        assert_eq!(registry.per_node.keys().cloned().collect::<Vec<_>>(), vec![
+            test_node_addr_from_number(2),
+            test_node_addr_from_number(3),
+            test_node_addr_from_number(4),
+            test_node_addr_from_number(5),
+        ]);
+
+        assert_eq!(registry.get_current_reachability(), [
+            (test_node_addr_from_number(2), true),
+            (test_node_addr_from_number(3), true),
+            (test_node_addr_from_number(4), true),
+            (test_node_addr_from_number(5), true),
+        ].into());
+
+        time::sleep(Duration::from_secs(10)).await;
+
+        assert_eq!(registry.get_current_reachability(), [
+            (test_node_addr_from_number(2), false),
+            (test_node_addr_from_number(3), false),
+            (test_node_addr_from_number(4), false),
+            (test_node_addr_from_number(5), false),
+        ].into());
+
+        registry.clean_up_untracked_nodes(&[test_node_addr_from_number(2), test_node_addr_from_number(4)]);
+
+        assert_eq!(registry.get_current_reachability(), [
+            (test_node_addr_from_number(2), false),
+            (test_node_addr_from_number(4), false),
+        ].into());
     }
 }
