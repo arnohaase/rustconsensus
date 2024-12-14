@@ -25,6 +25,7 @@ impl HeartbeatMessageModule {
         })
     }
 
+    //TODO unit test heartbeat message module
     async fn _on_message(&self, envelope: &Envelope, buf: &[u8]) -> anyhow::Result<()> {
         let msg = HeartbeatMessage::deser(buf)?;
         self.channel.send((envelope.from, msg)).await?;
@@ -146,10 +147,5 @@ mod tests {
         println!("S {:?}", buf);
         let deser_msg = HeartbeatMessage::deser(&buf).unwrap();
         assert_eq!(msg, deser_msg);
-    }
-
-    #[test]
-    fn test_heartbeat_module() {
-        todo!()
     }
 }

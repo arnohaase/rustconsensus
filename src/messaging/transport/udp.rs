@@ -16,6 +16,7 @@ impl UdpTransport {
     pub async fn new(self_addr: SocketAddr) -> anyhow::Result<UdpTransport> {
         let (cancel_sender, _) = broadcast::channel(1);
 
+        //TODO are two sockets for sending really necessary, or can in IPV6 socket send IPV4 on all OSs?
         let ipv4_send_socket = UdpSocket::bind(SocketAddr::from_str("0.0.0.0:0")?).await?;
         let ipv6_send_socket = UdpSocket::bind(SocketAddr::from_str("[::]:0")?).await?;
 

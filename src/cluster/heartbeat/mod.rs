@@ -21,6 +21,7 @@ mod unreachable_tracker;
 pub mod downing_strategy;
 pub mod reachability_decider;
 
+//TODO unit test heartbeat loop
 pub async fn run_heartbeat<M: Messaging>(config: Arc<ClusterConfig>, messaging: Arc<M>, cluster_state: Arc<RwLock<ClusterState>>, mut cluster_events: broadcast::Receiver<ClusterEvent>, downing_strategy: Arc<dyn DowningStrategy>) -> anyhow::Result<()> {
     let myself = messaging.get_self_addr();
     let mut heartbeat = HeartBeat::<FixedTimeoutDecider>::new(myself, config.clone()); //TODO configurable reachability decider
@@ -98,8 +99,102 @@ async fn do_heartbeat<M: MessageSender, D: ReachabilityDecider>(cluster_state: &
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn test_heartbeat_loop() {
-        todo!()
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::RwLock;
+    use tokio::time;
+    use crate::cluster::cluster_config::ClusterConfig;
+    use crate::cluster::cluster_events::ClusterEventNotifier;
+    use crate::cluster::cluster_state::*;
+    use crate::cluster::cluster_state::MembershipState::Up;
+    use crate::cluster::heartbeat::heartbeat_logic::HeartBeat;
+    use crate::cluster::heartbeat::heartbeat_messages::{HeartbeatData, HeartbeatMessage, HeartbeatResponseData};
+    use crate::cluster::heartbeat::{do_heartbeat, on_heartbeat_message, update_reachability_from_here};
+    use crate::cluster::heartbeat::reachability_decider::FixedTimeoutDecider;
+    use crate::node_state;
+    use crate::test_util::message::TrackingMockMessageSender;
+    use crate::test_util::node::test_node_addr_from_number;
+
+    #[tokio::test]
+    async fn test_on_heartbeat_message_heartbeat() {
+        let myself = test_node_addr_from_number(1);
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let mut heartbeat = HeartBeat::<FixedTimeoutDecider>::new(myself, config);
+        let messaging = Arc::new(TrackingMockMessageSender::new(myself));
+
+        on_heartbeat_message(test_node_addr_from_number(2), HeartbeatMessage::Heartbeat(HeartbeatData { timestamp_nanos: 12345 }), &mut heartbeat, messaging.as_ref()).await;
+
+        assert!(heartbeat.get_current_reachability_from_here().is_empty());
+
+        messaging.assert_message_sent(test_node_addr_from_number(2), HeartbeatMessage::HeartbeatResponse(HeartbeatResponseData { timestamp_nanos: 12345 })).await;
+        messaging.assert_no_remaining_messages().await;
+    }
+
+    #[tokio::test]
+    async fn test_on_heartbeat_message_response() {
+        let myself = test_node_addr_from_number(1);
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let mut heartbeat = HeartBeat::<FixedTimeoutDecider>::new(myself, config);
+        let messaging = Arc::new(TrackingMockMessageSender::new(myself));
+
+        on_heartbeat_message(test_node_addr_from_number(2), HeartbeatMessage::HeartbeatResponse(HeartbeatResponseData { timestamp_nanos: 12345 }), &mut heartbeat, messaging.as_ref()).await;
+
+        assert_eq!(heartbeat.get_current_reachability_from_here(), [(test_node_addr_from_number(2), true)].into());
+
+        messaging.assert_no_remaining_messages().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_update_reachability_from_here() {
+        let myself = test_node_addr_from_number(1);
+        let mut config = ClusterConfig::new(myself.socket_addr);
+        let config = Arc::new(config);
+        let cluster_state = RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new())));
+        for n in [2,3,4,5] {
+            let mut node_state = node_state!(2[]:Up->[]@[1,2,3,4,5]);
+            node_state.addr = test_node_addr_from_number(n);
+            cluster_state.write().await
+                .merge_node_state(node_state).await;
+        }
+
+        let mut heartbeat = HeartBeat::<FixedTimeoutDecider>::new(myself, config);
+
+        time::sleep(Duration::from_millis(100)).await;
+
+        heartbeat.on_heartbeat_response(&HeartbeatResponseData { timestamp_nanos: 10 }, test_node_addr_from_number(2));
+        heartbeat.on_heartbeat_response(&HeartbeatResponseData { timestamp_nanos: 10 }, test_node_addr_from_number(3));
+        heartbeat.on_heartbeat_response(&HeartbeatResponseData { timestamp_nanos: 10 }, test_node_addr_from_number(4));
+
+        time::sleep(Duration::from_secs(4)).await;
+
+        update_reachability_from_here(&cluster_state, &heartbeat).await;
+
+        assert_eq!(cluster_state.read().await.get_node_state(&test_node_addr_from_number(2)).unwrap(), &node_state!(2[]:Up->[1:false@1]@[1]));
+        assert_eq!(cluster_state.read().await.get_node_state(&test_node_addr_from_number(3)).unwrap(), &node_state!(3[]:Up->[1:false@1]@[1]));
+        assert_eq!(cluster_state.read().await.get_node_state(&test_node_addr_from_number(4)).unwrap(), &node_state!(4[]:Up->[1:false@1]@[1]));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_do_heartbeat() {
+        let myself = test_node_addr_from_number(1);
+        let mut config = ClusterConfig::new(myself.socket_addr);
+        config.num_heartbeat_partners_per_node = 2;
+        let config = Arc::new(config);
+        let cluster_state = RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new())));
+        for n in [2,3,4,5] {
+            let mut node_state = node_state!(2[]:Up->[]@[1,2,3,4,5]);
+            node_state.addr = test_node_addr_from_number(n);
+            cluster_state.write().await
+                .merge_node_state(node_state).await;
+        }
+
+        let mut heartbeat = HeartBeat::<FixedTimeoutDecider>::new(myself, config);
+        let messaging = Arc::new(TrackingMockMessageSender::new(myself));
+
+        do_heartbeat(&cluster_state, &mut heartbeat, messaging.as_ref()).await;
+
+        messaging.assert_message_sent(test_node_addr_from_number(2), HeartbeatMessage::Heartbeat(HeartbeatData { timestamp_nanos: 0 })).await;
+        messaging.assert_message_sent(test_node_addr_from_number(3), HeartbeatMessage::Heartbeat(HeartbeatData { timestamp_nanos: 0 })).await;
+        messaging.assert_no_remaining_messages().await;
     }
 }

@@ -118,6 +118,8 @@ struct HeartbeatRegistry<D: ReachabilityDecider> {
 }
 impl <D: ReachabilityDecider> HeartbeatRegistry<D> {
     fn on_heartbeat_response(&mut self, other: NodeAddr, rtt: Duration) {
+        info!("heartbeat for {:?} - rtt {:?}", other, rtt);
+
         match self.per_node.entry(other) {
             Entry::Occupied(mut e) => e.get_mut().on_heartbeat(rtt),
             Entry::Vacant(e) => {

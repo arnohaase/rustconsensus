@@ -55,7 +55,7 @@ impl <R: Random> GossipApi for Gossip<R> {
     }
 }
 
-
+//TODO unit test for gossip loop
 pub async fn run_gossip<M: Messaging>(config: Arc<ClusterConfig>, messaging: Arc<M>, cluster_state: Arc<RwLock<ClusterState>>) -> anyhow::Result<()> {
     let myself = messaging.get_self_addr();
 
@@ -138,11 +138,6 @@ mod tests {
     use crate::node_state;
     use crate::test_util::message::TrackingMockMessageSender;
     use crate::test_util::node::test_node_addr_from_number;
-
-    #[test]
-    fn test_run_gossip() {
-        todo!()
-    }
 
     #[rstest]
     #[case::empty(vec![])]

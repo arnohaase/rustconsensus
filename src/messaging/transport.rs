@@ -12,6 +12,8 @@ pub trait Transport : Sync + Send {
     fn cancel_recv_loop(&self);
 }
 
+//TODO UDP based transport that collects messages before sending, negative ACK, resend etc.
+//TODO optional encryption wrapper for transport
 
 /// This trait decouples the implementation of message transport (different strategies) from the
 ///  handling of a message once it is received (always the same, part of the messaging library core).
