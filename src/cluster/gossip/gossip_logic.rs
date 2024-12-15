@@ -1,9 +1,10 @@
+use std::cmp::max;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::sync::Arc;
-
+use ordered_float::OrderedFloat;
 use rustc_hash::FxHasher;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
@@ -136,56 +137,61 @@ impl <R: Random> Gossip<R> {
 
         let (mut maybe_same, mut proven_different) = self.gossip_candidates_by_differing_state().await;
 
-        let mut summary_digest_message = None;
-        let mut detailed_digest_message = None;
+        let summary_digest_message = Arc::new(GossipMessage::GossipSummaryDigest(self.gossip_summary_digest().await));
+        let detailed_digest_message = Arc::new(GossipMessage::GossipDetailedDigest(self.gossip_detailed_digest().await));
 
         for _ in 0..self.config.num_gossip_partners {
             // give more weight to nodes with a state that is proven to be different, but give
             //  nodes without known differences a non-zero probability
 
-            let use_proven_different = if maybe_same.is_empty() {
-                if proven_different.is_empty() {
-                    break;
+            match self.should_pick_proven_different(&maybe_same, &proven_different) {
+                None => break,
+                Some(true) => {
+                    // with a 'proven different' gossip partner, we skip the summary digest and send
+                    //  a detailed digest right away: We know there are differences
+                    result.push((
+                        self.calc_gossip(&mut proven_different),
+                        detailed_digest_message.clone()
+                    ));
                 }
-                true
-            }
-            else if proven_different.is_empty() {
-                false
-            }
-            else {
-                R::gen_f64_range(0.0 .. 1.0) < self.config.gossip_with_differing_state_probability
-            };
-
-            if use_proven_different {
-                let idx = R::gen_usize_range(0..proven_different.len());
-                let addr = proven_different.remove(idx);
-                let msg = if let Some(msg) = &detailed_digest_message {
-                    Arc::clone(msg)
+                Some(false) => {
+                    // the gossip partner may (likely) share the same view of the cluster that we have,
+                    //  so we verify this by sending a summary digest
+                    result.push((
+                        self.calc_gossip(&mut maybe_same),
+                        summary_digest_message.clone()
+                    ));
                 }
-                else {
-                    let msg = Arc::new(GossipMessage::GossipDetailedDigest(self.gossip_detailed_digest().await));
-                    detailed_digest_message = Some(msg.clone());
-                    msg
-                };
-
-                result.push((addr, msg));
-            }
-            else {
-                let idx = R::gen_usize_range(0..maybe_same.len());
-                let addr = maybe_same.remove(idx);
-                let msg = if let Some(msg) = &summary_digest_message {
-                    Arc::clone(msg)
-                }
-                else {
-                    let msg = Arc::new(GossipMessage::GossipSummaryDigest(self.gossip_summary_digest().await));
-                    summary_digest_message = Some(msg.clone());
-                    msg
-                };
-                result.push((addr, msg));
             }
         }
 
         result
+    }
+
+    //TODO unit test
+    fn calc_gossip (&self, candidates: &mut Vec<NodeAddr>) -> NodeAddr {
+        let idx = R::gen_usize_range(0..candidates.len());
+        candidates.remove(idx)
+    }
+
+    //TODO unit test
+    fn should_pick_proven_different(&self, maybe_same: &[NodeAddr], proven_different: &[NodeAddr]) -> Option<bool> {
+        match (maybe_same.is_empty(), proven_different.is_empty()) {
+            (true, true) => None,
+            (true, false) => Some(true),
+            (false, true) => Some(false),
+            (false, false) => {
+                // There are remaining nodes in both categories -> pick a category at random.
+                // NB: We want to pick a 'proven different' node with a configured minimum likelihood
+                //  even if the fraction of these nodes is less: These nodes are guaranteed to
+                //  require gossip.
+
+                let fract_different = proven_different.len() as f64 / (proven_different.len()  + maybe_same.len()) as f64;
+                let p_different = max(OrderedFloat(fract_different), OrderedFloat(self.config.gossip_with_differing_state_min_probability)).0;
+
+                Some(R::gen_f64_range(0.0 .. 1.0) < p_different)
+            }
+        }
     }
 
     pub async fn on_summary_digest(&self, other_digest: &GossipSummaryDigestData) -> Option<GossipDetailedDigestData> {
@@ -197,8 +203,6 @@ impl <R: Random> Gossip<R> {
 
         Some(self.gossip_detailed_digest().await)
     }
-
-    //TODO debug logging for gossip
 
     pub async fn on_detailed_digest(&self, other_digest: &GossipDetailedDigestData) -> Option<GossipDifferingAndMissingNodesData> {
         debug!("received gossip detailed digest message");
@@ -428,8 +432,44 @@ mod tests {
         });
     }
 
+    #[tokio::test]
+    async fn test_gossip_partners() {
+        let _lock = MOCK_RANDOM_MUTEX.lock();
+
+        let myself = test_node_addr_from_number(1);
+        let mut config = ClusterConfig::new(myself.socket_addr);
+        config.num_gossip_partners = 2;
+        let config = Arc::new(config);
+        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+        for n in [2,3,4,5,5,6] {
+            let mut node_state = node_state!(2["a", "b"]:Up->[]@[1,2,3,4,5,6]);
+            node_state.addr = test_node_addr_from_number(n);
+            cluster_state.write().await
+                .merge_node_state(node_state).await;
+        }
+
+        let gossip = Gossip::<MockRandom>::new_with_random(myself, config, cluster_state.clone());
+
+        let ctx_usize_range = MockRandom::gen_usize_range_context();
+        // ctx_usize_range.expect()
+        //     .ret
+
+        let gossip_partners = gossip.gossip_partners().await;
+
+
+        // summary vs. detailed digest
+
+
+        todo!()
+    }
+
     #[test]
-    fn test_gossip_partners() {
+    fn test_calc_gossip() {
+        todo!()
+    }
+
+    #[test]
+    fn test_should_pick_proven_different() {
         todo!()
     }
 
