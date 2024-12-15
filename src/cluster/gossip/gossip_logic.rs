@@ -150,7 +150,7 @@ impl <R: Random> Gossip<R> {
                     // with a 'proven different' gossip partner, we skip the summary digest and send
                     //  a detailed digest right away: We know there are differences
                     result.push((
-                        self.calc_gossip(&mut proven_different),
+                        self.pick_gossip_partner(&mut proven_different),
                         detailed_digest_message.clone()
                     ));
                 }
@@ -158,7 +158,7 @@ impl <R: Random> Gossip<R> {
                     // the gossip partner may (likely) share the same view of the cluster that we have,
                     //  so we verify this by sending a summary digest
                     result.push((
-                        self.calc_gossip(&mut maybe_same),
+                        self.pick_gossip_partner(&mut maybe_same),
                         summary_digest_message.clone()
                     ));
                 }
@@ -168,8 +168,7 @@ impl <R: Random> Gossip<R> {
         result
     }
 
-    //TODO unit test
-    fn calc_gossip (&self, candidates: &mut Vec<NodeAddr>) -> NodeAddr {
+    fn pick_gossip_partner(&self, candidates: &mut Vec<NodeAddr>) -> NodeAddr {
         let idx = R::gen_usize_range(0..candidates.len());
         candidates.remove(idx)
     }
@@ -335,6 +334,7 @@ mod tests {
     use rstest::rstest;
     use std::collections::BTreeMap;
     use std::sync::Arc;
+    use mockall::predicate::eq;
     use tokio::runtime::Builder;
     use tokio::sync::RwLock;
 
@@ -463,9 +463,37 @@ mod tests {
         todo!()
     }
 
-    #[test]
-    fn test_calc_gossip() {
-        todo!()
+    #[rstest]
+    #[case(0, 2, vec![3,4,5,6])]
+    #[case(1, 3, vec![2,4,5,6])]
+    #[case(2, 4, vec![2,3,5,6])]
+    #[case(3, 5, vec![2,3,4,6])]
+    #[case(4, 6, vec![2,3,4,5])]
+    fn test_pick_gossip_partner(#[case] random: usize, #[case] expected_node: u16, #[case] expected_remainder: Vec<u16>) {
+        let _lock = MOCK_RANDOM_MUTEX.lock();
+
+        let expected_node = test_node_addr_from_number(expected_node);
+        let expected_remainder = expected_remainder.into_iter()
+            .map(|n| test_node_addr_from_number(n))
+            .collect::<Vec<_>>();
+
+        let myself = test_node_addr_from_number(1);
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+        let gossip = Gossip::<MockRandom>::new_with_random(myself, config, cluster_state.clone());
+
+        let mut nodes = [2,3,4,5,6].into_iter()
+            .map(|n| test_node_addr_from_number(n))
+            .collect::<Vec<_>>();
+
+        let ctx = MockRandom::gen_usize_range_context();
+        ctx.expect()
+            .once()
+            .with(eq(0..5))
+            .return_const(random);
+
+        assert_eq!(gossip.pick_gossip_partner(&mut nodes), expected_node);
+        assert_eq!(nodes, expected_remainder);
     }
 
     #[test]
