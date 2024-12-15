@@ -173,7 +173,6 @@ impl <R: Random> Gossip<R> {
         candidates.remove(idx)
     }
 
-    //TODO unit test
     fn should_pick_proven_different(&self, maybe_same: &[NodeAddr], proven_different: &[NodeAddr]) -> Option<bool> {
         match (maybe_same.is_empty(), proven_different.is_empty()) {
             (true, true) => None,
@@ -496,9 +495,42 @@ mod tests {
         assert_eq!(nodes, expected_remainder);
     }
 
-    #[test]
-    fn test_should_pick_proven_different() {
-        todo!()
+    #[rstest]
+    #[case::empty(vec![], vec![], None, None)]
+    #[case::same(vec![1], vec![], None, Some(false))]
+    #[case::same_mult(vec![1,2,3], vec![], None, Some(false))]
+    #[case::diff(vec![], vec![1], None, Some(true))]
+    #[case::diff_mult(vec![], vec![1,2,3], None, Some(true))]
+    #[case::both(vec![1,2], vec![3,4], Some(0.5), Some(true))]
+    #[case::both_config_below(vec![1,2], vec![3,4], Some(0.79), Some(true))]
+    #[case::both_config_above(vec![1,2], vec![3,4], Some(0.81), Some(false))]
+    #[case::both_fraction_below(vec![1], vec![2,3,4,5,6,7,8], Some(0.874), Some(true))]
+    #[case::both_fraction_above(vec![1], vec![2,3,4,5,6,7,8], Some(0.876), Some(false))]
+    fn test_should_pick_proven_different(#[case] maybe_same: Vec<u16>, #[case] proven_different: Vec<u16>, #[case] random_value: Option<f64>, #[case] expected: Option<bool>) {
+        let _lock = MOCK_RANDOM_MUTEX.lock();
+        let maybe_same = maybe_same.into_iter()
+            .map(|n| test_node_addr_from_number(n))
+            .collect::<Vec<_>>();
+        let proven_different = proven_different.into_iter()
+            .map(|n| test_node_addr_from_number(n))
+            .collect::<Vec<_>>();
+
+        let myself = test_node_addr_from_number(1);
+        let mut config = ClusterConfig::new(myself.socket_addr);
+        config.gossip_with_differing_state_min_probability = 0.8;
+        let config = Arc::new(config);
+        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+        let gossip = Gossip::<MockRandom>::new_with_random(myself, config, cluster_state.clone());
+
+        let ctx = MockRandom::gen_f64_range_context();
+        if let Some(random) = random_value {
+            ctx.expect()
+                .once()
+                .with(eq(0.0..1.0))
+                .return_const(random);
+        }
+
+        assert_eq!(gossip.should_pick_proven_different(&maybe_same, &proven_different), expected);;
     }
 
     #[rstest]
