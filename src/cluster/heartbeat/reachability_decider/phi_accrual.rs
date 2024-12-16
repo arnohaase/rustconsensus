@@ -10,7 +10,7 @@ use tokio::time::Instant;
 use tracing::warn;
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::heartbeat::reachability_decider::ReachabilityDecider;
-
+use crate::util::rolling_data::RollingData;
 
 /// The [PhiAccrualDecider] estimates the probability that a node is permanently unreachable based
 ///  on the elapsed time since the last heartbeat was received, allowing an application to set
@@ -21,7 +21,7 @@ use crate::cluster::heartbeat::reachability_decider::ReachabilityDecider;
 ///  calculating mean and standard deviation of the interval between heartbeats from past measurements
 ///  and approximating the probability distribution by a Gaussian distribution.
 pub struct PhiAccrualDecider {
-    buf: MeasurementBuffer,
+    buf: RollingData<256>,
     last_timestamp: Instant,
     ignore_heartbeat_response_after: Duration,
     reachability_phi_threshold: f64,
@@ -30,17 +30,14 @@ pub struct PhiAccrualDecider {
 impl ReachabilityDecider for PhiAccrualDecider {
     //TODO unit test
     fn new(config: &ClusterConfig, initial_rtt: Duration) -> PhiAccrualDecider {
-        let mut buf = MeasurementBuffer::new();
-
         // we start with three values scattered around the heartbeat interval to avoid starting
         //  in an overly picky fashion and report unreachability due to regular scatter
-        let _ = buf.add_value(config.heartbeat_interval.as_secs_f64());
-        let _ = buf.add_value(config.heartbeat_interval.as_secs_f64() * 0.5);
-        let _ = buf.add_value(config.heartbeat_interval.as_secs_f64() * 1.5);
+        let mut buf = RollingData::new(config.heartbeat_interval.as_secs_f64());
+        buf.add_value(config.heartbeat_interval.as_secs_f64() * 0.5);
+        buf.add_value(config.heartbeat_interval.as_secs_f64() * 1.5);
 
-        // and we add the initial value - and we ensure that the buffer has a capacity of at
-        //  least 4 :-)
-        assert!(buf.add_value(initial_rtt.as_secs_f64()).is_none());
+        // and now for the actual initial value
+        buf.add_value(initial_rtt.as_secs_f64());
 
         PhiAccrualDecider {
             buf,
@@ -93,59 +90,4 @@ fn phi(interval_since_last: f64, mean: f64, std_dev: f64) -> f64 {
 
     // we return -log_10 of the probability to have a logarithmic number that grows
     -(1.0 / (1.0 + e)).log10()
-}
-
-
-enum MeasurementBuffer {
-    Growing(Vec<f64>),
-    Ring {
-        buf: Vec<f64>,
-        next: usize,
-    },
-}
-impl MeasurementBuffer {
-    const MAX_BUF_LEN: usize = 256;
-
-    fn new() -> MeasurementBuffer {
-        MeasurementBuffer::Growing(vec![])
-    }
-
-    //TODO unit test
-    /// adds a new value, returning the value that was evicted in its place (if any)
-    fn add_value(&mut self, duration_secs: f64) -> Option<f64> {
-        match self {
-            MeasurementBuffer::Growing(buf) => {
-                buf.push(duration_secs);
-                if buf.len() == Self::MAX_BUF_LEN {
-                    let buf = std::mem::take(buf);
-                    *self = MeasurementBuffer::Ring { buf, next: 0 };
-                }
-                None
-            }
-            MeasurementBuffer::Ring { buf, next } => {
-                let evicted = buf[*next];
-                buf[*next] = duration_secs;
-                *next = (*next + 1) % Self::MAX_BUF_LEN;
-                Some(evicted)
-            }
-        }
-    }
-
-    //TODO caching of mean?
-    //TODO unit test
-    fn mean(&self) -> f64 {
-        match self {
-            MeasurementBuffer::Growing(buf) => buf.iter().sum::<f64>() / buf.len() as f64,
-            MeasurementBuffer::Ring { buf, .. } => buf.iter().sum::<f64>() / buf.len() as f64,
-        }
-    }
-
-    //TODO unit test
-    fn std_dev(&self) -> f64 {
-        let mean = self.mean();
-        match self {
-            MeasurementBuffer::Growing(buf) => buf.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / buf.len() as f64,
-            MeasurementBuffer::Ring { buf, .. } => buf.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / buf.len() as f64,
-        }.sqrt()
-    }
 }
