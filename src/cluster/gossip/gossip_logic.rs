@@ -559,7 +559,7 @@ mod tests {
                 .return_const(random);
         }
 
-        assert_eq!(gossip.should_pick_proven_different(&maybe_same, &proven_different), expected);;
+        assert_eq!(gossip.should_pick_proven_different(&maybe_same, &proven_different), expected);
     }
 
     #[rstest]

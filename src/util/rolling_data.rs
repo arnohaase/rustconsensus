@@ -1,6 +1,10 @@
 
 
 
+/// This is a buffer implementation that provides mean and standard deviation on a sliding window
+///  in a stream of data, in an efficient way.
+///
+/// The generic parameter is the size of the sliding window.
 pub struct RollingData<const N: usize> {
     buf: BufferImpl<N>,
     cached_sum: f64,
@@ -28,12 +32,10 @@ impl<const N: usize> RollingData<N> {
         self.cached_square_sum += value * value;
     }
 
-    //TODO unit test
     pub fn mean(&self) -> f64 {
         self.cached_sum / self.buf.len() as f64
     }
 
-    //TODO unit test
     pub fn std_dev(&self) -> f64 {
         if self.buf.len() < 2 {
             // pragmatic value that serves the purpose of standard deviation in this context
@@ -67,7 +69,6 @@ impl <const N: usize> BufferImpl<N> {
         }
     }
 
-    //TODO unit test
     /// adds a new value, returning the value that was evicted in its place (if any)
     #[must_use]
     fn add_value(&mut self, value: f64) -> Option<f64> {
@@ -87,5 +88,42 @@ impl <const N: usize> BufferImpl<N> {
                 Some(evicted)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use approx::assert_relative_eq;
+    use super::*;
+
+    #[test]
+    fn test_rolling_data() {
+        let mut data = RollingData::<4>::new(1.0);
+        assert_relative_eq!(data.mean(), 1.0);
+        assert_relative_eq!(data.std_dev(), 0.0);
+
+        data.add_value(2.0);
+        assert_relative_eq!(data.mean(), 1.5);
+        assert_relative_eq!(data.std_dev(), 0.5f64.sqrt());
+
+        data.add_value(1.5);
+        assert_relative_eq!(data.mean(), 1.5);
+        assert_relative_eq!(data.std_dev(), 0.5);
+
+        data.add_value(4.0);
+        assert_relative_eq!(data.mean(), 2.125);
+        assert_relative_eq!(data.std_dev(), 1.3149778198382918);
+
+        data.add_value(5.0);
+        assert_relative_eq!(data.mean(), 3.125);
+        assert_relative_eq!(data.std_dev(), 1.6520189667999174);
+
+        data.add_value(4.0);
+        assert_relative_eq!(data.mean(), 3.625);
+        assert_relative_eq!(data.std_dev(), 1.4930394055974097);
+
+        data.add_value(5.0);
+        assert_relative_eq!(data.mean(), 4.5);
+        assert_relative_eq!(data.std_dev(), (1.0f64/3.0).sqrt());
     }
 }
