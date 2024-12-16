@@ -1,11 +1,11 @@
-use std::fmt::Debug;
-use std::net::SocketAddr;
-use std::sync::Arc;
-#[cfg(test)] use mockall::automock;
-use tracing::info;
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::{ClusterState, NodeState};
 use crate::cluster::heartbeat::downing_strategy::DowningStrategyDecision::{DownThem, DownUs};
+#[cfg(test)] use mockall::automock;
+use std::fmt::Debug;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tracing::info;
 
 /// A [DowningStrategy] decides which nodes should continue to run and which nodes should be
 ///  terminated (i.e. promoted to 'down'). It is called when the set of unreachable nodes has
@@ -45,6 +45,12 @@ use crate::cluster::heartbeat::downing_strategy::DowningStrategyDecision::{DownT
 ///
 /// ## TODO documentation
 ///
+/// in general: heuristic, no guarantee that 'joining' nodes agree
+/// TODO filter to ignore nodes < Up?
+///
+/// 'leader survives' strategy - nodes may disagree on who the leader candidate is; scenario that
+///  can't be better handled by seed node or role strategy?
+///
 /// on every node independently, not by the leader
 ///
 /// inconsistent sets of nodes: no convergence, unreachability can happen during promotion
@@ -57,14 +63,20 @@ pub trait DowningStrategy: Debug + Send + Sync {
     ) -> DowningStrategyDecision;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DowningStrategyDecision {
     DownUs,
     DownThem,
 }
 
 
-//TODO documentation, unit tests
+/// [QuorumOfSeedNodesStrategy] decides survival / downing based on the set of seed nodes that are
+///  used for discovery: A partition needs to have more than half of the seed nodes in order to
+///  survive.
+///
+/// The idea behind this is that new nodes joining the cluster will do so based on the globally
+///  well-known seed nodes, so the surviving part of the cluster needs the seed nodes to be
+///  discoverable.
 #[derive(Debug)]
 pub struct QuorumOfSeedNodesStrategy {
     pub seed_nodes: Vec<SocketAddr>,
@@ -72,6 +84,7 @@ pub struct QuorumOfSeedNodesStrategy {
 impl DowningStrategy for QuorumOfSeedNodesStrategy {
     fn decide(&self, node_states: &[NodeState]) -> DowningStrategyDecision {
         let num_reachable_seed_nodes = node_states.iter()
+            .filter(|s| !s.membership_state.is_terminal())
             .filter(|s| s.is_reachable())
             .filter(|s| self.seed_nodes.contains(&s.addr.socket_addr))
             .count();
@@ -97,25 +110,35 @@ fn quorum_decision(actual: usize, total: usize) -> DowningStrategyDecision {
     }
 }
 
-//TODO documentation, unit tests
+
+/// [QuorumOfNodesStrategy] lets a partition survive if more than half the total
+///  (non-terminal) nodes currently in the cluster are reachable.
+///
+/// NB: This can cause a small partition to survive if the rest becomes unreachable gradually rather
+///  than all at once (which may or may not be the desired behavior).
 #[derive(Debug)]
 pub struct QuorumOfNodesStrategy {}
 impl DowningStrategy for QuorumOfNodesStrategy {
     fn decide(&self, node_states: &[NodeState]) -> DowningStrategyDecision {
         let num_reachable_nodes = node_states.iter()
+            .filter(|s| !s.membership_state.is_terminal())
             .filter(|s| s.is_reachable())
             .count();
 
-        info!("{} of {} nodes in the cluster are reachable",
-            num_reachable_nodes,
-            node_states.len());
+        let num_all_nodes = node_states.iter()
+            .filter(|s| !s.membership_state.is_terminal())
+            .count();
 
-        quorum_decision(num_reachable_nodes, node_states.len())
+        info!("{} of {} non-terminal nodes in the cluster are reachable",
+            num_reachable_nodes,
+            num_all_nodes);
+
+        quorum_decision(num_reachable_nodes, num_all_nodes)
     }
 }
 
 
-//TODO documentation, unit tests
+/// [QuorumOfRoleStrategy] decides based on the quorum of nodes with a given role.
 #[derive(Debug)]
 pub struct QuorumOfRoleStrategy {
     pub required_role: String,
@@ -123,10 +146,12 @@ pub struct QuorumOfRoleStrategy {
 impl DowningStrategy for QuorumOfRoleStrategy {
     fn decide(&self, node_states: &[NodeState]) -> DowningStrategyDecision {
         let num_nodes_with_role = node_states.iter()
+            .filter(|s| !s.membership_state.is_terminal())
             .filter(|s| s.roles.contains(&self.required_role))
             .count();
 
         let num_reachable_nodes = node_states.iter()
+            .filter(|s| !s.membership_state.is_terminal())
             .filter(|s| s.roles.contains(&self.required_role))
             .filter(|s| s.is_reachable())
             .count();
@@ -143,36 +168,77 @@ impl DowningStrategy for QuorumOfRoleStrategy {
 }
 
 
-//TODO documentation, unit test
-#[derive(Debug)]
-pub struct LeaderSurvivesStrategy {
-    config: Arc<ClusterConfig>,
-}
-impl DowningStrategy for LeaderSurvivesStrategy {
-    fn decide(&self, node_states: &[NodeState]) -> DowningStrategyDecision {
-        let opt_leader_candidate =
-            ClusterState::calc_leader_candidate(self.config.as_ref(), node_states.iter());
-
-        if let Some(l) = opt_leader_candidate {
-            if l.is_reachable() {
-                info!("leader candidate {:?} is reachable", l);
-                return DownThem;
-            }
-            else {
-                info!("leader candidate {:?} is not reachable", l);
-                return DownUs;
-            }
-        }
-
-        info!("no leader candidate in the cluster - downing us to be on the safe side");
-        DownUs
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn test_downing_strategy() {
-        todo!()
+    use super::*;
+    use crate::node_state;
+    use crate::cluster::cluster_state::*;
+    use MembershipState::*;
+    use crate::test_util::node::test_node_addr_from_number;
+    use rstest::rstest;
+    use DowningStrategyDecision::*;
+
+    #[rstest]
+    #[case::empty(vec![], DownUs)]
+    #[case::all_reachable(vec![node_state!(1[]:Up->[]@[1,2,3]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[]@[1,2,3])], DownThem)]
+    #[case::all_unreachable(vec![node_state!(1[]:Up->[4:false@2]@[1,2,3]),node_state!(2[]:Up->[4:false@2]@[1,2,3]),node_state!(3[]:Up->[4:false@2]@[1,2,3])], DownUs)]
+    #[case::quorum_of_seed_nodes_reachable(vec![node_state!(1[]:Up->[]@[]),node_state!(2[]:Up->[]@[1,2,3]),node_state!(3[]:Up->[9:false@3]@[1,2,3]),node_state!(4[]:Up->[9:false@4]@[1,2,3]),node_state!(5[]:Up->[9:false@4]@[1,2,3])], DownThem)]
+    #[case::quorum_of_seed_nodes_unreachable(vec![node_state!(1[]:Up->[]@[]),node_state!(2[]:Up->[9:false@2]@[1,2,3]),node_state!(3[]:Up->[9:false@8]@[1,2,3]),node_state!(4[]:Up->[]@[1,2,3]),node_state!(5[]:Up->[]@[1,2,3])], DownUs)]
+    #[case::terminal_nodes(vec![node_state!(1[]:Up->[]@[]),node_state!(2[]:Down->[]@[1]),node_state!(3[]:Removed->[]@[1])], DownUs)]
+    #[case::part_of_seed_nodes_present(vec![node_state!(1[]:Up->[]@[]),node_state!(2[]:Up->[]@[1,2,3])], DownThem)]
+    #[case::one_seed_nodes_present(vec![node_state!(1[]:Up->[]@[])], DownUs)]
+    fn test_quorum_of_seed_nodes_strategy(#[case] node_states: Vec<NodeState>, #[case] expected_decision: DowningStrategyDecision) {
+        let seed_nodes = vec![
+            test_node_addr_from_number(1).socket_addr,
+            test_node_addr_from_number(2).socket_addr,
+            test_node_addr_from_number(3).socket_addr,
+        ];
+
+        let strategy = QuorumOfSeedNodesStrategy { seed_nodes };
+        let decision = strategy.decide(&node_states);
+        assert_eq!(decision, expected_decision);
+    }
+
+    #[rstest]
+    #[case::empty(0, 5, DownUs)]
+    #[case::smallest(1, 5, DownUs)]
+    #[case::small(2, 5, DownUs)]
+    #[case::big(3, 5, DownThem)]
+    #[case::biggest(4, 5, DownThem)]
+    #[case::all(5, 5, DownThem)]
+    #[case::half(3, 6, DownUs)] // corner case: we need *more* than half the nodes to survive (as a tie-breaker)
+    fn test_quorum_decision(#[case] actual: usize, #[case] total: usize, #[case] expected: DowningStrategyDecision) {
+        assert_eq!(quorum_decision(actual, total), expected);
+    }
+
+    #[rstest]
+    #[case::empty(vec![], DownUs)]
+    #[case::quorum_reachable(vec![node_state!(1[]:Up->[]@[1]),node_state!(2[]:Up->[]@[1]),node_state!(3[]:Up->[4:false@3]@[1])], DownThem)]
+    #[case::quorum_unreachable(vec![node_state!(1[]:Up->[]@[1]),node_state!(2[]:Up->[4:false@5]@[1]),node_state!(3[]:Up->[4:false@3]@[1])], DownUs)]
+    #[case::half_reachable(vec![node_state!(1[]:Up->[]@[1]),node_state!(2[]:Up->[4:false@5]@[1])], DownUs)] // corner case: we need *more* than half the nodes to be reachable
+    #[case::reachable_despite_terminal_nodes(vec![node_state!(1[]:Up->[]@[1]),node_state!(2[]:Up->[]@[1]),node_state!(3[]:Up->[4:false@3]@[1]),node_state!(8[]:Down->[4:false@8]@[1]),node_state!(9[]:Removed->[4:false@5]@[1])], DownThem)]
+    #[case::unreachable_despite_terminal_nodes(vec![node_state!(1[]:Up->[]@[1]),node_state!(2[]:Up->[4:false@3]@[1]),node_state!(3[]:Up->[4:false@3]@[1]),node_state!(8[]:Down->[]@[1]),node_state!(9[]:Removed->[]@[1])], DownUs)]
+    fn test_quorum_of_nodes_strategy(#[case] node_states: Vec<NodeState>, #[case] expected: DowningStrategyDecision) {
+        let strategy = QuorumOfNodesStrategy {};
+        let decision = strategy.decide(&node_states);
+        assert_eq!(decision, expected);
+    }
+
+    #[rstest]
+    #[case::all(vec![node_state!(1["a"]:Up->[]@[]),node_state!(2["a"]:Up->[]@[]),node_state!(3["a"]:Up->[]@[])], DownThem)]
+    #[case::none(vec![node_state!(1["a"]:Up->[4:false@9]@[]),node_state!(2["a"]:Up->[4:false@3]@[]),node_state!(3["a"]:Up->[4:false@3]@[])], DownUs)]
+    #[case::quorum(vec![node_state!(1["a"]:Up->[]@[]),node_state!(2["a"]:Up->[]@[]),node_state!(3["a"]:Up->[4:false@8]@[])], DownThem)]
+    #[case::no_quorum(vec![node_state!(1["a"]:Up->[]@[]),node_state!(2["a"]:Up->[4:false@8]@[]),node_state!(3["a"]:Up->[4:false@8]@[])], DownUs)]
+    #[case::half(vec![node_state!(1["a"]:Up->[]@[]),node_state!(2["a"]:Up->[4:false@8]@[])], DownUs)] // corner case: we need *more than* half the nodes to survive
+    #[case::additional_role_counts_for_quorum(vec![node_state!(1["a","b"]:Up->[]@[]),node_state!(2["a","b"]:Up->[]@[]),node_state!(3["a"]:Up->[4:false@8]@[])], DownThem)]
+    #[case::additional_role_counts_against_quorum(vec![node_state!(1["a"]:Up->[]@[]),node_state!(2["a","b"]:Up->[4:false@8]@[]),node_state!(3["a","b"]:Up->[4:false@8]@[])], DownUs)]
+    #[case::quorum_roles_only(vec![node_state!(1["a"]:Up->[]@[]),node_state!(2["a"]:Up->[]@[]),node_state!(3["a"]:Up->[4:false@3]@[]),node_state!(4[]:Up->[4:false@3]@[]),node_state!(5[]:Up->[5:false@3]@[])], DownThem)]
+    #[case::no_quorum_roles_only(vec![node_state!(1["a"]:Up->[]@[]),node_state!(2["a"]:Up->[4:false@4]@[]),node_state!(3["a"]:Up->[4:false@3]@[]),node_state!(4[]:Up->[]@[]),node_state!(5[]:Up->[]@[])], DownUs)]
+    #[case::quorum_terminal_nodes(vec![node_state!(1["a"]:Up->[]@[]),node_state!(2["a"]:Up->[]@[]),node_state!(3["a"]:Up->[4:false@3]@[]),node_state!(4["a"]:Down->[4:false@3]@[]),node_state!(5["a"]:Removed->[5:false@3]@[])], DownThem)]
+    #[case::no_quorum_terminal_nodes(vec![node_state!(1["a"]:Up->[]@[]),node_state!(2["a"]:Up->[4:false@4]@[]),node_state!(3["a"]:Up->[4:false@3]@[]),node_state!(4["a"]:Down->[]@[]),node_state!(5["a"]:Removed->[]@[])], DownUs)]
+    fn test_quorum_of_role_strategy(#[case] node_states: Vec<NodeState>, #[case] expected: DowningStrategyDecision) {
+        let strategy = QuorumOfRoleStrategy { required_role: "a".to_string() };
+        let decision = strategy.decide(&node_states);
+        assert_eq!(decision, expected);
     }
 }

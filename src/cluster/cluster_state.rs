@@ -259,6 +259,7 @@ impl ClusterState {
                     Leaving => Some(Exiting), //TODO grace period
                     Exiting | Down => Some(Removed),
                     _ => None
+                    //TODO GC of 'removed' nodes
                 } {
                     to_be_promoted.push((s.addr, new_state));
                 }
