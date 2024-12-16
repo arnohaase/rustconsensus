@@ -10,7 +10,8 @@ use crate::cluster::cluster_state::ClusterState;
 use crate::cluster::heartbeat::downing_strategy::DowningStrategy;
 use crate::cluster::heartbeat::heartbeat_logic::HeartBeat;
 use crate::cluster::heartbeat::heartbeat_messages::{HeartbeatMessage, HeartbeatMessageModule, HeartbeatResponseData};
-use crate::cluster::heartbeat::reachability_decider::{FixedTimeoutDecider, ReachabilityDecider};
+use crate::cluster::heartbeat::reachability_decider::fixed_timeout::FixedTimeoutDecider;
+use crate::cluster::heartbeat::reachability_decider::ReachabilityDecider;
 use crate::cluster::heartbeat::unreachable_tracker::UnreachableTracker;
 use crate::messaging::messaging::{MessageSender, Messaging};
 use crate::messaging::node_addr::NodeAddr;
@@ -110,7 +111,7 @@ mod tests {
     use crate::cluster::heartbeat::heartbeat_logic::HeartBeat;
     use crate::cluster::heartbeat::heartbeat_messages::{HeartbeatData, HeartbeatMessage, HeartbeatResponseData};
     use crate::cluster::heartbeat::{do_heartbeat, on_heartbeat_message, update_reachability_from_here};
-    use crate::cluster::heartbeat::reachability_decider::FixedTimeoutDecider;
+    use crate::cluster::heartbeat::reachability_decider::fixed_timeout::FixedTimeoutDecider;
     use crate::node_state;
     use crate::test_util::message::TrackingMockMessageSender;
     use crate::test_util::node::test_node_addr_from_number;
@@ -147,8 +148,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_update_reachability_from_here() {
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr);
-        let config = Arc::new(config);
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
         let cluster_state = RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new())));
         for n in [2,3,4,5] {
             let mut node_state = node_state!(2[]:Up->[]@[1,2,3,4,5]);

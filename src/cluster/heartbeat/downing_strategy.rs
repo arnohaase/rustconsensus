@@ -1,10 +1,8 @@
-use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_state::{ClusterState, NodeState};
+use crate::cluster::cluster_state::NodeState;
 use crate::cluster::heartbeat::downing_strategy::DowningStrategyDecision::{DownThem, DownUs};
 #[cfg(test)] use mockall::automock;
 use std::fmt::Debug;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use tracing::info;
 
 /// A [DowningStrategy] decides which nodes should continue to run and which nodes should be

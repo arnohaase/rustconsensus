@@ -184,13 +184,13 @@ mod tests {
     use crate::cluster::cluster_events::ClusterEventNotifier;
     use crate::cluster::cluster_state::MembershipState::Up;
     use crate::cluster::cluster_state::*;
-    use crate::cluster::heartbeat::reachability_decider::FixedTimeoutDecider;
     use crate::node_state;
     use crate::test_util::node::test_node_addr_from_number;
     use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::time;
+    use crate::cluster::heartbeat::reachability_decider::fixed_timeout::FixedTimeoutDecider;
 
     #[tokio::test]
     async fn test_heartbeat_recipients() {
