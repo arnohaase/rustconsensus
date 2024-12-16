@@ -326,7 +326,7 @@ mod tests {
     use crate::cluster::cluster_state::MembershipState::*;
     use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeReachability, NodeState};
     use crate::cluster::gossip::gossip_logic::{gossip_detailed_digest_with_given_nonce, Gossip};
-    use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipNodesData, GossipSummaryDigestData};
+    use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipMessage, GossipNodesData, GossipSummaryDigestData};
     use crate::node_state;
     use crate::test_util::node::test_node_addr_from_number;
     use crate::util::random::{MockRandom, MOCK_RANDOM_MUTEX};
@@ -431,35 +431,64 @@ mod tests {
         });
     }
 
-    #[tokio::test]
-    async fn test_gossip_partners() {
-        let _lock = MOCK_RANDOM_MUTEX.lock();
+    #[rstest]
+    #[case(0.1, vec![2,3], |msg| {matches!(msg, GossipMessage::GossipDetailedDigest(_))})]
+    #[case(0.9, vec![5,6], |msg| {matches!(msg, GossipMessage::GossipSummaryDigest(_))})]
+    fn test_gossip_partners(#[case] random_f64: f64, #[case] expected_addrs: Vec<u16>, #[case] expected_message: impl Fn(GossipMessage) -> bool) {
+        let expected_addrs = expected_addrs.into_iter()
+            .map(|n| (test_node_addr_from_number(n)))
+            .collect::<Vec<_>>();
 
-        let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr);
-        config.num_gossip_partners = 2;
-        let config = Arc::new(config);
-        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
-        for n in [2,3,4,5,5,6] {
-            let mut node_state = node_state!(2["a", "b"]:Up->[]@[1,2,3,4,5,6]);
-            node_state.addr = test_node_addr_from_number(n);
-            cluster_state.write().await
-                .merge_node_state(node_state).await;
-        }
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let _lock = MOCK_RANDOM_MUTEX.lock();
 
-        let gossip = Gossip::<MockRandom>::new_with_random(myself, config, cluster_state.clone());
+            let myself = test_node_addr_from_number(1);
+            let mut config = ClusterConfig::new(myself.socket_addr);
+            config.num_gossip_partners = 2;
+            let config = Arc::new(config);
+            let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+            for n in [2,3,4] {
+                let mut node_state = node_state!(2[]:Up->[]@[1,2,3,4]);
+                node_state.addr = test_node_addr_from_number(n);
+                cluster_state.write().await
+                    .merge_node_state(node_state).await;
+            }
+            for n in [5,6,7] {
+                let mut node_state = node_state!(2["a", "b"]:Up->[]@[1,2,3,4,5,6,7]);
+                node_state.addr = test_node_addr_from_number(n);
+                cluster_state.write().await
+                    .merge_node_state(node_state).await;
+            }
 
-        let ctx_usize_range = MockRandom::gen_usize_range_context();
-        // ctx_usize_range.expect()
-        //     .ret
+            let gossip = Gossip::<MockRandom>::new_with_random(myself, config, cluster_state.clone());
 
-        let gossip_partners = gossip.gossip_partners().await;
+            let ctx_f64 = MockRandom::gen_f64_range_context();
+            ctx_f64.expect()
+                .times(2)
+                .return_const(random_f64);
 
+            let ctx_usize = MockRandom::gen_usize_range_context();
+            ctx_usize.expect()
+                .times(2)
+                .return_const(0usize);
 
-        // summary vs. detailed digest
+            let ctx_next_u32 = MockRandom::next_u32_context();
+            ctx_next_u32.expect()
+                .once()
+                .return_const(0u32);
 
+            let gossip_partners = gossip.gossip_partners().await;
 
-        todo!()
+            let actual_addrs = gossip_partners.iter()
+                .map(|(addr, _)| addr.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(actual_addrs, expected_addrs);
+
+            for (_, msg) in gossip_partners {
+                assert!(expected_message(msg.as_ref().clone()));
+            }
+        });
     }
 
     #[rstest]
@@ -755,7 +784,7 @@ mod tests {
             cluster_state.read().await
                 .get_node_state(&myself).unwrap()
                 .membership_state,
-            MembershipState::Down
+            Down
         );
     }
 }
