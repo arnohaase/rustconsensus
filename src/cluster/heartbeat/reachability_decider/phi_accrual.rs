@@ -63,6 +63,9 @@ impl ReachabilityDecider for PhiAccrualDecider {
     //TODO unit test
     fn is_reachable(&self) -> bool {
         let seconds_since_last_heartbeat = self.last_timestamp.elapsed().as_secs_f64();
+
+        //TODO lower bound for std deviation?
+
         let phi = phi(seconds_since_last_heartbeat, self.buf.mean(), self.buf.std_dev());
         phi < self.reachability_phi_threshold
     }
