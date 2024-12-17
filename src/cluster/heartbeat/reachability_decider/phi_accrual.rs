@@ -37,15 +37,6 @@ use tracing::{info, warn};
 ///    things that did not happen in that time frame don't exist as far as the algorithm is
 ///    concerned. While it is possible to add a configurable interval for this, it pretty much
 ///    countermands the benefits of the phi accrual algorithm.
-
-/// The [PhiAccrualDecider] estimates the probability that a node is permanently unreachable based
-///  on the elapsed time since the last heartbeat was received, allowing an application to set
-///  a threshold based on that probability rather than some technical values (like a timeout
-///  period).
-///
-/// The estimation approach used here is based on ,
-///  calculating mean and standard deviation of the interval between heartbeats from past measurements
-///  and approximating the probability distribution by a Gaussian distribution.
 pub struct PhiAccrualDecider {
     buf: RollingData<256>,
     last_timestamp: Instant,
