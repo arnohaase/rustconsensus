@@ -11,17 +11,18 @@ pub mod message;
 pub mod event;
 
 
-#[cfg(test)]
-mod tests {
-    use tracing::Level;
+use tracing::Level;
 
-    #[ctor::ctor]
-    fn init_test_logging() {
-        tracing_subscriber::fmt()
-            .with_test_writer()
-            .with_max_level(Level::DEBUG)
-            // .with_max_level(Level::TRACE)
-            .try_init()
-            .ok();
-    }
+#[ctor::ctor]
+fn init_test_logging() {
+    tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(Level::DEBUG)
+        // .with_max_level(Level::TRACE)
+        .try_init()
+        .ok();
+}
+
+pub fn assert_approx_eq(a: f64, b: f64) {
+    assert!((a - b).abs() < 1.0e-6, "{} != {}", a, b);
 }

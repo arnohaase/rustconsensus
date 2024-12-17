@@ -22,12 +22,12 @@ pub struct ClusterConfig {
     pub ignore_heartbeat_response_after: Duration,
     /// >0 and < 1
     pub rtt_moving_avg_new_weight: f64,
-    pub rtt_min_std_dev: Duration,
 
     pub heartbeat_interval: Duration,
     /// safety margin during which we decide not to worry about missing heartbeats
     pub heartbeat_grace_period: Duration,
     pub reachability_phi_threshold: f64,
+    pub reachability_phi_min_stddev: Duration,
 
     pub stability_period_before_downing: Duration,
     pub unstable_thrashing_timeout: Duration,
@@ -54,10 +54,10 @@ impl ClusterConfig {
             num_heartbeat_partners_per_node: 9,
             ignore_heartbeat_response_after: Duration::from_secs(4),
             rtt_moving_avg_new_weight: 0.5,
-            rtt_min_std_dev: Duration::from_millis(20),
             heartbeat_interval: Duration::from_secs(1),
             heartbeat_grace_period: Duration::from_secs(1),
-            reachability_phi_threshold: 8.0,
+            reachability_phi_threshold: 0.99999999,
+            reachability_phi_min_stddev: Duration::from_millis(100),
             stability_period_before_downing: Duration::from_secs(5),
             unstable_thrashing_timeout: Duration::from_secs(20),
             leader_action_interval: Duration::from_secs(1),

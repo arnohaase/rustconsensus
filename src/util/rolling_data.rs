@@ -93,37 +93,37 @@ impl <const N: usize> BufferImpl<N> {
 
 #[cfg(test)]
 mod tests {
-    use approx::assert_relative_eq;
+    use crate::test_util::assert_approx_eq;
     use super::*;
 
     #[test]
     fn test_rolling_data() {
         let mut data = RollingData::<4>::new(1.0);
-        assert_relative_eq!(data.mean(), 1.0);
-        assert_relative_eq!(data.std_dev(), 0.0);
+        assert_approx_eq(data.mean(), 1.0);
+        assert_approx_eq(data.std_dev(), 0.0);
 
         data.add_value(2.0);
-        assert_relative_eq!(data.mean(), 1.5);
-        assert_relative_eq!(data.std_dev(), 0.5f64.sqrt());
+        assert_approx_eq(data.mean(), 1.5);
+        assert_approx_eq(data.std_dev(), 0.5f64.sqrt());
 
         data.add_value(1.5);
-        assert_relative_eq!(data.mean(), 1.5);
-        assert_relative_eq!(data.std_dev(), 0.5);
+        assert_approx_eq(data.mean(), 1.5);
+        assert_approx_eq(data.std_dev(), 0.5);
 
         data.add_value(4.0);
-        assert_relative_eq!(data.mean(), 2.125);
-        assert_relative_eq!(data.std_dev(), 1.3149778198382918);
+        assert_approx_eq(data.mean(), 2.125);
+        assert_approx_eq(data.std_dev(), 1.3149778198382918);
 
         data.add_value(5.0);
-        assert_relative_eq!(data.mean(), 3.125);
-        assert_relative_eq!(data.std_dev(), 1.6520189667999174);
+        assert_approx_eq(data.mean(), 3.125);
+        assert_approx_eq(data.std_dev(), 1.6520189667999174);
 
         data.add_value(4.0);
-        assert_relative_eq!(data.mean(), 3.625);
-        assert_relative_eq!(data.std_dev(), 1.4930394055974097);
+        assert_approx_eq(data.mean(), 3.625);
+        assert_approx_eq(data.std_dev(), 1.4930394055974097);
 
         data.add_value(5.0);
-        assert_relative_eq!(data.mean(), 4.5);
-        assert_relative_eq!(data.std_dev(), (1.0f64/3.0).sqrt());
+        assert_approx_eq(data.mean(), 4.5);
+        assert_approx_eq(data.std_dev(), (1.0f64/3.0).sqrt());
     }
 }
