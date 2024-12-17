@@ -41,7 +41,7 @@ impl MessageModule for HeartbeatMessageModule {
 
     async fn on_message(&self, envelope: &Envelope, buf: &[u8]) {
         if let Err(e) = self._on_message(envelope, buf).await {
-            error!("error deserializing message: {}", e);
+            error!("error handling message: {}", e);
         }
     }
 }
