@@ -1,23 +1,47 @@
-
-
-
-//TODO phi accrual decider
-// paper on phi accrual: https://oneofus.la/have-emacs-will-hack/files/HDY04.pdf
-// logistic approximation of Gaussian integral: https://www.econstor.eu/bitstream/10419/188388/1/v02-i01-p114_60-313-1-PB.pdf
-
-use std::time::Duration;
-use tokio::time::Instant;
-use tracing::warn;
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::heartbeat::reachability_decider::ReachabilityDecider;
 use crate::util::rolling_data::RollingData;
+use std::time::Duration;
+use tokio::time::Instant;
+use tracing::warn;
+
+
+/// The [PhiAccrualDecider] assumes that the time between two received heartbeats (i.e. including
+///  the regular heartbeat interval) follows a Gaussian distribution, and it does a sliding-window
+///  fit of mean and standard deviation based on actually measured arrival intervals.
+///
+/// This model describes the probability distribution of delays between heartbeats, and for a given
+///  delay t the integral from t to +∞ predicts the probability that a next heartbeat is going to
+///  arrive if we wait long enough (as opposed to the system being permanently unreachable).
+///
+/// An application can set a threshold for the probability, which is then dynamically mapped to
+///  up-to-date measurements on the network - application configuration does not need to take
+///  network RTT etc. into account explicitly. This approach and the algorithm used here is
+///  based on https://oneofus.la/have-emacs-will-hack/files/HDY04.pdf.
+///
+/// This strategy is included mainly because it is widely used in Akka. There are some conceptual
+///  concerns to consider when using it:
+/// * The original paper is based on flaky international connections rather than reliable,
+///    pretty deterministic networks inside a single data center.
+/// * 'Good' networks can lead to very repeatable heartbeat intervals, causing extremely narrow
+///    Gaussian peaks, causing even small anomalies to be treated as permanent unavailabilities.
+///    We mitigate this by setting a lower bound of 100ms for std deviation (following Akkas
+///    implementation), giving up much of the precision of the approach
+/// * Inside data centers, heartbeat messages tend to arrive in multiples of the heartbeat send
+///    interval (with comparatively little jitter of network RTT) - and a Gaussian distribution
+///    is not a good fit for this kind of disjoint peaks
+/// * The sliding-window approach does not take occasional delays caused by load peaks on one of the
+///    machines etc. into account - the Gaussian fit is based on the most recent N intervals, and
+///    things that did not happen in that time frame don't exist as far as the algorithm is
+///    concerned. While it is possible to add a configurable interval for this, it pretty much
+///    countermands the benefits of the phi accrual algorithm.
 
 /// The [PhiAccrualDecider] estimates the probability that a node is permanently unreachable based
 ///  on the elapsed time since the last heartbeat was received, allowing an application to set
 ///  a threshold based on that probability rather than some technical values (like a timeout
 ///  period).
 ///
-/// The estimation approach used here is based on https://oneofus.la/have-emacs-will-hack/files/HDY04.pdf,
+/// The estimation approach used here is based on ,
 ///  calculating mean and standard deviation of the interval between heartbeats from past measurements
 ///  and approximating the probability distribution by a Gaussian distribution.
 pub struct PhiAccrualDecider {
