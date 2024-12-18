@@ -8,6 +8,10 @@ pub trait Message: Send + Sync + Debug + Any {
     fn module_id(&self) -> MessageModuleId;
     fn ser(&self, buf: &mut BytesMut);
 
+    fn guaranteed_upper_bound_for_serialized_size(&self) -> Option<usize> {
+        None
+    }
+
     fn box_clone(&self) -> Arc<dyn Any + Send + Sync + 'static>;
 }
 

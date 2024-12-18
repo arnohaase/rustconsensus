@@ -1,4 +1,5 @@
 pub mod udp;
+mod reliable_udp;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -9,7 +10,7 @@ pub trait Transport : Sync + Send {
 
     async fn recv_loop(&self, handler: Arc<dyn MessageHandler>) -> anyhow::Result<()>;
 
-    fn cancel_recv_loop(&self);
+    fn shut_down_recv_loop(&self);
 }
 
 //TODO UDP based transport that collects messages before sending, negative ACK, resend etc.

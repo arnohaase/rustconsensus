@@ -65,7 +65,7 @@ impl Transport for UdpTransport {
         Ok(())
     }
 
-    fn cancel_recv_loop(&self) {
+    fn shut_down_recv_loop(&self) {
         if let Err(err) = self.cancel_sender.send(()) {
             warn!(?err, "error canceling receive loop");
         }
