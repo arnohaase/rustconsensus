@@ -46,8 +46,6 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
             .map(|s| SortedByHash(s.addr))
             .collect::<BTreeSet<_>>();
 
-        info!("NODE RING: {:?}", node_ring);
-
         // iterator over the ring, starting at `myself`
         let candidates = node_ring.range((Excluded(&SortedByHash(self.myself)), Unbounded))
             .chain(node_ring.range((Unbounded, Excluded(&SortedByHash(self.myself)))));
@@ -118,8 +116,6 @@ struct HeartbeatRegistry<D: ReachabilityDecider> {
 }
 impl <D: ReachabilityDecider> HeartbeatRegistry<D> {
     fn on_heartbeat_response(&mut self, other: NodeAddr, rtt: Duration) {
-        info!("heartbeat for {:?} - rtt {:?}", other, rtt);
-
         match self.per_node.entry(other) {
             Entry::Occupied(mut e) => e.get_mut().on_heartbeat(rtt),
             Entry::Vacant(e) => {
