@@ -607,7 +607,7 @@ pub enum MembershipState {
     ///  through gossip - but the leader has not yet transitions the node to 'up' (after gossip
     ///  convergence was reached)
     Joining = 1,
-    /// todo
+    /// todo documentation
     WeaklyUp = 2,
     /// The regular state for a node that is 'up and running', a full member of the _cluster. Note
     ///  that heartbeat (or lack thereof) is orthogonal to states, so a node can be 'up' but

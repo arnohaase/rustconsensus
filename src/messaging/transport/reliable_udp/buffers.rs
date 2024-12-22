@@ -3,9 +3,9 @@ use crate::messaging::message_module::{Message, MessageModuleId};
 use crate::messaging::node_addr::NodeAddr;
 use bytes::{BufMut, BytesMut};
 use std::collections::BTreeMap;
-use std::io::Read;
 use anyhow::anyhow;
 use crc::Crc;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use tokio::task::JoinHandle;
 /*
 
@@ -53,15 +53,26 @@ impl PacketHeader {
     }
 }
 
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, TryFromPrimitive, IntoPrimitive)]
+enum MessageFlags {
+    MIDDLE = 0,
+    START = 1,
+    END = 2,
+    COMPLETE = 3,
+}
+
 const SERIALIZED_MESSAGE_HEADER_SIZE: usize = size_of::<u64>() + size_of::<u32>();
 
 struct MessageHeader {
     message_module_id: MessageModuleId,
     message_len: u32,
+    flags: MessageFlags,
 }
 impl MessageHeader {
     fn ser(&self, buf: &mut BytesMut) {
         buf.put_u64(self.message_module_id.0);
+        buf.put_u8(self.flags.into());
         buf.put_u32(self.message_len);
     }
 }
@@ -90,6 +101,7 @@ impl PacketBuffer for BytesMut {
 
         let header = MessageHeader {
             message_module_id,
+            flags: MessageFlags::COMPLETE,
             message_len: msg_buf.len() as u32, //TODO overflow
         };
         header.ser(self);
@@ -100,7 +112,7 @@ impl PacketBuffer for BytesMut {
     fn finalize(&mut self) {
         let hasher = Crc::<u64>::new(&crc::CRC_64_REDIS);
         let mut digest = hasher.digest();
-        digest.update(&self.bytes()[size_of::<Checksum>()..]);
+        digest.update(&self[size_of::<Checksum>()..]);
         let checksum = digest.finalize();
 
         self[0..size_of::<Checksum>()].copy_from_slice(&checksum.to_be_bytes());
@@ -142,59 +154,67 @@ impl SendPool {
 
     fn provision_new_buffer(&mut self) {
         let mut buf = BytesMut::with_capacity(1492); //TODO from pool
-        PacketHeader {
-            from: self.myself,
-            to: self.to,
-            checksum: Checksum(0), // placeholder - checksum is calculated and filled directly before send
-            packet_counter: self.current_packet_id,
-        }.ser(&mut buf);
+        PacketHeader::new(self.myself, self.to, self.current_packet_id) // TODO extract to PacketBuffer
+            .ser(&mut buf);
 
         let prev = self.packets.insert(self.current_packet_id, buf);
         assert!(prev.is_none(), "second buffer for id {}", self.current_packet_id);
     }
 
-    async fn send_message<M: Message>(&mut self, msg: &M) {
+    async fn send_message<M: Message>(&mut self, send_mode: SendMode, msg: &M) {
         let mut buf = BytesMut::with_capacity(1024);
         msg.ser(&mut buf);
-        self.send_message_buffer(&buf, msg.module_id()).await;
+        self.send_message_buffer(send_mode, &buf, msg.module_id()).await;
     }
 
     async fn send_message_buffer(&mut self, send_mode: SendMode, msg_buf: &[u8], message_module_id: MessageModuleId) {
         if send_mode == SendMode::FireAndForget {
-            let mut buf = BytesMut::with_capacity(1492);
+            let mut buf = BytesMut::with_capacity(1492); //TODO from pool
+            PacketHeader::new(self.myself, self.to, PacketHeader::FIRE_AND_FORGET_PACKET_COUNTER)
+                .ser(&mut buf);
 
+            buf.try_append_ser_message(msg_buf, message_module_id)
+                .expect("fire & forget messages must fit into a single packet");
+
+            buf.finalize();
+            Self::_send_packet(&mut buf).await;
+            //TODO return buf to pool
         }
-
-        //TODO send mode: 'fire&forget' vs 'ordered'
-        //TODO message priority: immediately vs collect_for(duration)
 
         //TODO return error if too many un-acked packets, oldest un-acked packet is too old
 
-        let mut current_buf = self.packets.get(&self.current_packet_id)
-            .expect("the current buffer should be initialized");
+        {
+            let current_buf = self.packets.get_mut(&self.current_packet_id)
+                .expect("the current buffer should be initialized");
 
-        if current_buf.try_append_ser_message(&msg_buf, message_module_id) {
-            if current_buf.available_for_message() < Self::MIN_AVAILABLE_SPACE_FOR_DELAYING {
-                self.complete_current_packet().await;
+            if current_buf.try_append_ser_message(&msg_buf, message_module_id).is_ok() {
+                if send_mode == SendMode::ReliableImmediately || current_buf.available_for_message() < Self::MIN_AVAILABLE_SPACE_FOR_DELAYING {
+                    self.complete_current_packet().await;
+                    return;
+                }
+
+                tokio::spawn(async move { todo!() });
+
+                //TODO send after timeout
                 return;
             }
-
-            tokio::spawn(async move { todo!() });
-
-            //TODO send after timeout
-            return;
         }
 
         self.complete_current_packet().await;
 
-        // try again if the message fits into a fresh, empty packet
-        if current_buf.try_append_ser_message(&msg_buf, message_module_id) {
-            if current_buf.available_for_message() < Self::MIN_AVAILABLE_SPACE_FOR_DELAYING {
-                self.complete_current_packet().await;
+        {
+            let current_buf = self.packets.get_mut(&self.current_packet_id)
+                .expect("the current buffer should be initialized");
+
+            // try again if the message fits into a fresh, empty packet
+            if current_buf.try_append_ser_message(&msg_buf, message_module_id).is_ok() {
+                if send_mode == SendMode::ReliableImmediately || current_buf.available_for_message() < Self::MIN_AVAILABLE_SPACE_FOR_DELAYING {
+                    self.complete_current_packet().await;
+                    return;
+                }
+                //TODO send after timeout
                 return;
             }
-            //TODO send after timeout
-            return;
         }
 
         todo!("split message across packets");
@@ -205,7 +225,7 @@ impl SendPool {
     }
 
     fn ack_up_to(&mut self, up_to_packet_id: u64) {
-        self.packets.retain(|&id| id > up_to_packet_id); //TODO return to pool
+        self.packets.retain(|&id, _| id > up_to_packet_id); //TODO return to pool
     }
 
     async fn complete_current_packet(&mut self) {
@@ -214,24 +234,24 @@ impl SendPool {
 
         current_buf.finalize();
 
-        self._send_packet(current_buf).await;
+        Self::_send_packet(current_buf).await;
 
         self.current_packet_id += 1;
         self.provision_new_buffer();
 
-        if let Some(mut handle) = self.delay_sending_handle.take() {
+        if let Some(handle) = self.delay_sending_handle.take() {
             handle.abort();
         }
     }
 
     async fn resend_packet(&mut self, packet_id: u64) {
         if let Some(buf) = self.packets.get_mut(&packet_id) {
-            self._send_packet(buf).await;
+            Self::_send_packet(buf).await;
         }
         //TODO else, logging
     }
 
-    async fn _send_packet(&mut self, packet_buf: &mut BytesMut) {
+    async fn _send_packet(packet_buf: &[u8]) {
         todo!()
     }
 }
