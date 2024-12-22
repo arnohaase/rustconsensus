@@ -1,9 +1,12 @@
-use std::time::Duration;
-use bytes::{Buf, BytesMut};
-use tracing::trace;
-use crate::messaging::message_module::Message;
-use crate::messaging::transport::reliable_udp::config::ReliableUdpTransportConfig;
-
+use crate::messaging::envelope::Checksum;
+use crate::messaging::message_module::{Message, MessageModuleId};
+use crate::messaging::node_addr::NodeAddr;
+use bytes::{BufMut, BytesMut};
+use std::collections::BTreeMap;
+use std::io::Read;
+use anyhow::anyhow;
+use crc::Crc;
+use tokio::task::JoinHandle;
 /*
 
 * separate kinds of frames for control messages and regular messages:
@@ -21,98 +24,219 @@ use crate::messaging::transport::reliable_udp::config::ReliableUdpTransportConfi
 
 * join protocol?
 
-
-
-
-
-
-
  */
 
 
-
-
-pub struct SendBuffer {
-    buf: BytesMut,
+struct PacketHeader {
+    checksum: Checksum,  // covers everything after the checksum field, including the rest of the packet header
+    packet_counter: u64, // with well-known value for 'fire and forget'
+    from: NodeAddr,
+    to: NodeAddr,
 }
-impl SendBuffer {
-    pub fn new(config: &ReliableUdpTransportConfig) -> Self {
-        SendBuffer {
-            buf: BytesMut::with_capacity(config.max_datagram_size()),
+impl PacketHeader {
+    const FIRE_AND_FORGET_PACKET_COUNTER: u64 = u64::MAX;
+
+    fn new(from: NodeAddr, to: NodeAddr, packet_counter: u64) -> Self {
+        PacketHeader {
+            checksum: Checksum(0),
+            packet_counter,
+            from,
+            to,
         }
     }
 
-    pub fn available(&self) -> usize {
-        self.buf.capacity() - self.buf.len()
+    fn ser(&self, buf: &mut BytesMut) {
+        buf.put_u64(self.checksum.0);
+        buf.put_u64(self.packet_counter);
+        self.from.ser(buf);
+        buf.put_u32(self.to.unique);
+    }
+}
+
+const SERIALIZED_MESSAGE_HEADER_SIZE: usize = size_of::<u64>() + size_of::<u32>();
+
+struct MessageHeader {
+    message_module_id: MessageModuleId,
+    message_len: u32,
+}
+impl MessageHeader {
+    fn ser(&self, buf: &mut BytesMut) {
+        buf.put_u64(self.message_module_id.0);
+        buf.put_u32(self.message_len);
+    }
+}
+
+
+
+trait PacketBuffer {
+    fn available_for_message(&self) -> usize;
+
+    fn try_append_ser_message(&mut self, msg_buf: &[u8], message_module_id: MessageModuleId) -> anyhow::Result<()>;
+
+    /// does what is necessary after message data is complete:
+    ///  * calculates and patches the checksum
+    ///  * (eventually) adds random padding and encrypts
+    fn finalize(&mut self);
+}
+impl PacketBuffer for BytesMut {
+    fn available_for_message(&self) -> usize {
+        self.capacity().checked_sub(SERIALIZED_MESSAGE_HEADER_SIZE).unwrap_or(0)
     }
 
-    pub fn add_message_unchunked<M: Message>(&mut self, message: &M) {
-        //TODO envelope
+    fn try_append_ser_message(&mut self, msg_buf: &[u8], message_module_id: MessageModuleId) -> anyhow::Result<()> {
+        if msg_buf.len() > self.available_for_message() {
+            return Err(anyhow!("message does not fit into buffer")); //TODO error enum
+        }
 
-        message.ser(&mut self.buf);
+        let header = MessageHeader {
+            message_module_id,
+            message_len: msg_buf.len() as u32, //TODO overflow
+        };
+        header.ser(self);
+        self.put_slice(msg_buf);
+        Ok(())
+    }
+
+    fn finalize(&mut self) {
+        let hasher = Crc::<u64>::new(&crc::CRC_64_REDIS);
+        let mut digest = hasher.digest();
+        digest.update(&self.bytes()[size_of::<Checksum>()..]);
+        let checksum = digest.finalize();
+
+        self[0..size_of::<Checksum>()].copy_from_slice(&checksum.to_be_bytes());
+    }
+}
+
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum SendMode {
+    FireAndForget,
+    ReliableImmediately,
+    ReliableCollect,
+}
+
+
+/// per peer / target address
+/// NB: different trade-offs than message queue / pub/sub implementations like HazelCast or Aeron
+struct SendPool {
+    myself: NodeAddr,
+    to: NodeAddr,
+    packets: BTreeMap<u64, BytesMut>,
+    current_packet_id: u64,
+    delay_sending_handle: Option<JoinHandle<()>>,
+}
+impl SendPool {
+    const MIN_AVAILABLE_SPACE_FOR_DELAYING: usize = 40; //TODO configurable
+
+    fn new(myself: NodeAddr, to: NodeAddr) -> Self {
+        let mut pool = SendPool {
+            myself,
+            to,
+            packets: BTreeMap::default(),
+            current_packet_id: 0,
+            delay_sending_handle: None,
+        };
+        pool.provision_new_buffer();
+        pool
+    }
+
+    fn provision_new_buffer(&mut self) {
+        let mut buf = BytesMut::with_capacity(1492); //TODO from pool
+        PacketHeader {
+            from: self.myself,
+            to: self.to,
+            checksum: Checksum(0), // placeholder - checksum is calculated and filled directly before send
+            packet_counter: self.current_packet_id,
+        }.ser(&mut buf);
+
+        let prev = self.packets.insert(self.current_packet_id, buf);
+        assert!(prev.is_none(), "second buffer for id {}", self.current_packet_id);
+    }
+
+    async fn send_message<M: Message>(&mut self, msg: &M) {
+        let mut buf = BytesMut::with_capacity(1024);
+        msg.ser(&mut buf);
+        self.send_message_buffer(&buf, msg.module_id()).await;
+    }
+
+    async fn send_message_buffer(&mut self, send_mode: SendMode, msg_buf: &[u8], message_module_id: MessageModuleId) {
+        if send_mode == SendMode::FireAndForget {
+            let mut buf = BytesMut::with_capacity(1492);
+
+        }
+
+        //TODO send mode: 'fire&forget' vs 'ordered'
+        //TODO message priority: immediately vs collect_for(duration)
+
+        //TODO return error if too many un-acked packets, oldest un-acked packet is too old
+
+        let mut current_buf = self.packets.get(&self.current_packet_id)
+            .expect("the current buffer should be initialized");
+
+        if current_buf.try_append_ser_message(&msg_buf, message_module_id) {
+            if current_buf.available_for_message() < Self::MIN_AVAILABLE_SPACE_FOR_DELAYING {
+                self.complete_current_packet().await;
+                return;
+            }
+
+            tokio::spawn(async move { todo!() });
+
+            //TODO send after timeout
+            return;
+        }
+
+        self.complete_current_packet().await;
+
+        // try again if the message fits into a fresh, empty packet
+        if current_buf.try_append_ser_message(&msg_buf, message_module_id) {
+            if current_buf.available_for_message() < Self::MIN_AVAILABLE_SPACE_FOR_DELAYING {
+                self.complete_current_packet().await;
+                return;
+            }
+            //TODO send after timeout
+            return;
+        }
+
+        todo!("split message across packets");
+    }
+
+    fn ack_single(&mut self, packet_id: u64) {
+        self.packets.remove(&packet_id); //TODO return to pool
+    }
+
+    fn ack_up_to(&mut self, up_to_packet_id: u64) {
+        self.packets.retain(|&id| id > up_to_packet_id); //TODO return to pool
+    }
+
+    async fn complete_current_packet(&mut self) {
+        let current_buf = self.packets.get_mut(&self.current_packet_id)
+            .expect("the current buffer should be initialized");
+
+        current_buf.finalize();
+
+        self._send_packet(current_buf).await;
+
+        self.current_packet_id += 1;
+        self.provision_new_buffer();
+
+        if let Some(mut handle) = self.delay_sending_handle.take() {
+            handle.abort();
+        }
+    }
+
+    async fn resend_packet(&mut self, packet_id: u64) {
+        if let Some(buf) = self.packets.get_mut(&packet_id) {
+            self._send_packet(buf).await;
+        }
+        //TODO else, logging
+    }
+
+    async fn _send_packet(&mut self, packet_buf: &mut BytesMut) {
         todo!()
     }
 }
 
-pub enum MessagePriority {
-    Immediately,
-    CollectFor(Duration),
-}
 
-pub struct MessageSender {
-    /// The buffer ID at 0, or rather the offset so that `current_buf_index` points to buffer number
-    ///  `buf_id_offset + current_buf_index`. The offset for `highest_acknowledged` may be the
-    ///  same or one less due to the nature of the ring buffer.
-    current_buf_id_offset: u64,
-    /// used as a ring buffer
-    buffers: Vec<SendBuffer>,
-    current_buf_index: usize,
-    highest_acknowledged: usize,
-}
-impl MessageSender {
-    pub fn new(config: &ReliableUdpTransportConfig) -> Self {
-        let mut buffers = Vec::with_capacity(config.buffer_cache_size);
-        for _ in 0..config.buffer_cache_size {
-            buffers.push(SendBuffer::new(config));
-        }
 
-        MessageSender {
-            current_buf_id_offset: 0,
-            buffers,
-            current_buf_index: 0,
-            highest_acknowledged: config.buffer_cache_size - 1, //TODO ???
-        }
-    }
 
-    pub async fn add_message<M: Message>(&mut self, message: &M, priority: MessagePriority) {
-        //TODO priority
-
-        if let Some(max_len) = message.guaranteed_upper_bound_for_serialized_size() {
-            let cur_buf = &mut self.buffers[self.current_buf_index];
-            if cur_buf.available() <= max_len {
-                cur_buf.add_message_unchunked(message);
-
-                //TODO priority; combine messages
-                self.do_send_current_frame().await;
-            }
-            else {
-                todo!()
-            }
-        }
-        else {
-            todo!()
-        }
-    }
-
-    async fn do_send_current_frame(&mut self) {
-        trace!("sending frame {}", self.current_buf_id_offset + self.current_buf_index as u64);
-        //TODO network send
-
-        self.current_buf_index += 1;
-        if self.current_buf_index == self.buffers.len() {
-            self.current_buf_index = 0;
-            self.current_buf_id_offset += self.buffers.len() as u64;
-        }
-    }
-}
 

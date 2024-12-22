@@ -42,6 +42,10 @@
   * middle: -
   * last: -
 
+* *no* receive window
+  * back pressure through max number of unacknowledged packets? max difference between
+      oldest unacked packet and current counter? 
+
 ### sending
 
 * each stream needs its own dedicated set of send buffers to support re-send
@@ -52,7 +56,7 @@
   * reliability
     * fire-and-forget
     * best effort buffered / resend, but drop oldest if buffer is full
-    * back pressure
+    * (back pressure - or not)
 
 * buffered sender
   * fragmentation
@@ -60,6 +64,7 @@
 
 ### receiving
 
+* receive buffers are pooled globally
 
 
 
@@ -78,3 +83,5 @@ TODO
   * sender must be part of every message (or there must be some translation table in the receiver)
 * message sending: passing in a message as &dyn Message prevents automock
 * combine transport and stream flags in a single byte
+* socket2 for full control over sockets
+  * DF (don't fragment)
