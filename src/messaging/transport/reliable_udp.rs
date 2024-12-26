@@ -1,5 +1,6 @@
 mod buffers;
 mod config;
+mod buffer_pool;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
