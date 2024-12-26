@@ -191,10 +191,10 @@ impl SendSequence {
             self.send_current_packet_eventually(send_mode, &mut state).await;
 
             if msg_buf.len() > state.current_packet_buf().available_for_message() {
-                //TODO patch FFFF to 'start of first message'
+                PacketHeader::patch_message_offset(state.current_packet_buf(), PacketHeader::OFFSET_CONTINUED_FRAGMENT_SEQUENCE);
             }
             else if msg_buf.len() > 0 {
-                //TODO patch msg_buf.len to 'start of first message'
+                PacketHeader::patch_message_offset(state.current_packet_buf(), msg_buf.len() as u16);
             }
         }
     }

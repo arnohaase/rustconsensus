@@ -29,9 +29,14 @@ impl PacketHeader {
         }
     }
 
+    pub fn patch_message_offset(buf: &mut BytesMut, new_message_offset: u16) {
+        (&mut buf[2*size_of::<u64>()..]).put_u16(new_message_offset);
+    }
+
     pub fn ser(&self, buf: &mut BytesMut) {
         buf.put_u64(self.checksum.0);
         buf.put_u64(self.packet_counter);
+        buf.put_u16(self.new_message_offset);
         self.from.ser(buf);
         buf.put_u32(self.to.unique);
     }
