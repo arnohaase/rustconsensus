@@ -15,55 +15,7 @@ use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::error;
 use crate::messaging::transport::reliable_udp::buffer_pool::BufferPool;
-
-
-struct PacketHeader {
-    checksum: Checksum,  // covers everything after the checksum field, including the rest of the packet header
-    packet_counter: u64, // with well-known value for 'fire and forget'
-    /// 0000: starts with a new message, no continuation from previous packet
-    /// xxxx: offset to the first new message header - everything before that is the end of a message continued from the previous packet
-    ///        NB: This can point to the end of the packet, meaning that this message is complete but the next message starts in the next packet
-    /// FFFF: long message, continued from previous packet and continued in the next packet
-    new_message_offset: u16,
-    from: NodeAddr,
-    to: NodeAddr,
-}
-impl PacketHeader {
-    const FIRE_AND_FORGET_PACKET_COUNTER: u64 = u64::MAX;
-
-    const OFFSET_CONTINUED_FRAGMENT_SEQUENCE: u16 = 0xFFFF;
-
-    fn new(from: NodeAddr, to: NodeAddr, packet_counter: u64) -> Self {
-        PacketHeader {
-            checksum: Checksum(0),
-            packet_counter,
-            new_message_offset: 0,
-            from,
-            to,
-        }
-    }
-
-    fn ser(&self, buf: &mut BytesMut) {
-        buf.put_u64(self.checksum.0);
-        buf.put_u64(self.packet_counter);
-        self.from.ser(buf);
-        buf.put_u32(self.to.unique);
-    }
-}
-
-const SERIALIZED_MESSAGE_HEADER_SIZE: usize = size_of::<u64>() + size_of::<u32>();
-
-struct MessageHeader {
-    message_module_id: MessageModuleId,
-    message_len: u32,
-}
-impl MessageHeader {
-    fn ser(&self, buf: &mut BytesMut) {
-        buf.put_u64(self.message_module_id.0);
-        buf.put_u32(self.message_len);
-    }
-}
-
+use crate::messaging::transport::reliable_udp::headers::{MessageHeader, PacketHeader};
 
 trait PacketBuffer {
     fn available_for_message(&self) -> usize;
@@ -77,7 +29,7 @@ trait PacketBuffer {
 }
 impl PacketBuffer for BytesMut {
     fn available_for_message(&self) -> usize {
-        self.capacity().checked_sub(SERIALIZED_MESSAGE_HEADER_SIZE).unwrap_or(0)
+        self.capacity().checked_sub(MessageHeader::SERIALIZED_SIZE).unwrap_or(0)
     }
 
     fn try_append_ser_message(&mut self, msg_buf: &[u8], message_module_id: MessageModuleId) -> anyhow::Result<()> {
@@ -215,7 +167,7 @@ impl SendSequence {
 
     async fn send_message_buffer(&self, send_mode: SendMode, msg_buf: &[u8], message_module_id: MessageModuleId) {
         if send_mode == SendMode::FireAndForget {
-            return self.do_send_fire_and_forget(SendMode::FireAndForget, msg_buf, message_module_id);
+            return self.do_send_fire_and_forget(SendMode::FireAndForget, msg_buf, message_module_id).await;
         }
 
         //TODO return error if too many un-acked packets, oldest un-acked packet is too old
@@ -223,18 +175,17 @@ impl SendSequence {
         let mut state = self.state.write().await;
 
         {
-            let current_buf = state.current_packet_buf();
-            assert!(current_buf.capacity() >= SERIALIZED_MESSAGE_HEADER_SIZE, "a message header fits into the current packet, otherwise it would have been flushed with the previous message");
+            assert!(state.current_packet_buf().capacity() >= MessageHeader::SERIALIZED_SIZE, "a message header fits into the current packet, otherwise it would have been flushed with the previous message");
             MessageHeader {
                 message_module_id,
                 message_len: msg_buf.len() as u32, //TODO overflow
-            }.ser(current_buf);
+            }.ser(state.current_packet_buf());
         }
 
         let mut msg_buf = msg_buf;
         while !msg_buf.is_empty() {
-            let num_to_write = min(self.capacity(), msg_buf.len());
-            self.put_slice(&msg_buf[..num_to_write]);
+            let num_to_write = min(state.current_packet_buf().capacity(), msg_buf.len());
+            state.current_packet_buf().put_slice(&msg_buf[..num_to_write]);
             msg_buf = &msg_buf[num_to_write..];
 
             self.send_current_packet_eventually(send_mode, &mut state).await;
@@ -249,7 +200,7 @@ impl SendSequence {
     }
 
     async fn send_current_packet_eventually(&self, send_mode: SendMode, state: &mut SendPoolState) {
-        if send_mode == SendMode::ReliableNoWait || state.current_packet_buf().capacity() < SERIALIZED_MESSAGE_HEADER_SIZE {
+        if send_mode == SendMode::ReliableNoWait || state.current_packet_buf().capacity() < MessageHeader::SERIALIZED_SIZE {
             self.complete_current_packet().await;
             return;
         }
