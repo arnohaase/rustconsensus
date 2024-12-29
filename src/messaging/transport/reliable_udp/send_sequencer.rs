@@ -65,12 +65,12 @@ enum SendMode {
 }
 
 
-struct SendPoolState {
+struct State {
     packets: BTreeMap<u64, BytesMut>,
     current_packet_id: u64,
     delay_sending_handle: Option<JoinHandle<()>>,
 }
-impl SendPoolState {
+impl State {
     fn provision_new_buffer(&mut self, myself: NodeAddr, to: NodeAddr) {
         let mut buf = BytesMut::with_capacity(1492); //TODO from pool
         PacketHeader::new(myself, to, self.current_packet_id) // TODO extract to PacketBuffer
@@ -90,20 +90,20 @@ struct SocketSendItem(u64);
 
 /// per peer / target address
 /// NB: different trade-offs than message queue / pub/sub implementations like HazelCast or Aeron
-struct SendSequence {
+struct SendSequencer {
     buffer_pool: Arc<BufferPool>,
     myself: NodeAddr,
     to: NodeAddr,
-    state: Arc<RwLock<SendPoolState>>,
+    state: Arc<RwLock<State>>,
     socket_send_channel: mpsc::Sender<SocketSendItem>,
     send_socket: Arc<UdpSocket>,
     message_header_len: usize,
 }
-impl SendSequence {
+impl SendSequencer {
     async fn new(buffer_pool: Arc<BufferPool>, myself: NodeAddr, to: NodeAddr, send_socket: Arc<UdpSocket>) -> Self {
         let (send, recv) = mpsc::channel::<SocketSendItem>(8); //TODO constant? configurable?
 
-        let mut state = SendPoolState {
+        let mut state = State {
             packets: BTreeMap::default(),
             current_packet_id: 0,
             delay_sending_handle: None,
@@ -114,7 +114,7 @@ impl SendSequence {
 
         tokio::spawn(Self::socket_send_loop(to, state.clone(), recv, send_socket.clone())); // terminates when the last sender goes out of scope
 
-        SendSequence {
+        SendSequencer {
             buffer_pool,
             myself,
             to,
@@ -125,7 +125,7 @@ impl SendSequence {
         }
     }
 
-    async fn socket_send_loop(to: NodeAddr, state: Arc<RwLock<SendPoolState>>, mut channel: mpsc::Receiver<SocketSendItem>, send_socket: Arc<UdpSocket>) {
+    async fn socket_send_loop(to: NodeAddr, state: Arc<RwLock<State>>, mut channel: mpsc::Receiver<SocketSendItem>, send_socket: Arc<UdpSocket>) {
         loop {
             match channel.recv().await {
                 None => break,
@@ -199,7 +199,7 @@ impl SendSequence {
         }
     }
 
-    async fn send_current_packet_eventually(&self, send_mode: SendMode, state: &mut SendPoolState) {
+    async fn send_current_packet_eventually(&self, send_mode: SendMode, state: &mut State) {
         if send_mode == SendMode::ReliableNoWait || state.current_packet_buf().capacity() < MessageHeader::SERIALIZED_SIZE {
             self.complete_current_packet().await;
             return;
