@@ -39,7 +39,7 @@ pub async fn receive_loop(buffer_pool: Arc<BufferPool>, myself: NodeAddr) -> any
                         //TODO verify checksum
 
                         if !packet_sequences.contains_key(&packet_header.from) {
-                            packet_sequences.insert(packet_header.from, ReceiveSequence::default());
+                            packet_sequences.insert(packet_header.from, ReceiveSequence::new(packet_header.from));
                         }
 
                         debug!("received message from {:?} to {:?} - forwarding to p2p packet sequence", packet_header.from, packet_header.to);
@@ -57,7 +57,6 @@ pub async fn receive_loop(buffer_pool: Arc<BufferPool>, myself: NodeAddr) -> any
 }
 
 /// per target node address
-#[derive(Default)]
 struct ReceiveSequence {
     /// de-fragmentation buffer: packets that were received but not processed completely because
     /// subsequent packets have not arrived yet
@@ -70,8 +69,37 @@ struct ReceiveSequence {
     /// NB: The offset point
     dispatched_up_to_offset: usize,
 
+    from: NodeAddr,
 }
 impl ReceiveSequence {
+    fn new(from: NodeAddr) -> Self {
+        ReceiveSequence {
+            packets: BTreeMap::default(),
+            dispatched_up_to_packet: 0,
+            dispatched_up_to_offset: 0,
+            from,
+        }
+    }
+
+    /// notification that there is no point in querying for packets before a given id - if packets
+    ///  before this are missing, they are lost, and the receiver should skip messages in them
+    fn set_earliest_available_packet_id(&mut self, earliest_id: u64) {
+        // There is potential for salvaging more in corner cases, but this is good enough for a
+        //  start, maybe permanently
+        let to_be_dropped = self.packets
+            .range(..earliest_id)
+            .map(|(k, _)| *k)
+            .collect::<Vec<_>>();
+
+        if !to_be_dropped.is_empty() {
+            warn!("skipping packets up to {} from {:?}", earliest_id, self.from);
+        }
+
+        for id in to_be_dropped {
+            self.packets.remove(&id);
+        }
+    }
+
     fn on_packet(&mut self, packet_header: &PacketHeader, packet_body: &[u8]) {
         if self.packets.contains_key(&packet_header.packet_counter) {
             debug!("received duplicate of packet {:?}", packet_header);
