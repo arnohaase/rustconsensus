@@ -1,34 +1,11 @@
-[package]
-name = "rustconsensus"
-version = "0.1.0"
+
+[workspace]
+members = [
+    "cluster",
+    "messaging",
+]
+
+[workspace.package]
 edition = "2021"
+version = "0.1.0"
 
-[dev-dependencies]
-clap = "*"
-clap_derive = "*"
-ctor = "*"
-http-body-util = "*"
-hyper = { version = "*", features = ["full"] }
-hyper-util = {  version = "*", features = ["full"] }
-mockall = { version = "*" }
-rstest = "*"
-tokio = { version = "*", features = ["full", "test-util"]}
-tracing-subscriber = "*"
-
-[dependencies]
-#TODO version numbers
-anyhow = "*"
-async-trait = "*"
-bit-set = "*"
-bytemuck = "*"
-bytes = "*"
-bytes-varint = "*"
-crc = "*"
-num_enum = "*"
-ordered-float = "*"
-rand = "*"
-rustc-hash = "*"
-sha2 = "*"
-socket2 = "*"
-tokio = { version = "*", features = ["macros", "net", "rt", "sync", "time"] } #TODO
-tracing = "*"

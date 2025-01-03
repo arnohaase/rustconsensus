@@ -4,11 +4,10 @@ use std::sync::Arc;
 
 use tokio::select;
 use tracing::Level;
-
-use rustconsensus::cluster::cluster::Cluster;
-use rustconsensus::cluster::cluster_config::ClusterConfig;
-use rustconsensus::cluster::discovery_strategy::SeedNodesStrategy;
-use rustconsensus::cluster::heartbeat::downing_strategy::QuorumOfSeedNodesStrategy;
+use cluster::cluster::cluster::Cluster;
+use cluster::cluster::cluster_config::ClusterConfig;
+use cluster::cluster::discovery_strategy::SeedNodesStrategy;
+use cluster::cluster::heartbeat::downing_strategy::QuorumOfSeedNodesStrategy;
 
 fn init_logging() {
     tracing_subscriber::fmt()

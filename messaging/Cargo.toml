@@ -1,0 +1,6 @@
+[package]
+name = "messaging"
+edition.workspace = true
+version.workspace = true
+
+

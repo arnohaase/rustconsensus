@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use bytes::{BufMut, BytesMut};
 use tracing::Level;
-use rustconsensus::messaging::envelope::Envelope;
+use cluster::messaging::envelope::Envelope;
 
-use rustconsensus::messaging::message_module::{Message, MessageModule, MessageModuleId};
-use rustconsensus::messaging::messaging::{Messaging, MessagingImpl, MessageSender};
-use rustconsensus::messaging::node_addr::NodeAddr;
+use cluster::messaging::message_module::{Message, MessageModule, MessageModuleId};
+use cluster::messaging::messaging::{Messaging, MessagingImpl, MessageSender};
+use cluster::messaging::node_addr::NodeAddr;
 
 
 struct TestMessageModule {

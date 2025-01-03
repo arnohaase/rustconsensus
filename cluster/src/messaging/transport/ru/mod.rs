@@ -51,15 +51,13 @@
 //!  4 |V|# # #|kind of|  sender / reply-to address (IPV4 or IPV6)     |
 //!    |6|# # #|frame  |                                               |
 //!    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//!  8 | sender / reply-to address (IPV4 or IPV6)                      |
+//!  8 | sender / reply-to address (IPV4 or IPV6) (continued)          |
 //!    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! 12 | sender / reply-to port        | sender / reply to identifier  |
+//! 12 | sender / reply-to port        | first message offset (encoded)|
 //!    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! 16 | receiver identifier           | first message offset (encoded)|
+//! 16 | packet sequence number (windowed, wrap-around)                |
 //!    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! 20 | packet sequence number (windowed, wrap-around)                |
-//!    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! 24...
+//! 20...
 //! ```
 //! Flags:
 //! * Bit 0: IPV4 vs. IPV6 for the reply-to address
