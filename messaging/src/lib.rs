@@ -29,7 +29,8 @@
 //!   * configured MTU since discovery does not work reliably
 //! * Skip missing packets if the receive window becomes too big
 //!   * There is no way to guarantee delivery (in-sequence or otherwise) --> TCP timeout etc.
-//!   * This protocol is designed for
+//!   * This protocol is designed for skipping dropped messages and continuing with fresh ones
+//!      rather than maximising delivery reliability at the cost of latency and throughput
 //! * Combine small messages into a single packet, delaying the send operation for a configurable
 //!   interval.
 //!   * NB: While there are similarities to Nagle's algorithm, the use of negative ACK mitigates
@@ -42,6 +43,10 @@
 //! * There should be (optional) strong encryption at the package level
 //! * cleanup of resources is triggered by a configurable timeout or via API
 //!   * independently for both sides - "re-connect" should happen transparently anyway
+//! * stream multiplexing over a single port / 'connection' - with different QoS configurations,
+//!    ack strategies etc.
+//!   * e.g. control messages + regular messages and high-frequency, low-latency messages where
+//!      packets older than 1 second are obsolete and can be dropped
 //!
 //! ## Header
 //!
