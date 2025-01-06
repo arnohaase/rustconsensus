@@ -2,6 +2,8 @@
 //!  reliability and order-of-delivery guarantees while prioritising low latency over "fully"
 //!  in-sequence delivery (TCP style).
 //!
+//! ## Design goals
+//!
 //! It aims to fulfill the following design goals:
 //! * The protocol is peer-to-peer without a dedicated server vs. client
 //!   * each node needs a listening UDP socket that handles all 'connections'
@@ -41,39 +43,122 @@
 //! * cleanup of resources is triggered by a configurable timeout or via API
 //!   * independently for both sides - "re-connect" should happen transparently anyway
 //!
+//! ## Header
+//!
 //! Packet header (inside a UDP packet) - all numbers in network byte order (BE):
 //! ```ascii
-//!     0                   1                   2                   3
-//!     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-//!    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//!  0 | CRC checksum for the rest of the packet, starting after this  |
-//!    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//!  4 |V|# # #|kind of|  sender / reply-to address (IPV4 or IPV6)     |
-//!    |6|# # #|frame  |                                               |
-//!    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//!  8 | sender / reply-to address (IPV4 or IPV6) (continued)          |
-//!    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! 12 | sender / reply-to port        | first message offset (encoded)|
-//!    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! 16 | packet sequence number (windowed, wrap-around)                |
-//!    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! 20...
-//! ```
-//! Flags:
-//! * Bit 0: IPV4 vs. IPV6 for the reply-to address
-//! * Bits 1-3: protocol version, 0 for this version
-//! * Bits 4-7: kind of frame:
-//!   * 0000 regular sequenced
-//!   * 0001 out-of-sequence
-//!   * 0002 NAK
-//!   * 0003 status (both send and receive side)
-//! * first message offset: offset of the start of the first message in the frame, starting
-//!    after the header - or FFFF if the frame continues a message from a previous frame that
-//!    continues in the next frame.
-//!    * If the frame completes a multi-frame message, the offset points to the first
-//!      byte after the end of the message
+//! 0:  CRC checksum for the rest of the packet, starting after the checksum: u32
+//! 4:  length of the header (after this field): u8
+//! 5:  flags (8 bits):
+//!     * bit 0:   V6 - reply-to address is IP V6 if set, V4 if not set
+//!     * bit 1-3: protocol version, 000 for this initial version
+//!     * bit 4-7: kind of frame:
+//!       * 0000 regular sequenced
+//!       * 0001 out-of-sequence for single-packet application-level messages
+//!       * 0010 INIT
+//!       * 0011 SYNC
+//!       * 0100 NAK
+//! 6:  reply-to address (4 bytes if IP V4, 7 bytes if IP V6)
+//! *:  reply-to port: u16
+//! *:  first message offset (u16): offset of the first message header after the header, or
+//!      FFFF if the frame continues from a message from the previous frame does not finish it.
+//!      Present only for frame kind '0000'.
+//!      NB: If this frame completes a multi-frame message without starting a new one, this
+//!       offset points to the first offset after the end of the packet
+//! *: stream id (varint up to u16): the id of the multiplexed stream that this frame belongs to.
+//!      Present only for frame kind '0000'.
+//!      NB: Each stream has its own send and receive buffers, incurring per-stream overhead
+//! *: packet sequence number (varint up to u32): sequence number of this frame in its stream.
+//!      Present only for frame kind '0000'.
+//!      NB: Sequence numbers are wrap-around, so 0 follows after FFFFFFFF.
+//!```
 //!
+//! The packet header has variable size, ranging from 12 bytes for a control message with IP V4
+//!  reply-to address to 25 bytes for a sequenced packet with IP V6 reply-to address and maximum
+//!  stream ID and packet sequence numbers.
 //!
 //! Message header (message may be split across multiple packets)
 //!
+//! ``` ascii
 //! 0: packet length (var-length encoded), starting *after* the encoded length TODO upper limit
+//! ```
+//!
+//! ## Control messages
+//!
+//! *INIT*
+//!
+//! This control message requests the peer to send a SYNC message and (re)send all messages
+//!  in its send buffer. It is one way (though not the only sensible one) to start a conversation.
+//!  NB: This message is sent *for one specific channel*.
+//!
+//! ```ascii
+//! 0: channel id (varint of u16) - the channel
+//! ```
+//!
+//! *SYNC*
+//!
+//! This control message shares the sender's send and receive buffer details with the receiver,
+//!  optionally requesting the peer to reply with a `sync` message itself.
+//!
+//! NB: Peers send SYNC messages at configurable intervals for robustness purposes, even though
+//!      `NAK` messages take care of re-sending lost packets during regular operations
+//!
+//! ```ascii
+//! 0: u8 with 0/1 for 'request peer to send sync' or 'don't request peer to send sync'
+//! 1: channel id (varint of u16) - the channel for which sync data is sent
+//! *: send buffer high water mark (varint u32) - the packet id after the highest sent
+//!     packet, i.e. the next packet to be sent
+//! *: send buffer low water mark (varint u32) - the lowest packet id for which a packet
+//!     is retained for resending, or the high water mark if none
+//! *: receive buffer high water mark (varint) - a u32 value for the highest packet id that was
+//!     received, or `u32::MAX + 1` if no packet was received yet
+//! *: receive buffer low water mark (varint) - a u32 value for the lowest packet id that was
+//!     received but not yet dispatched fully, or `u32::MAX + 1` if no packet was received yet.
+//! *: receive buffer ACK threshold (varint) - a u32 value for the highest packet id up to which
+//!     all packets are acknowledged ('late ack'), or `U32::MAX + 1` if no ACK threshold is
+//!     established yet.
+//! ```
+//!
+//! *NAK*
+//!
+//! Request that the peer re-send a specific set of packets that got dropped or corrupted, or
+//!  were not delivered in a timely fashion for some reason. This is the protocol's primary
+//!  means of acknowledging packets and ensuring a gap-free in-sequence dispatch of messages on
+//!  the receiver side. It is possible and intended to tune this to the quality criteria of
+//!  the underlying network, especially in a data center.
+//!
+//! NB: The criteria for sending this message are configurable, and the protocol is robust
+//!      with regard to differing configurations. It is desirable to let some grace period pass
+//!      before NAK'ing a gap to give regular out-of-order arrival a chance before requesting
+//!      a re-send. Other possible criteria are the number of missing packets, or a grace period
+//!      before re-requesting packets that were NAK'ed before.
+//!
+//! NB: This is a control message, so it must fit into a single packet. It is the sender's
+//!      responsibility to ensure this, and split the NAK'ed packet ids into several NAK messages
+//!      if necessary
+//!
+//! ```ascii
+//! 0: number of NAK'ed packet ids (varint u16)
+//! *: (repeated) packet id to be re-sent (varint u32)
+//! ```
+//!
+//! ## Related:
+//! * UDT
+//!   * dedicated UDP socket per peer
+//!   * single channel
+//!   * backpressure, i.e. slow down sending on congestion
+//!   * optimized for sending large data volumes / streams over fast but unreliable networks
+//! * QUIC
+//!   * connection based - initial handshake
+//!   * enforces encryption (TLS 1.3)
+//!   * has stream multiplexing
+//!   * abstracts over client's IP address to facilitate switch-over from Wifi to GSM
+//!   * focus on large 'messages' (files) - stream per 'message'
+//!   * asymmetric - client vs server
+//!   * dedicated port per peer
+//! * Aeron
+//!   * message broker - pub/sub etc.
+//!   * designed for minimum latency
+//!   * dedicated, pre-allocated buffers per peer
+//!   * back pressure, never drop messages
+//!

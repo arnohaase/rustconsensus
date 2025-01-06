@@ -1,7 +1,7 @@
 debug/
 target/
 
-cluster/Cargo.lock
+Cargo.lock
 **/*.rs.bk
 *.pdb
 
