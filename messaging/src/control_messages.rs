@@ -1,24 +1,37 @@
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 
-struct ControlMessageSync {
-    request_sync_reply: bool,
-    send_buffer_high_water_mark: u32,
-    send_buffer_low_water_mark: u32,
+pub struct ControlMessageRecvSync {
+    opaque_timestamp: u64,
     receive_buffer_high_water_mark: Option<u32>,
     receive_buffer_low_water_mark: Option<u32>,
     receive_buffer_ack_threshold: Option<u32>,
 }
-impl ControlMessageSync {
+impl ControlMessageRecvSync {
     fn ser(&self, buf: &mut BytesMut) {
         todo!()
     }
 
-    fn deser(buf: &mut Bytes) -> anyhow::Result<ControlMessageSync> {
+    fn deser(buf: &mut Bytes) -> anyhow::Result<ControlMessageRecvSync> {
         todo!()
     }
 }
 
-struct ControlMessageNak {
+pub struct ControlMessageSendSync {
+    opaque_timestamp: u64,
+    send_buffer_high_water_mark: u32,
+    send_buffer_low_water_mark: u32,
+}
+impl ControlMessageSendSync {
+    fn ser(&self, buf: &mut BytesMut) {
+        todo!()
+    }
+
+    fn deser(buf: &mut Bytes) -> anyhow::Result<ControlMessageSendSync> {
+        todo!()
+    }
+}
+
+pub struct ControlMessageNak {
     packet_id_resend_set: Vec<u32>,
 }
 
@@ -27,7 +40,7 @@ impl ControlMessageNak {
         todo!()
     }
 
-    fn deser(buf: &mut Bytes) -> anyhow::Result<ControlMessageNak> {
+    pub fn deser(buf: &mut impl Buf) -> anyhow::Result<ControlMessageNak> {
         todo!()
     }
 }

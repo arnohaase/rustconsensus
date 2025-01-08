@@ -27,6 +27,7 @@ pub enum PacketKind {
     },
     OutOfSequence,
     ControlInit { stream_id: u16 },
-    ControlSync { stream_id: u16 },
+    ControlRecvSync { stream_id: u16 },
+    ControlSendSync { stream_id: u16 },
     ControlNak { stream_id: u16 },
 }

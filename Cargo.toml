@@ -4,6 +4,7 @@ members = [
     "cluster",
     "messaging",
 ]
+resolver = "2"
 
 [workspace.package]
 edition = "2021"

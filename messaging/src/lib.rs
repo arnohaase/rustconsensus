@@ -54,8 +54,7 @@
 //! ```ascii
 //! 0:  CRC checksum for the rest of the packet, starting after the checksum: u32
 //! 4:  protocol version (u8)
-//! 5:  length of the header (after this field): u8
-//! 6:  flags (8 bits):
+//! 5:  flags (8 bits):
 //!     * bit 0-1: protocol version of the reply-to address:
 //!       * 00  V4, explicitly provided in packet
 //!       * 01  V6, explicitly provided in packet
@@ -68,7 +67,7 @@
 //!       * 100 RECV_SYNC
 //!       * 101 SEND_SYNC
 //!     * 5-7: unused, should be 0
-//! 7:  reply-to address (4 bytes if IP V4, 7 bytes if IP V6)
+//! 6:  reply-to address (4 bytes if IP V4, 7 bytes if IP V6)
 //! *:  reply-to port: u16
 //! *: stream id (varint up to u16): the id of the multiplexed stream that this frame belongs
 //!      or refers to. Not present for frame kind '001'.
@@ -191,3 +190,4 @@ mod packet_header;
 mod control_messages;
 mod receive_stream;
 mod end_point;
+mod send_stream;
