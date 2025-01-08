@@ -53,26 +53,31 @@
 //! Packet header (inside a UDP packet) - all numbers in network byte order (BE):
 //! ```ascii
 //! 0:  CRC checksum for the rest of the packet, starting after the checksum: u32
-//! 4:  length of the header (after this field): u8
-//! 5:  flags (8 bits):
-//!     * bit 0:   V6 - reply-to address is IP V6 if set, V4 if not set
-//!     * bit 1-3: protocol version, 000 for this initial version
-//!     * bit 4-7: kind of frame:
-//!       * 0000 regular sequenced
-//!       * 0001 out-of-sequence for single-packet application-level messages
-//!       * 0010 INIT
-//!       * 0011 SYNC
-//!       * 0100 NAK
-//! 6:  reply-to address (4 bytes if IP V4, 7 bytes if IP V6)
+//! 4:  protocol version (u8)
+//! 5:  length of the header (after this field): u8
+//! 6:  flags (8 bits):
+//!     * bit 0-1: protocol version of the reply-to address:
+//!       * 00  V4, explicitly provided in packet
+//!       * 01  V6, explicitly provided in packet
+//!       * 10  identical to UDP sender
+//!     * bit 2-4: kind of frame:
+//!       * 000 regular sequenced
+//!       * 001 out-of-sequence for single-packet application-level messages
+//!       * 010 INIT
+//!       * 011 NAK
+//!       * 100 RECV_SYNC
+//!       * 101 SEND_SYNC
+//!     * 5-7: unused, should be 0
+//! 7:  reply-to address (4 bytes if IP V4, 7 bytes if IP V6)
 //! *:  reply-to port: u16
+//! *: stream id (varint up to u16): the id of the multiplexed stream that this frame belongs
+//!      or refers to. Not present for frame kind '001'.
+//!      NB: Each stream has its own send and receive buffers, incurring per-stream overhead
 //! *:  first message offset (u16): offset of the first message header after the header, or
 //!      FFFF if the frame continues from a message from the previous frame does not finish it.
 //!      Present only for frame kind '0000'.
 //!      NB: If this frame completes a multi-frame message without starting a new one, this
 //!       offset points to the first offset after the end of the packet
-//! *: stream id (varint up to u16): the id of the multiplexed stream that this frame belongs to.
-//!      Present only for frame kind '0000'.
-//!      NB: Each stream has its own send and receive buffers, incurring per-stream overhead
 //! *: packet sequence number (varint up to u32): sequence number of this frame in its stream.
 //!      Present only for frame kind '0000'.
 //!      NB: Sequence numbers are wrap-around, so 0 follows after FFFFFFFF.
@@ -100,28 +105,42 @@
 //! 0: channel id (varint of u16) - the channel
 //! ```
 //!
-//! *SYNC*
+//! *RECV_SYNC*
 //!
-//! This control message shares the sender's send and receive buffer details with the receiver,
-//!  optionally requesting the peer to reply with a `sync` message itself.
+//! This control message is sent periodically by a receiver of a stream to sync with the sender
+//!  of that stream in a robust way - most importantly sending a positive ACK that all messages
+//!  up to a low water mark are processed and will never be requested again, so the sender can
+//!  remove them from its send buffer. This acts as a safety net - acknowledgement of messages
+//!  is taken care of in `NAK` messages during regular operation.
 //!
-//! NB: Peers send SYNC messages at configurable intervals for robustness purposes, even though
-//!      `NAK` messages take care of re-sending lost packets during regular operations
+//! This message requests the sender to respond with a `SEND_SYNC` message.
 //!
 //! ```ascii
-//! 0: u8 with 0/1 for 'request peer to send sync' or 'don't request peer to send sync'
-//! 1: channel id (varint of u16) - the channel for which sync data is sent
-//! *: send buffer high water mark (varint u32) - the packet id after the highest sent
-//!     packet, i.e. the next packet to be sent
-//! *: send buffer low water mark (varint u32) - the lowest packet id for which a packet
-//!     is retained for resending, or the high water mark if none
-//! *: receive buffer high water mark (varint) - a u32 value for the highest packet id that was
+//! 0: timestamp (u64 BE) in some opaque form - this is meant to be echoed in the response,
+//!     allowing the receiver to get some measurement of network RTT
+//! 8: receive buffer high water mark (varint) - a u32 value for the highest packet id that was
 //!     received, or `u32::MAX + 1` if no packet was received yet
 //! *: receive buffer low water mark (varint) - a u32 value for the lowest packet id that was
 //!     received but not yet dispatched fully, or `u32::MAX + 1` if no packet was received yet.
+//!     NB: This can be lower than the ACK threshold if some initial part of a multi-packet message
+//!          was received successfully
 //! *: receive buffer ACK threshold (varint) - a u32 value for the highest packet id up to which
 //!     all packets are acknowledged ('late ack'), or `U32::MAX + 1` if no ACK threshold is
 //!     established yet.
+//! ```
+//!
+//! *SEND_SYNC*
+//!
+//! This control message is sent by the sender of a stream in response to `RECV_SYNC`, giving
+//!  some statistics about the send buffers and echoing the timestamp that was sent in `RECV_SYNC`.
+//!
+//! ```ascii
+//! 0: echoed timestamp (u64 BE) in some opaque form - this allows the receiver to get
+//!     some measurement of network RTT
+//! 8: send buffer high water mark (varint u32) - the packet id after the highest sent
+//!     packet, i.e. the next packet to be sent
+//! *: send buffer low water mark (varint u32) - the lowest packet id for which a packet
+//!     is retained for resending, or the high water mark if none
 //! ```
 //!
 //! *NAK*
@@ -167,3 +186,8 @@
 //!   * dedicated, pre-allocated buffers per peer
 //!   * back pressure, never drop messages
 //!
+
+mod packet_header;
+mod control_messages;
+mod receive_stream;
+mod end_point;
