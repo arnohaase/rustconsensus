@@ -5,7 +5,8 @@ use rustc_hash::FxHashMap;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{error, warn};
-use crate::control_messages::ControlMessageNak;
+use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
+use crate::message_dispatcher::MessageDispatcher;
 use crate::packet_header::{PacketHeader, PacketKind};
 use crate::receive_stream::ReceiveStream;
 use crate::send_stream::SendStream;
@@ -16,16 +17,17 @@ struct EndPoint {
     send_socket_v6: Arc<UdpSocket>,
     receive_streams: Mutex<FxHashMap<(SocketAddr, u16), Arc<RwLock<ReceiveStream>>>>,
     send_streams: Mutex<FxHashMap<(SocketAddr, u16), Arc<RwLock<SendStream>>>>,
+    message_dispatcher: Arc<MessageDispatcher>,
 }
 impl EndPoint {
     async fn new(addrs: impl ToSocketAddrs) -> anyhow::Result<EndPoint> {
         //TODO "don't fragment" flag
         let receive_socket = Arc::new(UdpSocket::bind(addrs).await?);
         let (send_socket_v4, send_socket_v6) = if receive_socket.local_addr()?.is_ipv6() {
-            (Arc::new(UdpSocket::bind("0.0.0.0:0")), receive_socket.clone())
+            (Arc::new(UdpSocket::bind("0.0.0.0:0").await?), receive_socket.clone())
         }
         else {
-            (receive_socket.clone(), Arc::new(UdpSocket::bind("[::]:0")))
+            (receive_socket.clone(), Arc::new(UdpSocket::bind("[::]:0").await?))
         };
 
         Ok(EndPoint {
@@ -34,6 +36,7 @@ impl EndPoint {
             send_socket_v6,
             receive_streams: Default::default(),
             send_streams: Default::default(),
+            message_dispatcher: Arc::new(MessageDispatcher {}),
         })
     }
 
@@ -67,12 +70,16 @@ impl EndPoint {
                 .unwrap_or(from);
 
             match packet_header.packet_kind {
-                PacketKind::RegularSequenced { stream_id, .. } => { todo!() }
-                PacketKind::OutOfSequence => { todo!() }
-                PacketKind::ControlInit { stream_id } => { Self::handle_init_message(self.get_send_stream(peer_addr, stream_id)) }
-                PacketKind::ControlRecvSync { stream_id } => { todo!() }
-                PacketKind::ControlSendSync { stream_id } => { todo!() }
-                PacketKind::ControlNak { stream_id } => { Self::handle_nak(parse_buf, self.get_send_stream(peer_addr, stream_id)) }
+                PacketKind::RegularSequenced { stream_id, first_message_offset, packet_sequence_number} => {
+                    self.get_receive_stream(peer_addr, stream_id).await
+                        .write().await
+                        .on_packet(packet_sequence_number, first_message_offset, parse_buf).await
+                },
+                PacketKind::OutOfSequence => self.message_dispatcher.on_message(peer_addr, None, parse_buf).await,
+                PacketKind::ControlInit { stream_id } => Self::handle_init_message(self.get_send_stream(peer_addr, stream_id).await).await,
+                PacketKind::ControlRecvSync { stream_id } => Self::handle_recv_sync(parse_buf, self.get_send_stream(peer_addr, stream_id).await).await,
+                PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(peer_addr, stream_id).await).await,
+                PacketKind::ControlNak { stream_id } => Self::handle_nak(parse_buf, self.get_send_stream(peer_addr, stream_id).await).await,
             }
         }
     }
@@ -100,6 +107,32 @@ impl EndPoint {
     async fn handle_init_message(send_stream: Arc<RwLock<SendStream>>) {
         send_stream.write().await
             .on_init_message().await
+    }
+
+    async fn handle_recv_sync(mut parse_buf: &[u8], send_stream: Arc<RwLock<SendStream>>) {
+        let sync_message = match ControlMessageRecvSync::deser(&mut parse_buf) {
+            Ok(msg) => msg,
+            Err(_) => {
+                warn!("received unparseable RECV_SYNC message from {:?}", send_stream.read().await.peer_addr());
+                return;
+            }
+        };
+
+        send_stream.write().await
+            .on_recv_sync_message(sync_message).await
+    }
+
+    async fn handle_send_sync(mut parse_buf: &[u8], receive_stream: Arc<RwLock<ReceiveStream>>) {
+        let sync_message = match ControlMessageSendSync::deser(&mut parse_buf) {
+            Ok(msg) => msg,
+            Err(_) => {
+                warn!("received unparseable SEND_SYNC message from {:?}", receive_stream.read().await.peer_addr());
+                return;
+            }
+        };
+
+        receive_stream.write().await
+            .on_send_sync_message(sync_message).await
     }
 
     async fn handle_nak(mut parse_buf: &[u8], send_stream: Arc<RwLock<SendStream>>) {

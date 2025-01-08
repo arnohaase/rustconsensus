@@ -1,4 +1,4 @@
-use crate::control_messages::ControlMessageNak;
+use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
@@ -18,6 +18,10 @@ impl SendStream {
     }
 
     pub async fn on_init_message(&mut self) {
+        todo!()
+    }
+
+    pub async fn on_recv_sync_message(&mut self, message: ControlMessageRecvSync) {
         todo!()
     }
 

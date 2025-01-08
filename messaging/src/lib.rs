@@ -115,9 +115,7 @@
 //! This message requests the sender to respond with a `SEND_SYNC` message.
 //!
 //! ```ascii
-//! 0: timestamp (u64 BE) in some opaque form - this is meant to be echoed in the response,
-//!     allowing the receiver to get some measurement of network RTT
-//! 8: receive buffer high water mark (varint) - a u32 value for the highest packet id that was
+//! 0: receive buffer high water mark (varint) - a u32 value for the highest packet id that was
 //!     received, or `u32::MAX + 1` if no packet was received yet
 //! *: receive buffer low water mark (varint) - a u32 value for the lowest packet id that was
 //!     received but not yet dispatched fully, or `u32::MAX + 1` if no packet was received yet.
@@ -131,16 +129,16 @@
 //! *SEND_SYNC*
 //!
 //! This control message is sent by the sender of a stream in response to `RECV_SYNC`, giving
-//!  some statistics about the send buffers and echoing the timestamp that was sent in `RECV_SYNC`.
+//!  some statistics about the send buffers.
 //!
 //! ```ascii
-//! 0: echoed timestamp (u64 BE) in some opaque form - this allows the receiver to get
-//!     some measurement of network RTT
-//! 8: send buffer high water mark (varint u32) - the packet id after the highest sent
+//! 0: send buffer high water mark (varint u32) - the packet id after the highest sent
 //!     packet, i.e. the next packet to be sent
 //! *: send buffer low water mark (varint u32) - the lowest packet id for which a packet
 //!     is retained for resending, or the high water mark if none
 //! ```
+//!
+//! TODO timestamp / RTT
 //!
 //! *NAK*
 //!
@@ -191,3 +189,5 @@ mod control_messages;
 mod receive_stream;
 mod end_point;
 mod send_stream;
+mod message_dispatcher;
+mod raw_send_socket;

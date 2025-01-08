@@ -1,7 +1,6 @@
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, BytesMut};
 
 pub struct ControlMessageRecvSync {
-    opaque_timestamp: u64,
     receive_buffer_high_water_mark: Option<u32>,
     receive_buffer_low_water_mark: Option<u32>,
     receive_buffer_ack_threshold: Option<u32>,
@@ -11,13 +10,12 @@ impl ControlMessageRecvSync {
         todo!()
     }
 
-    fn deser(buf: &mut Bytes) -> anyhow::Result<ControlMessageRecvSync> {
+    pub fn deser(buf: &mut impl Buf) -> anyhow::Result<ControlMessageRecvSync> {
         todo!()
     }
 }
 
 pub struct ControlMessageSendSync {
-    opaque_timestamp: u64,
     send_buffer_high_water_mark: u32,
     send_buffer_low_water_mark: u32,
 }
@@ -26,7 +24,7 @@ impl ControlMessageSendSync {
         todo!()
     }
 
-    fn deser(buf: &mut Bytes) -> anyhow::Result<ControlMessageSendSync> {
+    pub fn deser(buf: &mut impl Buf) -> anyhow::Result<ControlMessageSendSync> {
         todo!()
     }
 }

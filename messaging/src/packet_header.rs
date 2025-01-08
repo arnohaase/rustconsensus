@@ -10,6 +10,10 @@ pub struct PacketHeader {
 impl PacketHeader {
     const PROTOCOL_VERSION_1: u8 = 0;
 
+    pub fn new(reply_to_address: Option<SocketAddr>, packet_kind: PacketKind) -> PacketHeader {
+        todo!()
+    }
+
     pub fn ser(&self, buf: &mut BytesMut) {
         todo!()
     }
@@ -22,7 +26,7 @@ impl PacketHeader {
 pub enum PacketKind {
     RegularSequenced {
         stream_id: u16,
-        first_message_offset: usize,
+        first_message_offset: u16,
         packet_sequence_number: u32,
     },
     OutOfSequence,
