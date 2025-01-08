@@ -7,7 +7,7 @@ use crate::packet_header::{PacketHeader, PacketKind};
 /// Convenience methods for the mechanics of sending different kinds of packet
 #[async_trait]
 pub trait RawSendSocket {
-    async fn send_control_init(&self, reply_to: SocketAddr, to: SocketAddr, stream_id: u16);
+    async fn send_control_init(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16) -> anyhow::Result<()>;
 }
 
 #[async_trait]
