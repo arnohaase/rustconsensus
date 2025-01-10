@@ -21,6 +21,10 @@ impl PacketHeader {
     pub fn deser(buf: &mut impl Buf) -> anyhow::Result<PacketHeader> {
         todo!()
     }
+
+    pub fn init_checksum(buf: &mut [u8]) {
+        todo!()
+    }
 }
 
 pub enum PacketKind {

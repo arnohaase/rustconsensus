@@ -96,12 +96,13 @@
 //!
 //! *INIT*
 //!
-//! This control message requests the peer to send a SYNC message and (re)send all messages
-//!  in its send buffer. It is one way (though not the only sensible one) to start a conversation.
-//!  NB: This message is sent *for one specific channel*.
+//! This control message, sent by a receiver, requests the peer to send a SEND_SYNC message
+//!  and (re)send all messages in its send buffer. It is one way (though not the only
+//!  reasonable one) to start a conversation.
+//!  NB: This message is sent *for one specific stream*.
 //!
 //! ```ascii
-//! 0: channel id (varint of u16) - the channel
+//! [no payload]
 //! ```
 //!
 //! *RECV_SYNC*
@@ -132,9 +133,9 @@
 //!  some statistics about the send buffers.
 //!
 //! ```ascii
-//! 0: send buffer high water mark (varint u32) - the packet id after the highest sent
+//! 0: send buffer high water mark (u32 BE) - the packet id after the highest sent
 //!     packet, i.e. the next packet to be sent
-//! *: send buffer low water mark (varint u32) - the lowest packet id for which a packet
+//! *: send buffer low water mark (u32 BE) - the lowest packet id for which a packet
 //!     is retained for resending, or the high water mark if none
 //! ```
 //!

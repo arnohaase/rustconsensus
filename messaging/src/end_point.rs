@@ -11,12 +11,18 @@ use crate::packet_header::{PacketHeader, PacketKind};
 use crate::receive_stream::ReceiveStream;
 use crate::send_stream::SendStream;
 
+
+//TODO everywhere: stream -> channel
+
+/// EndPoint is the place where all other parts of the protocol come together: It listens on a
+///  UdpSocket, dispatching incoming packets to their corresponding channels, and has an API for
+///  application code to send messages.
 struct EndPoint {
     receive_socket: Arc<UdpSocket>,
     send_socket_v4: Arc<UdpSocket>,
     send_socket_v6: Arc<UdpSocket>,
-    receive_streams: Mutex<FxHashMap<(SocketAddr, u16), Arc<RwLock<ReceiveStream>>>>,
-    send_streams: Mutex<FxHashMap<(SocketAddr, u16), Arc<RwLock<SendStream>>>>,
+    receive_streams: Mutex<FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>>>, //TODO persistent collection instead of Mutex
+    send_streams: Mutex<FxHashMap<(SocketAddr, u16), Arc<SendStream>>>,
     message_dispatcher: Arc<MessageDispatcher>,
 }
 impl EndPoint {
@@ -72,7 +78,6 @@ impl EndPoint {
             match packet_header.packet_kind {
                 PacketKind::RegularSequenced { stream_id, first_message_offset, packet_sequence_number} => {
                     self.get_receive_stream(peer_addr, stream_id).await
-                        .write().await
                         .on_packet(packet_sequence_number, first_message_offset, parse_buf).await
                 },
                 PacketKind::OutOfSequence => self.message_dispatcher.on_message(peer_addr, None, parse_buf).await,
@@ -84,67 +89,63 @@ impl EndPoint {
         }
     }
 
-    async fn get_receive_stream(&self, addr: SocketAddr, stream_id: u16) -> Arc<RwLock<ReceiveStream>> {
+    async fn get_receive_stream(&self, addr: SocketAddr, stream_id: u16) -> Arc<ReceiveStream> {
         match self.receive_streams
             .lock().await
             .entry((addr, stream_id))
         {
             Entry::Occupied(e) => e.get().clone(),
-            Entry::Vacant(e) => e.insert(Arc::new(RwLock::new(ReceiveStream::new()))).clone()
+            Entry::Vacant(e) => e.insert(Arc::new(ReceiveStream::new())).clone()
         }
     }
 
-    async fn get_send_stream(&self, addr: SocketAddr, stream_id: u16) -> Arc<RwLock<SendStream>> {
+    async fn get_send_stream(&self, addr: SocketAddr, stream_id: u16) -> Arc<SendStream> {
         match self.send_streams
             .lock().await
             .entry((addr, stream_id))
         {
             Entry::Occupied(e) => e.get().clone(),
-            Entry::Vacant(e) => e.insert(Arc::new(RwLock::new(SendStream::new()))).clone()
+            Entry::Vacant(e) => e.insert(Arc::new(SendStream::new())).clone()
         }
     }
 
-    async fn handle_init_message(send_stream: Arc<RwLock<SendStream>>) {
-        send_stream.write().await
-            .on_init_message().await
+    async fn handle_init_message(send_stream: Arc<SendStream>) {
+        send_stream.on_init_message().await
     }
 
-    async fn handle_recv_sync(mut parse_buf: &[u8], send_stream: Arc<RwLock<SendStream>>) {
+    async fn handle_recv_sync(mut parse_buf: &[u8], send_stream: Arc<SendStream>) {
         let sync_message = match ControlMessageRecvSync::deser(&mut parse_buf) {
             Ok(msg) => msg,
             Err(_) => {
-                warn!("received unparseable RECV_SYNC message from {:?}", send_stream.read().await.peer_addr());
+                warn!("received unparseable RECV_SYNC message from {:?}", send_stream.peer_addr());
                 return;
             }
         };
 
-        send_stream.write().await
-            .on_recv_sync_message(sync_message).await
+        send_stream.on_recv_sync_message(sync_message).await
     }
 
-    async fn handle_send_sync(mut parse_buf: &[u8], receive_stream: Arc<RwLock<ReceiveStream>>) {
+    async fn handle_send_sync(mut parse_buf: &[u8], receive_stream: Arc<ReceiveStream>) {
         let sync_message = match ControlMessageSendSync::deser(&mut parse_buf) {
             Ok(msg) => msg,
             Err(_) => {
-                warn!("received unparseable SEND_SYNC message from {:?}", receive_stream.read().await.peer_addr());
+                warn!("received unparseable SEND_SYNC message from {:?}", receive_stream.peer_addr());
                 return;
             }
         };
 
-        receive_stream.write().await
-            .on_send_sync_message(sync_message).await
+        receive_stream.on_send_sync_message(sync_message).await
     }
 
-    async fn handle_nak(mut parse_buf: &[u8], send_stream: Arc<RwLock<SendStream>>) {
+    async fn handle_nak(mut parse_buf: &[u8], send_stream: Arc<SendStream>) {
         let nak_message = match ControlMessageNak::deser(&mut parse_buf) {
             Ok(msg) => msg,
             Err(_) => {
-                warn!("received unparseable NAK message from {:?}", send_stream.read().await.peer_addr());
+                warn!("received unparseable NAK message from {:?}", send_stream.peer_addr());
                 return;
             }
         };
 
-        send_stream.read().await
-            .on_nak_message(nak_message).await;
+        send_stream.on_nak_message(nak_message).await;
     }
 }
