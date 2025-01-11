@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use rustc_hash::FxHashMap;
 use tokio::net::{ToSocketAddrs, UdpSocket};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use tracing::{error, warn};
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
@@ -117,7 +117,7 @@ impl EndPoint {
         let sync_message = match ControlMessageRecvSync::deser(&mut parse_buf) {
             Ok(msg) => msg,
             Err(_) => {
-                warn!("received unparseable RECV_SYNC message from {:?}", send_stream.peer_addr());
+                warn!("received unparseable RECV_SYNC message from {:?}", send_stream.peer_addr().await);
                 return;
             }
         };
@@ -129,7 +129,7 @@ impl EndPoint {
         let sync_message = match ControlMessageSendSync::deser(&mut parse_buf) {
             Ok(msg) => msg,
             Err(_) => {
-                warn!("received unparseable SEND_SYNC message from {:?}", receive_stream.peer_addr());
+                warn!("received unparseable SEND_SYNC message from {:?}", receive_stream.peer_addr().await);
                 return;
             }
         };
@@ -141,7 +141,7 @@ impl EndPoint {
         let nak_message = match ControlMessageNak::deser(&mut parse_buf) {
             Ok(msg) => msg,
             Err(_) => {
-                warn!("received unparseable NAK message from {:?}", send_stream.peer_addr());
+                warn!("received unparseable NAK message from {:?}", send_stream.peer_addr().await);
                 return;
             }
         };

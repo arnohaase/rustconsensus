@@ -11,3 +11,4 @@ bytes = "*"
 rustc-hash = "*"
 tokio = { version = "*", features = ["full"] } # TODO
 tracing = "*"
+bytes-varint = "*"

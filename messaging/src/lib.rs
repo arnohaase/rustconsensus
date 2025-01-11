@@ -69,7 +69,7 @@
 //!     * 5-7: unused, should be 0
 //! 6:  reply-to address (4 bytes if IP V4, 7 bytes if IP V6)
 //! *:  reply-to port: u16
-//! *: stream id (varint up to u16): the id of the multiplexed stream that this frame belongs
+//! *:  stream id (varint up to u16): the id of the multiplexed stream that this frame belongs
 //!      or refers to. Not present for frame kind '001'.
 //!      NB: Each stream has its own send and receive buffers, incurring per-stream overhead
 //! *:  first message offset (u16): offset of the first message header after the header, or
@@ -77,7 +77,7 @@
 //!      Present only for frame kind '0000'.
 //!      NB: If this frame completes a multi-frame message without starting a new one, this
 //!       offset points to the first offset after the end of the packet
-//! *: packet sequence number (varint up to u32): sequence number of this frame in its stream.
+//! *:  packet sequence number (u32 BE): sequence number of this frame in its stream.
 //!      Present only for frame kind '0000'.
 //!      NB: Sequence numbers are wrap-around, so 0 follows after FFFFFFFF.
 //!```
@@ -191,4 +191,4 @@ mod receive_stream;
 mod end_point;
 mod send_stream;
 mod message_dispatcher;
-mod raw_send_socket;
+mod send_socket;

@@ -8,7 +8,8 @@ pub struct PacketHeader {
     pub packet_kind: PacketKind,
 }
 impl PacketHeader {
-    const PROTOCOL_VERSION_1: u8 = 0;
+    pub const PROTOCOL_VERSION_1: u8 = 0;
+    pub const OFFSET_MESSAGE_CONTINUES: u16 = u16::MAX;
 
     pub fn new(reply_to_address: Option<SocketAddr>, packet_kind: PacketKind) -> PacketHeader {
         todo!()

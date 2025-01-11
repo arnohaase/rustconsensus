@@ -15,7 +15,7 @@ impl ReceiveStream {
         todo!()
     }
 
-    pub fn peer_addr(&self) -> SocketAddr {
+    pub async fn peer_addr(&self) -> SocketAddr {
         todo!()
     }
 
