@@ -183,7 +183,9 @@
 //!   * designed for minimum latency
 //!   * dedicated, pre-allocated buffers per peer
 //!   * back pressure, never drop messages
-//!
+//! * AVB2 / TSN: https://en.wikipedia.org/wiki/Time-Sensitive_Networking#IEEE_802.1Qav
+//!   * builds directly on Layer 2 with dedicated wires
+//!   * interesting prioritising algorithm for rate limitation and traffic shaping
 
 mod packet_header;
 mod control_messages;

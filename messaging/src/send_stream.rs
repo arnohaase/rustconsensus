@@ -48,7 +48,7 @@ impl SendStreamInner {
         }).ser(&mut new_buffer);
 
         self.work_in_progress = Some(new_buffer);
-        &mut self.work_in_progress.as_mut().unwrap()
+        self.work_in_progress.as_mut().unwrap()
     }
 
     async fn do_send_work_in_progress(&mut self) {
