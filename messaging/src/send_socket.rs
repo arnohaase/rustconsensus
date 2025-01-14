@@ -18,6 +18,8 @@ pub trait SendSocket {
 impl SendSocket for UdpSocket {
     async fn finalize_and_send_packet(&self, to: SocketAddr, packet_buf: &mut [u8]) -> anyhow::Result<()> {
         PacketHeader::init_checksum(packet_buf);
+
+        //TODO traffic shaping
         self.send_to(&packet_buf, to).await?;
         Ok(())
     }
