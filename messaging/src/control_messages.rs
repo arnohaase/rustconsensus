@@ -1,9 +1,10 @@
 use bytes::{Buf, BytesMut};
 
+#[derive(Debug)]
 pub struct ControlMessageRecvSync {
-    receive_buffer_high_water_mark: Option<u32>,
-    receive_buffer_low_water_mark: Option<u32>,
-    receive_buffer_ack_threshold: Option<u32>,
+    pub receive_buffer_high_water_mark: Option<u32>,
+    pub receive_buffer_low_water_mark: Option<u32>,
+    pub receive_buffer_ack_threshold: Option<u32>,
 }
 impl ControlMessageRecvSync {
     fn ser(&self, buf: &mut BytesMut) {
@@ -30,7 +31,7 @@ impl ControlMessageSendSync {
 }
 
 pub struct ControlMessageNak {
-    packet_id_resend_set: Vec<u32>,
+    pub packet_id_resend_set: Vec<u32>,
 }
 
 impl ControlMessageNak {

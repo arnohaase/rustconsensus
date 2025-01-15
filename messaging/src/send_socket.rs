@@ -2,29 +2,37 @@ use std::net::SocketAddr;
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use tokio::net::UdpSocket;
+use tracing::error;
 use crate::packet_header::{PacketHeader, PacketKind};
 
 /// Convenience methods for the mechanics of sending different kinds of packet
 #[async_trait]
 pub trait SendSocket {
-    async fn finalize_and_send_packet(&self, to: SocketAddr, packet_buf: &mut [u8]) -> anyhow::Result<()>;
+    async fn finalize_and_send_packet(&self, to: SocketAddr, packet_buf: &mut [u8]);
 
-    async fn send_control_init(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16) -> anyhow::Result<()>;
+    async fn do_send_packet(&self, to: SocketAddr, packet_buf: &[u8]);
 
-    async fn send_send_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: u32, low_water_mark: u32) -> anyhow::Result<()>;
+    async fn send_control_init(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16);
+
+    async fn send_send_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: u32, low_water_mark: u32);
 }
 
 #[async_trait]
 impl SendSocket for UdpSocket {
-    async fn finalize_and_send_packet(&self, to: SocketAddr, packet_buf: &mut [u8]) -> anyhow::Result<()> {
+    async fn finalize_and_send_packet(&self, to: SocketAddr, packet_buf: &mut [u8]) {
         PacketHeader::init_checksum(packet_buf);
-
-        //TODO traffic shaping
-        self.send_to(&packet_buf, to).await?;
-        Ok(())
+        self.do_send_packet(to, packet_buf).await;
     }
 
-    async fn send_control_init(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16) -> anyhow::Result<()> {
+    async fn do_send_packet(&self, to: SocketAddr, packet_buf: &[u8]) {
+        //TODO traffic shaping
+        if let Err(e) = self.send_to(&packet_buf, to).await {
+            error!("error sending UDP packet to {:?}: {}", to, e);
+        }
+    }
+
+
+    async fn send_control_init(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16) {
         let header = PacketHeader::new(reply_to, PacketKind::ControlInit { stream_id });
 
         let mut send_buf = BytesMut::with_capacity(1500); //TODO from pool?
@@ -33,7 +41,7 @@ impl SendSocket for UdpSocket {
         self.finalize_and_send_packet(to, &mut send_buf).await
     }
 
-    async fn send_send_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: u32, low_water_mark: u32) -> anyhow::Result<()> {
+    async fn send_send_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: u32, low_water_mark: u32) {
         let header = PacketHeader::new(reply_to, PacketKind::ControlSendSync { stream_id });
 
         let mut send_buf = BytesMut::with_capacity(1500); //TODO from pool?

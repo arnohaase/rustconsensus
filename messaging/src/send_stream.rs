@@ -1,18 +1,18 @@
+use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync};
+use crate::packet_header::{PacketHeader, PacketKind};
+use crate::send_socket::SendSocket;
+use bytes::{BufMut, BytesMut};
+use bytes_varint::VarIntSupportMut;
 use std::cmp::min;
 use std::collections::BTreeMap;
-use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use bytes::{BufMut, BytesMut};
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
-use bytes_varint::VarIntSupportMut;
 use tokio::time;
-use tracing::{debug, error, warn};
 use tracing::field::debug;
-use crate::packet_header::{PacketHeader, PacketKind};
-use crate::send_socket::SendSocket;
+use tracing::{debug, error, warn};
 
 pub struct SendStreamConfig {
     max_packet_len: usize, //TODO calculated from MTU, encryption wrapper, ...
@@ -27,7 +27,7 @@ struct SendStreamInner {
     self_reply_to_addr: Option<SocketAddr>,
 
     send_buffer: BTreeMap<u32, BytesMut>,
-    /// first unsent packet, either already in 'work in progress' or next one to go there
+    /// next unsent packet, either already in 'work in progress' or next one to go there
     high_water_mark: u32,
     work_in_progress: Option<BytesMut>,
     work_in_progress_late_send_handle: Option<tokio::task::JoinHandle<()>>,
@@ -55,10 +55,9 @@ impl SendStreamInner {
         let mut wip = self.work_in_progress.take()
             .expect("attempting to send uninitialized wip");
 
-        if let Err(e) = self.send_socket.finalize_and_send_packet(self.peer_addr, &mut wip).await {
-            error!("error sending packet to {:?} - will retry on NAK", self.peer_addr);
-            //NB: we do *not* return here, but keep the (potentially) unsent packet in our send buffer
-        }
+        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut wip).await;
+        //NB: we don't handle a send error but keep the (potentially) unsent packet in our send buffer
+
         self.send_buffer.insert(self.high_water_mark, wip);
 
         if let Some(handle) = &self.work_in_progress_late_send_handle {
@@ -86,15 +85,46 @@ impl SendStream {
     }
 
     pub async fn on_init_message(&self) {
-        todo!()
+        let mut inner = self.inner.write().await;
+        debug!("received INIT message from {:?} for stream {}", inner.peer_addr, inner.stream_id);
+
+        inner.send_buffer.clear();
+        inner.work_in_progress = None;
+        if let Some(handle) = &inner.work_in_progress_late_send_handle {
+            handle.abort();
+        }
+
+        self.on_recv_sync_message(ControlMessageRecvSync {
+            receive_buffer_high_water_mark: None,
+            receive_buffer_low_water_mark: None,
+            receive_buffer_ack_threshold: None,
+        }).await;
     }
 
     pub async fn on_recv_sync_message(&self, message: ControlMessageRecvSync) {
-        todo!()
+        let inner = self.inner.read().await;
+        debug!("received RECV_SYNC message from {:?} for stream {}: {:?}", inner.peer_addr, inner.stream_id, message);
+
+        //TODO handle / evaluate the client's packet ids
+
+        let low_water_mark = inner.send_buffer.keys().next()
+            .map(|k| *k)
+            .unwrap_or(inner.high_water_mark);
+        inner.send_socket.send_send_sync(inner.self_reply_to_addr, inner.peer_addr, inner.stream_id, inner.high_water_mark, low_water_mark).await;
     }
 
     pub async fn on_nak_message(&self, message: ControlMessageNak) {
-        todo!()
+        let inner = self.inner.read().await;
+        debug!("received NAK message from {:?} for stream {} - resending packets {:?}", inner.peer_addr, inner.stream_id, message.packet_id_resend_set);
+
+        for packet_id in &message.packet_id_resend_set {
+            if let Some(packet) = inner.send_buffer.get(packet_id) {
+                inner.send_socket.do_send_packet(inner.peer_addr, packet).await;
+            }
+            else {
+                debug!("NAK requested packet that is no longer in the send buffer");
+            }
+        }
     }
 
     //TODO add some tracing here for correlation

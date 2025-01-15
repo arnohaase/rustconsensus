@@ -96,10 +96,16 @@
 //!
 //! *INIT*
 //!
-//! This control message, sent by a receiver, requests the peer to send a SEND_SYNC message
-//!  and (re)send all messages in its send buffer. It is one way (though not the only
-//!  reasonable one) to start a conversation.
+//! This control message, sent by a receiver, requests the peer to clear its send buffer (*without*
+//!  resetting packet id markers, to allow handling of packets that are in flight).
+//! Apart from that, this message is equivalent to a RECV_SYNC message with all three values set to
+//!  None, requesting a SEND_SYNC message.
+//!
+//! This message is one way (though not the only reasonable one) to start a conversation.
+//!
 //!  NB: This message is sent *for one specific stream*.
+//!  NB: If this message gets lost, peers will still sync up eventually through periodically sent
+//!       SYNC messages, but that incurs a delay and uses network bandwidth unnecessarily
 //!
 //! ```ascii
 //! [no payload]
