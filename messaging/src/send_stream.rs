@@ -30,15 +30,20 @@ struct SendStreamInner {
     peer_addr: SocketAddr,
     self_reply_to_addr: Option<SocketAddr>,
 
+    /// initialized with the high water mark set
     send_buffer: WindowedBuffer<BytesMut>,
     /// next unsent packet, either already in 'work in progress' or next one to go there
-    high_water_mark: PacketId,
     work_in_progress: Option<BytesMut>,
     work_in_progress_late_send_handle: Option<tokio::task::JoinHandle<()>>,
 }
 impl SendStreamInner {
     fn packet_header_len(&self) -> usize {
         todo!() // depends on reply-to address and stream id
+    }
+
+    fn high_water_mark(&self) -> PacketId {
+        self.send_buffer.high_water_mark
+            .expect("high water mark is always initialized")
     }
 
     fn init_wip(&mut self, first_message_offset: u16) -> &mut BytesMut {
@@ -48,7 +53,7 @@ impl SendStreamInner {
         PacketHeader::new(self.self_reply_to_addr, PacketKind::RegularSequenced {
             stream_id: self.stream_id,
             first_message_offset,
-            packet_sequence_number: self.high_water_mark,
+            packet_sequence_number: self.high_water_mark(),
         }).ser(&mut new_buffer);
 
         self.work_in_progress = Some(new_buffer);
@@ -62,18 +67,18 @@ impl SendStreamInner {
         self.send_socket.finalize_and_send_packet(self.peer_addr, &mut wip).await;
         //NB: we don't handle a send error but keep the (potentially) unsent packet in our send buffer
 
-        self.send_buffer.insert(self.high_water_mark, wip);
+        self.send_buffer.insert(self.high_water_mark(), wip);
 
         if let Some(handle) = &self.work_in_progress_late_send_handle {
             handle.abort();
             self.work_in_progress_late_send_handle = None;
         }
 
-        if let Some(dropped_buf) = self.send_buffer.remove(&self.high_water_mark.minus(self.config.window_size)) {
+        if let Some(dropped_buf) = self.send_buffer.remove(&self.high_water_mark().minus(self.config.window_size)) {
             //TODO return buf to pool
             debug!("unacknowledged packet moved out of the send window for stream {} with {:?}", self.stream_id, self.peer_addr);
         }
-        self.high_water_mark = self.high_water_mark.next();
+        self.send_buffer.high_water_mark = Some(self.high_water_mark().next());
     }
 }
 
@@ -110,15 +115,13 @@ impl SendStream {
     }
 
     pub async fn on_recv_sync_message(&self, message: ControlMessageRecvSync) {
-        let inner = self.inner.read().await;
+        let mut inner = self.inner.write().await;
         trace!("received RECV_SYNC message from {:?} for stream {}: {:?}", inner.peer_addr, inner.stream_id, message);
 
         if let Some(ack_threshold) = message.receive_buffer_ack_threshold {
             // remove all packets 'up to' the threshold from the send buffer - wrap-around semantics
             //  add some boilerplate
-            let to_be_removed = inner.send_buffer.less_equal(ack_threshold)
-                .collect::<Vec<_>>();
-            for key in to_be_removed {
+            for key in inner.send_buffer.less_equal(ack_threshold) {
                 inner.send_buffer.remove(&key);
             }
         }
@@ -126,9 +129,9 @@ impl SendStream {
         //TODO handle / evaluate the client's packet ids
 
         let low_water_mark = inner.send_buffer
-            .in_window().next()
-            .unwrap_or(inner.high_water_mark);
-        inner.send_socket.send_send_sync(inner.self_reply_to_addr, inner.peer_addr, inner.stream_id, inner.high_water_mark, low_water_mark).await;
+            .smallest_in_window()
+            .unwrap_or(inner.high_water_mark());
+        inner.send_socket.send_send_sync(inner.self_reply_to_addr, inner.peer_addr, inner.stream_id, inner.high_water_mark(), low_water_mark).await;
     }
 
     pub async fn on_nak_message(&self, message: ControlMessageNak) {
@@ -204,14 +207,14 @@ impl SendStream {
         // start 'late send' timer
         if data.work_in_progress.is_some() {
             if let Some(late_send_delay) = self.config.late_send_delay {
-                let high_water_mark = data.high_water_mark;
+                let high_water_mark = data.high_water_mark();
                 let data_arc = self.inner.clone();
 
                 data.work_in_progress_late_send_handle = Some(tokio::spawn(async move {
                     time::sleep(late_send_delay).await;
 
                     let mut data = data_arc.write().await;
-                    if data.high_water_mark != high_water_mark {
+                    if data.high_water_mark() != high_water_mark {
                         debug!("late send: packet {} already sent", high_water_mark);
                     }
                     else {

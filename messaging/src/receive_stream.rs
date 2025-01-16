@@ -8,6 +8,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use crate::packet_id::PacketId;
 use crate::send_socket::SendSocket;
+use crate::windowed_buffer::WindowedBuffer;
 
 struct ReceiveStreamConfig {
 
@@ -21,10 +22,10 @@ struct ReceiveStreamInner {
     peer_addr: SocketAddr,
     self_reply_to_addr: Option<SocketAddr>,
 
-    low_water_mark: Option<PacketId>,
     high_water_mark: Option<PacketId>,
+    low_water_mark: Option<PacketId>,
     ack_threshold: Option<PacketId>,
-    receive_buffer: FxHashMap<PacketId, Vec<u8>>,
+    receive_buffer: WindowedBuffer<Vec<u8>>,
 }
 impl ReceiveStreamInner {
     async fn do_send_init(&self) {
@@ -63,6 +64,18 @@ impl ReceiveStream {
 
     pub async fn on_send_sync_message(&self, message: ControlMessageSendSync) {
         let mut inner = self.inner.write().await;
+
+        if let Some(high_water_mark) = inner.high_water_mark {
+            // we only have a defined receive window once we received at least one packet
+
+
+
+        }
+
+
+        message.send_buffer_low_water_mark;
+
+
 
         // the send buffer's low water mark now determines the valid range of packet IDs -
         //  at most a range of u32::MAX / 4 packets, but possibly limited by the config

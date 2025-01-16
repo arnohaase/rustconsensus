@@ -10,6 +10,8 @@ impl Display for PacketId {
 }
 
 impl PacketId {
+    pub const ZERO: PacketId = PacketId(0);
+
     pub fn from_raw(value: u32) -> Self {
         Self(value)
     }
