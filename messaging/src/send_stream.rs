@@ -8,15 +8,19 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use rustc_hash::FxHashMap;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tokio::time;
 use tracing::field::debug;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, trace, warn};
+use crate::packet_id::PacketId;
+use crate::windowed_buffer::WindowedBuffer;
 
 pub struct SendStreamConfig {
     max_packet_len: usize, //TODO calculated from MTU, encryption wrapper, ...
     late_send_delay: Option<Duration>,
+    window_size: u32, //TODO ensure that this is <= u32::MAX / 4 (or maybe a far smaller upper bound???)
 }
 
 struct SendStreamInner {
@@ -26,9 +30,9 @@ struct SendStreamInner {
     peer_addr: SocketAddr,
     self_reply_to_addr: Option<SocketAddr>,
 
-    send_buffer: BTreeMap<u32, BytesMut>,
+    send_buffer: WindowedBuffer<BytesMut>,
     /// next unsent packet, either already in 'work in progress' or next one to go there
-    high_water_mark: u32,
+    high_water_mark: PacketId,
     work_in_progress: Option<BytesMut>,
     work_in_progress_late_send_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -65,7 +69,11 @@ impl SendStreamInner {
             self.work_in_progress_late_send_handle = None;
         }
 
-        self.high_water_mark = self.high_water_mark.wrapping_add(1);
+        if let Some(dropped_buf) = self.send_buffer.remove(&self.high_water_mark.minus(self.config.window_size)) {
+            //TODO return buf to pool
+            debug!("unacknowledged packet moved out of the send window for stream {} with {:?}", self.stream_id, self.peer_addr);
+        }
+        self.high_water_mark = self.high_water_mark.next();
     }
 }
 
@@ -103,19 +111,29 @@ impl SendStream {
 
     pub async fn on_recv_sync_message(&self, message: ControlMessageRecvSync) {
         let inner = self.inner.read().await;
-        debug!("received RECV_SYNC message from {:?} for stream {}: {:?}", inner.peer_addr, inner.stream_id, message);
+        trace!("received RECV_SYNC message from {:?} for stream {}: {:?}", inner.peer_addr, inner.stream_id, message);
+
+        if let Some(ack_threshold) = message.receive_buffer_ack_threshold {
+            // remove all packets 'up to' the threshold from the send buffer - wrap-around semantics
+            //  add some boilerplate
+            let to_be_removed = inner.send_buffer.less_equal(ack_threshold)
+                .collect::<Vec<_>>();
+            for key in to_be_removed {
+                inner.send_buffer.remove(&key);
+            }
+        }
 
         //TODO handle / evaluate the client's packet ids
 
-        let low_water_mark = inner.send_buffer.keys().next()
-            .map(|k| *k)
+        let low_water_mark = inner.send_buffer
+            .in_window().next()
             .unwrap_or(inner.high_water_mark);
         inner.send_socket.send_send_sync(inner.self_reply_to_addr, inner.peer_addr, inner.stream_id, inner.high_water_mark, low_water_mark).await;
     }
 
     pub async fn on_nak_message(&self, message: ControlMessageNak) {
         let inner = self.inner.read().await;
-        debug!("received NAK message from {:?} for stream {} - resending packets {:?}", inner.peer_addr, inner.stream_id, message.packet_id_resend_set);
+        trace!("received NAK message from {:?} for stream {} - resending packets {:?}", inner.peer_addr, inner.stream_id, message.packet_id_resend_set);
 
         for packet_id in &message.packet_id_resend_set {
             if let Some(packet) = inner.send_buffer.get(packet_id) {
@@ -206,7 +224,5 @@ impl SendStream {
                 }));
             }
         }
-
-        //TODO send window: discard messages with a sequence id sufficiently 'before' high water mark
     }
 }

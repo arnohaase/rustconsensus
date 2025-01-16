@@ -1,13 +1,14 @@
 use bytes::{Buf, BytesMut};
+use crate::packet_id::PacketId;
 
 #[derive(Debug)]
 pub struct ControlMessageRecvSync {
-    pub receive_buffer_high_water_mark: Option<u32>,
-    pub receive_buffer_low_water_mark: Option<u32>,
-    pub receive_buffer_ack_threshold: Option<u32>,
+    pub receive_buffer_high_water_mark: Option<PacketId>,
+    pub receive_buffer_low_water_mark: Option<PacketId>,
+    pub receive_buffer_ack_threshold: Option<PacketId>,
 }
 impl ControlMessageRecvSync {
-    fn ser(&self, buf: &mut BytesMut) {
+    pub fn ser(&self, buf: &mut BytesMut) {
         todo!()
     }
 
@@ -16,12 +17,13 @@ impl ControlMessageRecvSync {
     }
 }
 
+#[derive(Debug)]
 pub struct ControlMessageSendSync {
-    send_buffer_high_water_mark: u32,
-    send_buffer_low_water_mark: u32,
+    pub send_buffer_high_water_mark: PacketId,
+    pub send_buffer_low_water_mark: PacketId,
 }
 impl ControlMessageSendSync {
-    fn ser(&self, buf: &mut BytesMut) {
+    pub fn ser(&self, buf: &mut BytesMut) {
         todo!()
     }
 
@@ -30,8 +32,9 @@ impl ControlMessageSendSync {
     }
 }
 
+#[derive(Debug)]
 pub struct ControlMessageNak {
-    pub packet_id_resend_set: Vec<u32>,
+    pub packet_id_resend_set: Vec<PacketId>,
 }
 
 impl ControlMessageNak {

@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use bytes::{Buf, BytesMut};
+use crate::packet_id::PacketId;
 
 pub struct PacketHeader {
     pub checksum: u32,
@@ -32,7 +33,7 @@ pub enum PacketKind {
     RegularSequenced {
         stream_id: u16,
         first_message_offset: u16,
-        packet_sequence_number: u32,
+        packet_sequence_number: PacketId,
     },
     OutOfSequence,
     ControlInit { stream_id: u16 },

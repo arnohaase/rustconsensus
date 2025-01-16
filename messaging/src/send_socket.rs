@@ -3,7 +3,9 @@ use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use tokio::net::UdpSocket;
 use tracing::error;
+use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::packet_header::{PacketHeader, PacketKind};
+use crate::packet_id::PacketId;
 
 /// Convenience methods for the mechanics of sending different kinds of packet
 #[async_trait]
@@ -14,7 +16,9 @@ pub trait SendSocket {
 
     async fn send_control_init(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16);
 
-    async fn send_send_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: u32, low_water_mark: u32);
+    async fn send_recv_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: Option<PacketId>, low_water_mark: Option<PacketId>, ack_threshold: Option<PacketId>);
+
+    async fn send_send_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: PacketId, low_water_mark: PacketId);
 }
 
 #[async_trait]
@@ -41,14 +45,39 @@ impl SendSocket for UdpSocket {
         self.finalize_and_send_packet(to, &mut send_buf).await
     }
 
-    async fn send_send_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: u32, low_water_mark: u32) {
+    async fn send_recv_sync(
+        &self,
+        reply_to: Option<SocketAddr>,
+        to: SocketAddr,
+        stream_id: u16,
+        high_water_mark: Option<PacketId>,
+        low_water_mark: Option<PacketId>,
+        ack_threshold: Option<PacketId>,
+    ) {
+        let header = PacketHeader::new(reply_to, PacketKind::ControlRecvSync { stream_id });
+
+        let mut send_buf = BytesMut::with_capacity(1500); //TODO from pool?
+        header.ser(&mut send_buf);
+
+        ControlMessageRecvSync {
+            receive_buffer_high_water_mark: high_water_mark,
+            receive_buffer_low_water_mark: low_water_mark,
+            receive_buffer_ack_threshold: ack_threshold,
+        }.ser(&mut send_buf);
+
+        self.finalize_and_send_packet(to, &mut send_buf).await
+    }
+
+    async fn send_send_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: PacketId, low_water_mark: PacketId) {
         let header = PacketHeader::new(reply_to, PacketKind::ControlSendSync { stream_id });
 
         let mut send_buf = BytesMut::with_capacity(1500); //TODO from pool?
         header.ser(&mut send_buf);
 
-        send_buf.put_u32(high_water_mark);
-        send_buf.put_u32(low_water_mark);
+        ControlMessageSendSync {
+            send_buffer_high_water_mark: high_water_mark,
+            send_buffer_low_water_mark: low_water_mark,
+        }.ser(&mut send_buf);
 
         self.finalize_and_send_packet(to, &mut send_buf).await
     }

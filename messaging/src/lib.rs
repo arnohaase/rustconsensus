@@ -99,7 +99,8 @@
 //! This control message, sent by a receiver, requests the peer to clear its send buffer (*without*
 //!  resetting packet id markers, to allow handling of packets that are in flight).
 //! Apart from that, this message is equivalent to a RECV_SYNC message with all three values set to
-//!  None, requesting a SEND_SYNC message.
+//!  None, requesting a SEND_SYNC message - note that this is an approximation only, but it should
+//!  be close enough to the truth to be meaningful, i.e. INIT may only be sent initially.
 //!
 //! This message is one way (though not the only reasonable one) to start a conversation.
 //!
@@ -122,14 +123,14 @@
 //! This message requests the sender to respond with a `SEND_SYNC` message.
 //!
 //! ```ascii
-//! 0: receive buffer high water mark (varint) - a u32 value for the highest packet id that was
+//! 0: receive buffer high water mark (u64 varint) - a u32 value for the highest packet id that was
 //!     received, or `u32::MAX + 1` if no packet was received yet
-//! *: receive buffer low water mark (varint) - a u32 value for the lowest packet id that was
+//! *: receive buffer low water mark (u64 varint) - a u32 value for the lowest packet id that was
 //!     received but not yet dispatched fully, or `u32::MAX + 1` if no packet was received yet.
 //!     NB: This can be lower than the ACK threshold if some initial part of a multi-packet message
 //!          was received successfully
-//! *: receive buffer ACK threshold (varint) - a u32 value for the highest packet id up to which
-//!     all packets are acknowledged ('late ack'), or `U32::MAX + 1` if no ACK threshold is
+//! *: receive buffer ACK threshold (u64 varint) - a u32 value for the highest packet id up to which
+//!     all packets are received (this is a 'late ack'), or `U32::MAX + 1` if no ACK threshold is
 //!     established yet.
 //! ```
 //!
@@ -200,3 +201,5 @@ mod end_point;
 mod send_stream;
 mod message_dispatcher;
 mod send_socket;
+mod packet_id;
+mod windowed_buffer;
