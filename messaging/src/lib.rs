@@ -50,6 +50,8 @@
 //!
 //! ## Header
 //!
+//! TODO packet id as u64 to make it guaranteed unique per stream
+//!
 //! Packet header (inside a UDP packet) - all numbers in network byte order (BE):
 //! ```ascii
 //! 0:  CRC checksum for the rest of the packet, starting after the checksum: u32
@@ -74,11 +76,11 @@
 //!      NB: Each stream has its own send and receive buffers, incurring per-stream overhead
 //! *:  first message offset (u16): offset of the first message header after the header, or
 //!      FFFF if the frame continues from a message from the previous frame does not finish it.
-//!      Present only for frame kind '0000'.
+//!      Present only for frame kind '000'.
 //!      NB: If this frame completes a multi-frame message without starting a new one, this
 //!       offset points to the first offset after the end of the packet
 //! *:  packet sequence number (u32 BE): sequence number of this frame in its stream.
-//!      Present only for frame kind '0000'.
+//!      Present only for frame kind '000'.
 //!      NB: Sequence numbers are wrap-around, so 0 follows after FFFFFFFF.
 //!```
 //!
@@ -171,6 +173,14 @@
 //! *: (repeated) packet id to be re-sent (varint u32)
 //! ```
 //!
+//! ## Send and receive window
+//!
+//! The send window's position is determined by the id of the next packet to be sent, i.e. by
+//!  its upper bound.
+//!
+//! The receive window's position is determined by the lowest packet id that needs to be retained,
+//!  i.e. by its lower bound.
+//!
 //! ## Related:
 //! * UDT
 //!   * dedicated UDP socket per peer
@@ -202,4 +212,4 @@ mod send_stream;
 mod message_dispatcher;
 mod send_socket;
 mod packet_id;
-mod windowed_buffer;
+

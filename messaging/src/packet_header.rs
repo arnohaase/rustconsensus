@@ -32,7 +32,7 @@ impl PacketHeader {
 pub enum PacketKind {
     RegularSequenced {
         stream_id: u16,
-        first_message_offset: u16,
+        first_message_offset: Option<u16>,
         packet_sequence_number: PacketId,
     },
     OutOfSequence,

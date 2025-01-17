@@ -1,14 +1,12 @@
-use std::collections::BTreeMap;
-use std::hash::Hash;
 use crate::control_messages::ControlMessageSendSync;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use rustc_hash::FxHashMap;
-use tokio::net::UdpSocket;
-use tokio::sync::RwLock;
 use crate::packet_id::PacketId;
 use crate::send_socket::SendSocket;
-use crate::windowed_buffer::WindowedBuffer;
+use std::collections::BTreeMap;
+use std::hash::Hash;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::net::UdpSocket;
+use tokio::sync::RwLock;
 
 struct ReceiveStreamConfig {
 
@@ -22,10 +20,13 @@ struct ReceiveStreamInner {
     peer_addr: SocketAddr,
     self_reply_to_addr: Option<SocketAddr>,
 
+    /// This is the
+    receive_window_lower_bound: Option<PacketId>,
+
     high_water_mark: Option<PacketId>,
     low_water_mark: Option<PacketId>,
     ack_threshold: Option<PacketId>,
-    receive_buffer: WindowedBuffer<Vec<u8>>,
+    receive_buffer: BTreeMap<PacketId, Vec<u8>>,
 }
 impl ReceiveStreamInner {
     async fn do_send_init(&self) {
@@ -34,8 +35,8 @@ impl ReceiveStreamInner {
     }
 
     async fn do_send_recv_sync(&self) {
-        self.send_socket.send_recv_sync(self.self_reply_to_addr, self.peer_addr, self.stream_id, self.high_water_mark, self.low_water_mark, self.ack_threshold)
-            .await
+        // self.send_socket.send_recv_sync(self.self_reply_to_addr, self.peer_addr, self.stream_id, self.high_water_mark, self.low_water_mark, self.ack_threshold)
+        //     .await
     }
 }
 
@@ -65,15 +66,36 @@ impl ReceiveStream {
     pub async fn on_send_sync_message(&self, message: ControlMessageSendSync) {
         let mut inner = self.inner.write().await;
 
+        // adjust the receive window based on the send window:
+        // *
+
+
+
+        // we only have a defined receive window once we received at least one packet
         if let Some(high_water_mark) = inner.high_water_mark {
-            // we only have a defined receive window once we received at least one packet
+
+            // evict packets from the that only contain messages that have a missing part
+            //  below the new sender's low water mark: the sender does not have that missing
+            //  packet in its send buffer any longer, so it is not going to arrive
+
+
+
+
+
+
+
+            // NB: in-flight packets are ignored
+
+
+
+
+            message.send_buffer_low_water_mark;
 
 
 
         }
 
 
-        message.send_buffer_low_water_mark;
 
 
 
@@ -88,8 +110,10 @@ impl ReceiveStream {
         todo!()
     }
 
-    pub async fn on_packet(&self, sequence_number: PacketId, first_message_offset: u16, payload: &[u8]) {
+    pub async fn on_packet(&self, sequence_number: PacketId, first_message_offset: Option<u16>, payload: &[u8]) {
+        let mut inner = self.inner.write().await;
 
+        inner.receive_buffer.insert(sequence_number, payload.to_vec());
 
         todo!()
     }

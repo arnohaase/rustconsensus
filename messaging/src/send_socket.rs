@@ -16,7 +16,7 @@ pub trait SendSocket {
 
     async fn send_control_init(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16);
 
-    async fn send_recv_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: Option<PacketId>, low_water_mark: Option<PacketId>, ack_threshold: Option<PacketId>);
+    async fn send_recv_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: PacketId, low_water_mark: PacketId, ack_threshold: PacketId);
 
     async fn send_send_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: PacketId, low_water_mark: PacketId);
 }
@@ -50,9 +50,9 @@ impl SendSocket for UdpSocket {
         reply_to: Option<SocketAddr>,
         to: SocketAddr,
         stream_id: u16,
-        high_water_mark: Option<PacketId>,
-        low_water_mark: Option<PacketId>,
-        ack_threshold: Option<PacketId>,
+        high_water_mark: PacketId,
+        low_water_mark: PacketId,
+        ack_threshold: PacketId,
     ) {
         let header = PacketHeader::new(reply_to, PacketKind::ControlRecvSync { stream_id });
 
@@ -68,6 +68,7 @@ impl SendSocket for UdpSocket {
         self.finalize_and_send_packet(to, &mut send_buf).await
     }
 
+    //TODO rename 'high water mark' and 'low water mark' to 'send buffer upper bound' and 'send buffer lower bound'
     async fn send_send_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: PacketId, low_water_mark: PacketId) {
         let header = PacketHeader::new(reply_to, PacketKind::ControlSendSync { stream_id });
 
