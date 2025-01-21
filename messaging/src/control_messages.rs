@@ -26,7 +26,7 @@ impl ControlMessageRecvSync {
 
 #[derive(Debug)]
 pub struct ControlMessageSendSync {
-    /// The id *after* the most recently sent packet
+    /// The id *after* the highest sent packet
     pub send_buffer_high_water_mark: PacketId,
     /// The id *after* the oldest packet still in the send buffer
     pub send_buffer_low_water_mark: PacketId,

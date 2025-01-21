@@ -14,6 +14,7 @@ use tokio::sync::RwLock;
 use tokio::time;
 use tracing::field::debug;
 use tracing::{debug, error, trace, warn};
+use crate::MessageHeader::MessageHeader;
 use crate::packet_id::PacketId;
 
 pub struct SendStreamConfig {
@@ -69,14 +70,14 @@ impl SendStreamInner {
         }
 
         //TODO check for off-by-one
-        if let Some(out_of_window) = self.work_in_progress_packet_id.checked_minus(self.config.window_size) {
+        if let Some(out_of_window) = self.work_in_progress_packet_id - self.config.window_size {
             if let Some(dropped_buf) = self.send_buffer.remove(&out_of_window) {
                 //TODO return buf to pool
                 debug!("unacknowledged packet moved out of the send window for stream {} with {:?}", self.stream_id, self.peer_addr);
             }
         }
 
-        self.work_in_progress_packet_id = self.work_in_progress_packet_id.next();
+        self.work_in_progress_packet_id += 1;
     }
 }
 
@@ -139,7 +140,7 @@ impl SendStream {
         //TODO handle / evaluate the client's packet ids
 
         let low_water_mark = inner.send_buffer.keys().next()
-            .map(|k| k.next())
+            .map(|k| *k + 1)
             .unwrap_or(inner.work_in_progress_packet_id);
 
         inner.send_socket.send_send_sync(inner.self_reply_to_addr, inner.peer_addr, inner.stream_id, inner.work_in_progress_packet_id, low_water_mark).await;
@@ -170,7 +171,7 @@ impl SendStream {
 
         let mut wip_buffer = if let Some(wip) = &mut inner.work_in_progress {
             // if the message header does not fit in wip, send and re-init wip
-            if wip.len() + 5 <= self.config.max_packet_len { //TODO actual varint len of message header instead of 5
+            if wip.len() + MessageHeader::SERIALIZED_LEN <= self.config.max_packet_len {
                 wip
             }
             else {
@@ -184,7 +185,10 @@ impl SendStream {
         };
 
         // write message header
-        wip_buffer.put_usize_varint(message.len());
+        MessageHeader::for_message(message)
+            .ser(&mut wip_buffer);
+
+        wip_buffer.put_u32(message.len() as u32); //TODO overflow
 
         // while there is some part of the message left: copy it into WIP, sending and
         //  re-initializing as necessary

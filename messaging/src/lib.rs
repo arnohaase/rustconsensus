@@ -91,7 +91,7 @@
 //! Message header (message may be split across multiple packets)
 //!
 //! ``` ascii
-//! 0: packet length (var-length encoded), starting *after* the encoded length TODO upper limit
+//! 0: packet length (u32 BE), starting *after* the encoded length TODO upper limit
 //! ```
 //!
 //! ## Control messages
@@ -212,4 +212,5 @@ mod send_stream;
 mod message_dispatcher;
 mod send_socket;
 mod packet_id;
+mod MessageHeader;
 
