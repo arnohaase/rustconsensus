@@ -7,15 +7,22 @@ use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use bytes_varint::{VarIntResult, VarIntSupport};
 use tokio::net::UdpSocket;
+use tokio::select;
 use tokio::sync::RwLock;
+use tokio::time::{interval, Interval};
 use tracing::{debug, trace};
 use crate::MessageHeader::MessageHeader;
 use crate::packet_header::PacketHeader;
 
 struct ReceiveStreamConfig {
+    nak_interval: Duration, // configure to roughly 2x RTT
+    sync_interval: Duration, // configure on the order of seconds
+
     receive_window_size: u32,
+    max_num_nak_packets: usize, //TODO limit so it fits into a single packet
 }
 
 struct ReceiveStreamInner {
@@ -89,8 +96,29 @@ impl ReceiveStreamInner {
             .await
     }
 
-    async fn do_send_nak(&self) {
-        todo!()
+    /// Send a NAK for the earliest N missing packets - the assumption is that if more packets are
+    ///  missing, something is seriously wrong, and it is likely better to ask for the second batch
+    ///  only when the first is re-delivered
+    async fn do_send_nak(&mut self) {
+        let mut nak_packets = Vec::new();
+
+        for (&packet_id, &tick) in &self.missing_packet_buffer {
+            if tick >= self.missing_packet_tick_counter {
+                continue;
+            }
+            nak_packets.push(packet_id);
+            if nak_packets.len() == self.config.max_num_nak_packets {
+                break;
+            }
+        }
+
+        if nak_packets.is_empty() {
+            trace!("no missing packets to NAK");
+            return;
+        }
+
+        self.send_socket.send_nak(self.self_reply_to_addr, self.peer_addr, self.stream_id, &nak_packets).await;
+        self.missing_packet_tick_counter += 1;
     }
 
     /// This is the id *after* the highest packet that was received.
@@ -304,6 +332,7 @@ impl ReceiveStreamInner {
 }
 
 pub struct ReceiveStream {
+    config: Arc<ReceiveStreamConfig>,
     inner: RwLock<ReceiveStreamInner>,
 }
 
@@ -327,7 +356,7 @@ impl ReceiveStream {
     }
 
     pub async fn do_send_nak(&self) {
-        self.inner.read().await
+        self.inner.write().await
             .do_send_nak().await;
     }
 
@@ -346,15 +375,15 @@ impl ReceiveStream {
             inner.ack_threshold = message.send_buffer_low_water_mark;
 
             // discard missing packets up to the new ack threshold (and received packets below them)
-            while let Some(packet_id) = inner.missing_packet_buffer.keys().next() {
-                if *packet_id >= inner.ack_threshold {
+            while let Some(&packet_id) = inner.missing_packet_buffer.keys().next() {
+                if packet_id >= inner.ack_threshold {
                     break;
                 }
-                inner.missing_packet_buffer.remove(packet_id);
+                inner.missing_packet_buffer.remove(&packet_id);
 
                 // discard all received packets below the discarded missing packet
-                if let Some(lowest_received) = inner.receive_buffer.keys().next() {
-                    for recv_packet_id in lowest_received.to(*packet_id) {
+                if let Some(&lowest_received) = inner.receive_buffer.keys().next() {
+                    for recv_packet_id in lowest_received.to(packet_id) {
                         inner.receive_buffer.remove(&recv_packet_id);
                     }
                 }
@@ -363,7 +392,8 @@ impl ReceiveStream {
 
         // adjust the high-water mark by adding 'missing' packet ids up to it?
         for packet_id in inner.high_water_mark().to(message.send_buffer_high_water_mark) {
-            inner.missing_packet_buffer.insert(packet_id, inner.missing_packet_tick_counter);
+            let tick_counter = inner.missing_packet_tick_counter;
+            inner.missing_packet_buffer.insert(packet_id, tick_counter);
         }
     }
 
@@ -394,6 +424,24 @@ impl ReceiveStream {
 
         while let Some(buf) = inner.consume_next_message() {
             //TODO dispatch message
+        }
+    }
+
+    /// Active loop - this function never returns, it runs until it is taken out of dispatch
+    pub async fn do_loop(&self) {
+        let mut nak_interval = interval(self.config.nak_interval);
+        let mut sync_interval = interval(self.config.sync_interval);
+
+        loop {
+            select! {
+                _ = nak_interval.tick() => {
+                    self.do_send_nak().await;
+                }
+                _ = sync_interval.tick() => {
+                    //TODO or every N packets, if that is earlier?
+                    self.do_send_recv_sync().await;
+                }
+            }
         }
     }
 }

@@ -170,7 +170,7 @@
 //!
 //! ```ascii
 //! 0: number of NAK'ed packet ids (varint u16)
-//! *: (repeated) packet id to be re-sent (varint u32)
+//! *: (repeated) packet id to be re-sent (u64 BE)
 //! ```
 //!
 //! ## Send and receive window

@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
+use bytes_varint::{VarIntSupport, VarIntSupportMut};
 use tokio::net::UdpSocket;
 use tracing::error;
 use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
@@ -15,6 +16,8 @@ pub trait SendSocket {
     async fn do_send_packet(&self, to: SocketAddr, packet_buf: &[u8]);
 
     async fn send_control_init(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16);
+
+    async fn send_nak(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, nak_packets: &[PacketId]);
 
     async fn send_recv_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: PacketId, low_water_mark: PacketId, ack_threshold: PacketId);
 
@@ -44,6 +47,21 @@ impl SendSocket for UdpSocket {
 
         self.finalize_and_send_packet(to, &mut send_buf).await
     }
+
+    async fn send_nak(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, nak_packets: &[PacketId]) { //TODO StreamId type instead of u16
+        let header = PacketHeader::new(reply_to, PacketKind::ControlNak { stream_id });
+
+        let mut send_buf = BytesMut::with_capacity(1500); //TODO from pool?
+        header.ser(&mut send_buf);
+
+        send_buf.put_usize_varint(nak_packets.len());
+        for &packet_id in nak_packets {
+            send_buf.put_u64(packet_id.to_raw());
+        }
+
+        self.finalize_and_send_packet(to, &mut send_buf).await;
+    }
+
 
     async fn send_recv_sync(
         &self,
