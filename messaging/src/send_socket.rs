@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
-use bytes_varint::{VarIntSupport, VarIntSupportMut};
+use bytes_varint::VarIntSupportMut;
 use tokio::net::UdpSocket;
 use tracing::error;
 use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};

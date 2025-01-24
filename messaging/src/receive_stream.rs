@@ -1,22 +1,19 @@
-use std::cmp::{max, min, Ordering};
-use std::collections::btree_map::Entry;
+use std::cmp::{min, Ordering};
 use crate::control_messages::ControlMessageSendSync;
 use crate::packet_id::PacketId;
 use crate::send_socket::SendSocket;
 use std::collections::BTreeMap;
-use std::hash::Hash;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use bytes_varint::{VarIntResult, VarIntSupport};
 use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-use tokio::time::{interval, Interval};
+use tokio::time::interval;
 use tracing::{debug, trace};
+use crate::message_dispatcher::MessageDispatcher;
 use crate::MessageHeader::MessageHeader;
-use crate::packet_header::PacketHeader;
 
 pub struct ReceiveStreamConfig {
     nak_interval: Duration, // configure to roughly 2x RTT
@@ -74,10 +71,36 @@ struct ReceiveStreamInner {
     missing_packet_tick_counter: u64,
 }
 impl ReceiveStreamInner {
-    pub fn new() -> ReceiveStreamInner {
-        //TODO init missing buffer with ID 0 to establish initial window - same as when receiving a 'jump' in packet IDs
+    fn new(
+        config: Arc<ReceiveStreamConfig>,
+        stream_id: u16,
+        peer_addr: SocketAddr,
+        send_socket: Arc<UdpSocket>,
+        self_addr: SocketAddr,
 
-        todo!()
+    ) -> ReceiveStreamInner {
+        //TODO document the assumption that querying a UdpSocket's local address cannot fail
+        assert_eq!(peer_addr.is_ipv4(), send_socket.local_addr().unwrap().is_ipv4());
+
+        let self_reply_to_addr = if send_socket.local_addr().unwrap() == self_addr {
+            None
+        }
+        else {
+            Some(self_addr)
+        };
+
+        ReceiveStreamInner {
+            config,
+            stream_id,
+            send_socket,
+            peer_addr,
+            self_reply_to_addr,
+            ack_threshold: PacketId::ZERO,
+            undispatched_marker: None,
+            receive_buffer: Default::default(),
+            missing_packet_buffer: Default::default(),
+            missing_packet_tick_counter: 0,
+        }
     }
 
     async fn do_send_init(&self) {
@@ -336,11 +359,31 @@ pub struct ReceiveStream {
     config: Arc<ReceiveStreamConfig>,
     inner: Arc<RwLock<ReceiveStreamInner>>,
     active_handle: JoinHandle<()>,
+    message_dispatcher: Arc<dyn MessageDispatcher>,
+}
+
+impl Drop for ReceiveStream {
+    fn drop(&mut self) {
+        self.active_handle.abort();
+    }
 }
 
 impl ReceiveStream {
-    pub fn new(config: Arc<ReceiveStreamConfig>) -> ReceiveStream {
-        let inner: Arc<RwLock<ReceiveStreamInner>> = todo!();
+    pub fn new(
+        config: Arc<ReceiveStreamConfig>,
+        stream_id: u16,
+        peer_addr: SocketAddr,
+        send_socket: Arc<UdpSocket>,
+        self_addr: SocketAddr,
+        message_dispatcher: Arc<dyn MessageDispatcher>,
+    ) -> ReceiveStream {
+        let inner: Arc<RwLock<ReceiveStreamInner>> = Arc::new(RwLock::new(ReceiveStreamInner::new(
+            config.clone(),
+            stream_id,
+            peer_addr,
+            send_socket,
+            self_addr,
+        )));
 
         let active_handle = tokio::spawn(Self::do_loop(config.clone(), inner.clone()));
 
@@ -348,6 +391,7 @@ impl ReceiveStream {
             config,
             inner,
             active_handle,
+            message_dispatcher,
         }
     }
 
@@ -423,12 +467,12 @@ impl ReceiveStream {
         inner.sanitize_after_update();
 
         while let Some(buf) = inner.consume_next_message() {
-            //TODO dispatch message
+            self.message_dispatcher.on_message(inner.peer_addr, Some(inner.stream_id), &buf).await;
         }
     }
 
     /// Active loop - this function never returns, it runs until it is taken out of dispatch
-    pub async fn do_loop(config: Arc<ReceiveStreamConfig>, inner: Arc<RwLock<ReceiveStreamInner>>) {
+    async fn do_loop(config: Arc<ReceiveStreamConfig>, inner: Arc<RwLock<ReceiveStreamInner>>) {
         let mut nak_interval = interval(config.nak_interval);
         let mut sync_interval = interval(config.sync_interval);
 

@@ -17,16 +17,16 @@ use crate::send_stream::SendStream;
 /// EndPoint is the place where all other parts of the protocol come together: It listens on a
 ///  UdpSocket, dispatching incoming packets to their corresponding channels, and has an API for
 ///  application code to send messages.
-struct EndPoint {
+pub struct EndPoint {
     receive_socket: Arc<UdpSocket>,
     send_socket_v4: Arc<UdpSocket>,
     send_socket_v6: Arc<UdpSocket>,
     receive_streams: Mutex<FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>>>, //TODO persistent collection instead of Mutex
     send_streams: Mutex<FxHashMap<(SocketAddr, u16), Arc<SendStream>>>,
-    message_dispatcher: Arc<MessageDispatcher>,
+    message_dispatcher: Arc<dyn MessageDispatcher>,
 }
 impl EndPoint {
-    async fn new(addrs: impl ToSocketAddrs) -> anyhow::Result<EndPoint> {
+    async fn new(addrs: impl ToSocketAddrs, message_dispatcher: Arc<dyn MessageDispatcher>) -> anyhow::Result<EndPoint> {
         //TODO "don't fragment" flag
         let receive_socket = Arc::new(UdpSocket::bind(addrs).await?);
         let (send_socket_v4, send_socket_v6) = if receive_socket.local_addr()?.is_ipv6() {
@@ -42,7 +42,7 @@ impl EndPoint {
             send_socket_v6,
             receive_streams: Default::default(),
             send_streams: Default::default(),
-            message_dispatcher: Arc::new(MessageDispatcher {}),
+            message_dispatcher,
         })
     }
 
@@ -93,13 +93,32 @@ impl EndPoint {
         todo!()
     }
 
+    fn get_send_socket(&self, peer_addr: SocketAddr) -> Arc<UdpSocket> {
+        if peer_addr.is_ipv4() {
+            self.send_socket_v4.clone()
+        }
+        else {
+            self.send_socket_v6.clone()
+        }
+    }
+
     async fn get_receive_stream(&self, addr: SocketAddr, stream_id: u16) -> Arc<ReceiveStream> {
         match self.receive_streams
             .lock().await
             .entry((addr, stream_id))
         {
             Entry::Occupied(e) => e.get().clone(),
-            Entry::Vacant(e) => e.insert(Arc::new(ReceiveStream::new(self.get_receive_config(stream_id)))).clone()
+            Entry::Vacant(e) => {
+                let recv_strm = ReceiveStream::new(
+                    self.get_receive_config(stream_id),
+                    stream_id,
+                    addr,
+                    self.get_send_socket(addr),
+                    self.receive_socket.local_addr().unwrap(),
+                    self.message_dispatcher.clone(),
+                );
+                e.insert(Arc::new(recv_strm)).clone()
+            }
         }
     }
 
