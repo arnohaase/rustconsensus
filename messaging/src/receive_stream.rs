@@ -12,12 +12,13 @@ use bytes_varint::{VarIntResult, VarIntSupport};
 use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use tokio::time::{interval, Interval};
 use tracing::{debug, trace};
 use crate::MessageHeader::MessageHeader;
 use crate::packet_header::PacketHeader;
 
-struct ReceiveStreamConfig {
+pub struct ReceiveStreamConfig {
     nak_interval: Duration, // configure to roughly 2x RTT
     sync_interval: Duration, // configure on the order of seconds
 
@@ -333,12 +334,21 @@ impl ReceiveStreamInner {
 
 pub struct ReceiveStream {
     config: Arc<ReceiveStreamConfig>,
-    inner: RwLock<ReceiveStreamInner>,
+    inner: Arc<RwLock<ReceiveStreamInner>>,
+    active_handle: JoinHandle<()>,
 }
 
 impl ReceiveStream {
-    pub fn new() -> ReceiveStream {
-        todo!()
+    pub fn new(config: Arc<ReceiveStreamConfig>) -> ReceiveStream {
+        let inner: Arc<RwLock<ReceiveStreamInner>> = todo!();
+
+        let active_handle = tokio::spawn(Self::do_loop(config.clone(), inner.clone()));
+
+        ReceiveStream {
+            config,
+            inner,
+            active_handle,
+        }
     }
 
     pub async fn peer_addr(&self) -> SocketAddr {
@@ -348,16 +358,6 @@ impl ReceiveStream {
     pub async fn do_send_init(&self) {
         self.inner.read().await
             .do_send_init().await;
-    }
-
-    pub async fn do_send_recv_sync(&self) {
-        self.inner.read().await
-            .do_send_recv_sync().await;
-    }
-
-    pub async fn do_send_nak(&self) {
-        self.inner.write().await
-            .do_send_nak().await;
     }
 
     pub async fn on_send_sync_message(&self, message: ControlMessageSendSync) {
@@ -428,18 +428,20 @@ impl ReceiveStream {
     }
 
     /// Active loop - this function never returns, it runs until it is taken out of dispatch
-    pub async fn do_loop(&self) {
-        let mut nak_interval = interval(self.config.nak_interval);
-        let mut sync_interval = interval(self.config.sync_interval);
+    pub async fn do_loop(config: Arc<ReceiveStreamConfig>, inner: Arc<RwLock<ReceiveStreamInner>>) {
+        let mut nak_interval = interval(config.nak_interval);
+        let mut sync_interval = interval(config.sync_interval);
 
         loop {
             select! {
                 _ = nak_interval.tick() => {
-                    self.do_send_nak().await;
+                    inner.write().await
+                    .do_send_nak().await;
                 }
                 _ = sync_interval.tick() => {
                     //TODO or every N packets, if that is earlier?
-                    self.do_send_recv_sync().await;
+                    inner.write().await
+                    .do_send_recv_sync().await;
                 }
             }
         }

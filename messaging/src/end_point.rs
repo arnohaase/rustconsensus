@@ -8,7 +8,7 @@ use tracing::{error, warn};
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::packet_header::{PacketHeader, PacketKind};
-use crate::receive_stream::ReceiveStream;
+use crate::receive_stream::{ReceiveStream, ReceiveStreamConfig};
 use crate::send_stream::SendStream;
 
 
@@ -89,13 +89,17 @@ impl EndPoint {
         }
     }
 
+    fn get_receive_config(&self, stream_id: u16) -> Arc<ReceiveStreamConfig> {
+        todo!()
+    }
+
     async fn get_receive_stream(&self, addr: SocketAddr, stream_id: u16) -> Arc<ReceiveStream> {
         match self.receive_streams
             .lock().await
             .entry((addr, stream_id))
         {
             Entry::Occupied(e) => e.get().clone(),
-            Entry::Vacant(e) => e.insert(Arc::new(ReceiveStream::new())).clone()
+            Entry::Vacant(e) => e.insert(Arc::new(ReceiveStream::new(self.get_receive_config(stream_id)))).clone()
         }
     }
 
