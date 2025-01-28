@@ -11,7 +11,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tokio::time;
 use tracing::{debug, trace};
-use crate::MessageHeader::MessageHeader;
+use crate::message_header::MessageHeader;
 use crate::packet_id::PacketId;
 
 pub struct SendStreamConfig {
@@ -35,7 +35,7 @@ struct SendStreamInner {
 }
 impl SendStreamInner {
     fn packet_header_len(&self) -> usize {
-        todo!() // depends on reply-to address and stream id
+        PacketHeader::serialized_len_for_stream_header(self.self_reply_to_addr)
     }
 
     fn init_wip(&mut self, first_message_offset: Option<u16>) -> &mut BytesMut {
@@ -85,11 +85,29 @@ pub struct SendStream {
 }
 
 impl SendStream {
-    pub fn new() -> SendStream {
+    pub fn new(
+        config: Arc<SendStreamConfig>,
+        stream_id: u16,
+        send_socket: Arc<UdpSocket>,
+        peer_addr: SocketAddr,
+        reply_to_addr: Option<SocketAddr>,
+    ) -> SendStream {
+        let inner = SendStreamInner {
+            config: config.clone(),
+            stream_id,
+            send_socket,
+            peer_addr,
+            self_reply_to_addr: reply_to_addr,
+            send_buffer: BTreeMap::default(),
+            work_in_progress_packet_id: PacketId::ZERO,
+            work_in_progress: None,
+            work_in_progress_late_send_handle: None,
+        };
 
-        //TODO initialize the send buffer's high water mark to Some(0)
-
-        todo!()
+        SendStream {
+            config,
+            inner: Arc::new(RwLock::new(inner)),
+        }
     }
 
     pub async fn peer_addr(&self) -> SocketAddr {
@@ -185,8 +203,6 @@ impl SendStream {
         MessageHeader::for_message(message)
             .ser(&mut wip_buffer);
 
-        wip_buffer.put_u32(message.len() as u32); //TODO overflow
-
         // while there is some part of the message left: copy it into WIP, sending and
         //  re-initializing as necessary
         loop {
@@ -201,6 +217,8 @@ impl SendStream {
                 break;
             }
 
+            // getting here means that the message continues in (at least) the next packet
+
             inner.do_send_work_in_progress().await;
 
             let first_message_offset = if message.len() + inner.packet_header_len() > self.config.max_packet_len {
@@ -212,7 +230,8 @@ impl SendStream {
             wip_buffer = inner.init_wip(first_message_offset);
         }
 
-        if wip_buffer.len() + 5 > self.config.max_packet_len { //TODO actual varint len of message header instead of 5
+        if wip_buffer.len() + MessageHeader::SERIALIZED_LEN > self.config.max_packet_len {
+            // there is no room for another message header in the buffer, so we send it
             inner.do_send_work_in_progress().await
         }
 

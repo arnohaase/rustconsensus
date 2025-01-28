@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{debug, trace};
 use crate::message_dispatcher::MessageDispatcher;
-use crate::MessageHeader::MessageHeader;
+use crate::message_header::MessageHeader;
 
 pub struct ReceiveStreamConfig {
     nak_interval: Duration, // configure to roughly 2x RTT

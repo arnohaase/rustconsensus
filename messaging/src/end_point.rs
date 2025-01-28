@@ -9,7 +9,7 @@ use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, Control
 use crate::message_dispatcher::MessageDispatcher;
 use crate::packet_header::{PacketHeader, PacketKind};
 use crate::receive_stream::{ReceiveStream, ReceiveStreamConfig};
-use crate::send_stream::SendStream;
+use crate::send_stream::{SendStream, SendStreamConfig};
 
 
 //TODO everywhere: stream -> channel
@@ -92,6 +92,10 @@ impl EndPoint {
     fn get_receive_config(&self, stream_id: u16) -> Arc<ReceiveStreamConfig> {
         todo!()
     }
+    fn get_send_config(&self, stream_id: u16) -> Arc<SendStreamConfig> {
+        todo!()
+    }
+
 
     fn get_send_socket(&self, peer_addr: SocketAddr) -> Arc<UdpSocket> {
         if peer_addr.is_ipv4() {
@@ -122,13 +126,29 @@ impl EndPoint {
         }
     }
 
+    async fn get_reply_to_addr(&self, for_addr: SocketAddr) -> Option<SocketAddr> {
+        let local_addr = self.receive_socket.local_addr().unwrap();
+        match (local_addr.is_ipv4(), for_addr.is_ipv4()) {
+            (true, true) | (false, false) => None,
+            (true, false) | (false, true) => Some(local_addr),
+        }
+    }
+
     async fn get_send_stream(&self, addr: SocketAddr, stream_id: u16) -> Arc<SendStream> {
         match self.send_streams
             .lock().await
             .entry((addr, stream_id))
         {
             Entry::Occupied(e) => e.get().clone(),
-            Entry::Vacant(e) => e.insert(Arc::new(SendStream::new())).clone()
+            Entry::Vacant(e) => {
+                e.insert(Arc::new(SendStream::new(
+                    self.get_send_config(stream_id),
+                    stream_id,
+                    self.get_send_socket(addr),
+                    addr,
+                    self.get_reply_to_addr(addr),
+                ))).clone()
+            }
         }
     }
 

@@ -7,9 +7,9 @@ version.workspace = true
 [dependencies]
 anyhow = "*"
 async-trait = "*"
+bitflags = "*"
 bytes = "*"
+bytes-varint = "*"
 rustc-hash = "*"
 tokio = { version = "*", features = ["full"] } # TODO
 tracing = "*"
-bytes-varint = "*"
-log = "0.4.25"

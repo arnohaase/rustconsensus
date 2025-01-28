@@ -54,8 +54,8 @@
 //!
 //! Packet header (inside a UDP packet) - all numbers in network byte order (BE):
 //! ```ascii
-//! 0:  CRC checksum for the rest of the packet, starting after the checksum: u32
-//! 4:  protocol version (u8)
+//! 0:  protocol version (u8)
+//! 1:  CRC checksum for the rest of the packet, starting after the checksum: u32
 //! 5:  flags (8 bits):
 //!     * bit 0-1: protocol version of the reply-to address:
 //!       * 00  V4, explicitly provided in packet
@@ -69,9 +69,8 @@
 //!       * 100 RECV_SYNC
 //!       * 101 SEND_SYNC
 //!     * 5-7: unused, should be 0
-//! 6:  reply-to address (4 bytes if IP V4, 7 bytes if IP V6)
-//! *:  reply-to port: u16
-//! *:  stream id (varint up to u16): the id of the multiplexed stream that this frame belongs
+//! 6:  reply-to address (4+2 bytes if IP V4, 16+2 bytes if IP V6, 0 bytes if 'identical to UDP sender')
+//! *:  stream id (u16): the id of the multiplexed stream that this frame belongs
 //!      or refers to. Not present for frame kind '001'.
 //!      NB: Each stream has its own send and receive buffers, incurring per-stream overhead
 //! *:  first message offset (u16): offset of the first message header after the header, or
@@ -79,14 +78,12 @@
 //!      Present only for frame kind '000'.
 //!      NB: If this frame completes a multi-frame message without starting a new one, this
 //!       offset points to the first offset after the end of the packet
-//! *:  packet sequence number (u32 BE): sequence number of this frame in its stream.
+//! *:  packet sequence number (u64 BE): sequence number of this frame in its stream.
 //!      Present only for frame kind '000'.
-//!      NB: Sequence numbers are wrap-around, so 0 follows after FFFFFFFF.
 //!```
 //!
-//! The packet header has variable size, ranging from 12 bytes for a control message with IP V4
-//!  reply-to address to 25 bytes for a sequenced packet with IP V6 reply-to address and maximum
-//!  stream ID and packet sequence numbers.
+//! The packet header has variable size, ranging from 6 bytes for a control message with UDP
+//!  reply-to address to 36 bytes for a sequenced packet with IP V6 reply-to address.
 //!
 //! Message header (message may be split across multiple packets)
 //!
@@ -122,8 +119,8 @@
 //!  remove them from its send buffer. This acts as a safety net - acknowledgement of messages
 //!  is taken care of in `NAK` messages during regular operation.
 //!
-//! This message requests the sender to respond with a `SEND_SYNC` message.
 //!
+//! This message requests the sender to respond with a `SEND_SYNC` message.
 //! ```ascii
 //! 0: receive buffer high water mark (u64 varint) - a u32 value for the highest packet id that was
 //!     received, or `u32::MAX + 1` if no packet was received yet
@@ -212,5 +209,5 @@ mod send_stream;
 mod message_dispatcher;
 mod send_socket;
 mod packet_id;
-mod MessageHeader;
+mod message_header;
 
