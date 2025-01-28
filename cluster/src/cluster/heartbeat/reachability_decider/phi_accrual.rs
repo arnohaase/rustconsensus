@@ -5,7 +5,7 @@ use ordered_float::OrderedFloat;
 use std::cmp::max;
 use std::time::Duration;
 use tokio::time::Instant;
-use tracing::{info, warn};
+use tracing::warn;
 
 
 /// The [PhiAccrualDecider] assumes that the time between two received heartbeats (i.e. including

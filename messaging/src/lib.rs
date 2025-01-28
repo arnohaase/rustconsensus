@@ -122,15 +122,13 @@
 //!
 //! This message requests the sender to respond with a `SEND_SYNC` message.
 //! ```ascii
-//! 0: receive buffer high water mark (u64 varint) - a u32 value for the highest packet id that was
-//!     received, or `u32::MAX + 1` if no packet was received yet
-//! *: receive buffer low water mark (u64 varint) - a u32 value for the lowest packet id that was
-//!     received but not yet dispatched fully, or `u32::MAX + 1` if no packet was received yet.
+//! 0: receive buffer high water mark (u64) - the packet id *after* the highest received packet
+//! 8: receive buffer low water mark (u64) - the packet id *after* the lowest packet id currently
+//!     being buffered
 //!     NB: This can be lower than the ACK threshold if some initial part of a multi-packet message
 //!          was received successfully
-//! *: receive buffer ACK threshold (u64 varint) - a u32 value for the highest packet id up to which
-//!     all packets are received (this is a 'late ack'), or `U32::MAX + 1` if no ACK threshold is
-//!     established yet.
+//! 16: receive buffer ACK threshold (u64) - the packet id *before* which all packets will never
+//!     be NAK'ed, so the sender can clear them from its buffer
 //! ```
 //!
 //! *SEND_SYNC*
@@ -139,15 +137,17 @@
 //!  some statistics about the send buffers.
 //!
 //! ```ascii
-//! 0: send buffer high water mark (u32 BE) - the packet id after the highest sent
+//! 0: send buffer high water mark (u64 BE) - the packet id after the highest sent
 //!     packet, i.e. the next packet to be sent
-//! *: send buffer low water mark (u32 BE) - the lowest packet id for which a packet
+//! *: send buffer low water mark (u64 BE) - the lowest packet id for which a packet
 //!     is retained for resending, or the high water mark if none
 //! ```
 //!
 //! TODO timestamp / RTT
 //!
 //! *NAK*
+//!
+//! TODO merge NAK with RECV_SYNC?
 //!
 //! Request that the peer re-send a specific set of packets that got dropped or corrupted, or
 //!  were not delivered in a timely fashion for some reason. This is the protocol's primary

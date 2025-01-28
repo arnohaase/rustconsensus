@@ -7,7 +7,7 @@ use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;

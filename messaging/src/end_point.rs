@@ -126,7 +126,7 @@ impl EndPoint {
         }
     }
 
-    async fn get_reply_to_addr(&self, for_addr: SocketAddr) -> Option<SocketAddr> {
+    fn get_reply_to_addr(&self, for_addr: SocketAddr) -> Option<SocketAddr> {
         let local_addr = self.receive_socket.local_addr().unwrap();
         match (local_addr.is_ipv4(), for_addr.is_ipv4()) {
             (true, true) | (false, false) => None,

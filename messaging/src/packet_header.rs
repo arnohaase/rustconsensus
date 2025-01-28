@@ -153,6 +153,7 @@ impl PacketHeader {
             Flags::KIND_NAK => PacketKind::ControlNak { stream_id: buf.try_get_u16()? },
             Flags::KIND_SEND_SYNC => PacketKind::ControlSendSync { stream_id: buf.try_get_u16()? },
             Flags::KIND_RECV_SYNC => PacketKind::ControlRecvSync { stream_id: buf.try_get_u16()? },
+            _ => return Err(anyhow::anyhow!("Unsupported flags for packet kind: {:x}", flags.bits())),
         };
 
         Ok(PacketHeader {

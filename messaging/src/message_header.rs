@@ -1,4 +1,5 @@
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
+use bytes_varint::try_get_fixed::TryGetFixedSupport;
 
 pub struct MessageHeader {
     pub message_len: u32,
@@ -15,10 +16,13 @@ impl MessageHeader {
     }
 
     pub fn ser(&self, buf: &mut BytesMut) {
-        todo!()
+        buf.put_u32(self.message_len);
     }
 
-    pub fn deser(mut buf: &impl Buf) -> anyhow::Result<Self> {
-        todo!()
+    pub fn deser(buf: &mut impl Buf) -> anyhow::Result<Self> {
+        let message_len = buf.try_get_u32()?;
+        Ok(MessageHeader {
+            message_len,
+        })
     }
 }
