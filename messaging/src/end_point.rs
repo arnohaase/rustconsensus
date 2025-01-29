@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use rustc_hash::FxHashMap;
 use tokio::net::{ToSocketAddrs, UdpSocket};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, warn};
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
@@ -24,9 +24,20 @@ pub struct EndPoint {
     receive_streams: Mutex<FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>>>, //TODO persistent collection instead of Mutex
     send_streams: Mutex<FxHashMap<(SocketAddr, u16), Arc<SendStream>>>,
     message_dispatcher: Arc<dyn MessageDispatcher>,
+    default_receive_config: Arc<ReceiveStreamConfig>,
+    specific_receive_configs: FxHashMap<u16, Arc<ReceiveStreamConfig>>,
+    default_send_config: Arc<SendStreamConfig>,
+    specific_send_configs: FxHashMap<u16, Arc<SendStreamConfig>>,
 }
 impl EndPoint {
-    async fn new(addrs: impl ToSocketAddrs, message_dispatcher: Arc<dyn MessageDispatcher>) -> anyhow::Result<EndPoint> {
+    async fn new(
+        addrs: impl ToSocketAddrs,
+        message_dispatcher: Arc<dyn MessageDispatcher>,
+        default_receive_config: Arc<ReceiveStreamConfig>,
+        specific_receive_configs: FxHashMap<u16, Arc<ReceiveStreamConfig>>,
+        default_send_config: Arc<SendStreamConfig>,
+        specific_send_configs: FxHashMap<u16, Arc<SendStreamConfig>>,
+    ) -> anyhow::Result<EndPoint> {
         //TODO "don't fragment" flag
         let receive_socket = Arc::new(UdpSocket::bind(addrs).await?);
         let (send_socket_v4, send_socket_v6) = if receive_socket.local_addr()?.is_ipv6() {
@@ -43,6 +54,10 @@ impl EndPoint {
             receive_streams: Default::default(),
             send_streams: Default::default(),
             message_dispatcher,
+            default_receive_config,
+            specific_receive_configs,
+            default_send_config,
+            specific_send_configs,
         })
     }
 
@@ -90,12 +105,16 @@ impl EndPoint {
     }
 
     fn get_receive_config(&self, stream_id: u16) -> Arc<ReceiveStreamConfig> {
-        todo!()
-    }
-    fn get_send_config(&self, stream_id: u16) -> Arc<SendStreamConfig> {
-        todo!()
+        self.specific_receive_configs.get(&stream_id)
+            .cloned()
+            .unwrap_or(self.default_receive_config.clone())
     }
 
+    fn get_send_config(&self, stream_id: u16) -> Arc<SendStreamConfig> {
+        self.specific_send_configs.get(&stream_id)
+            .cloned()
+            .unwrap_or(self.default_send_config.clone())
+    }
 
     fn get_send_socket(&self, peer_addr: SocketAddr) -> Arc<UdpSocket> {
         if peer_addr.is_ipv4() {

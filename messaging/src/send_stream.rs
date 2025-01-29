@@ -115,24 +115,21 @@ impl SendStream {
     }
 
     pub async fn on_init_message(&self) {
-        //TODO INIT does not seem to make sense any more
+        let mut inner = self.inner.write().await;
+        debug!("received INIT message from {:?} for stream {}", inner.peer_addr, inner.stream_id);
 
-        // let mut inner = self.inner.write().await;
-        // debug!("received INIT message from {:?} for stream {}", inner.peer_addr, inner.stream_id);
-        //
-        // inner.send_buffer.clear();
-        // inner.work_in_progress = None;
-        // if let Some(handle) = &inner.work_in_progress_late_send_handle {
-        //     handle.abort();
-        // }
-        //
-        // self.on_recv_sync_message(ControlMessageRecvSync {
-        //     receive_buffer_high_water_mark: None,
-        //     receive_buffer_low_water_mark: None,
-        //     receive_buffer_ack_threshold: None,
-        // }).await;
+        // discard all previously sent packets
+        inner.work_in_progress = None;
+        inner.send_buffer.clear();
 
-        todo!()
+        // reply with a SEND_SYNC so the client can adjust its receive window
+        inner.send_socket.send_send_sync(
+            inner.self_reply_to_addr,
+            inner.peer_addr,
+            inner.stream_id,
+            inner.work_in_progress_packet_id,
+            inner.work_in_progress_packet_id,
+        ).await;
     }
 
     pub async fn on_recv_sync_message(&self, message: ControlMessageRecvSync) {

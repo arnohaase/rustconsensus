@@ -98,8 +98,9 @@
 //! This control message, sent by a receiver, requests the peer to clear its send buffer (*without*
 //!  resetting packet id markers, to allow handling of packets that are in flight).
 //! Apart from that, this message is equivalent to a RECV_SYNC message with all three values set to
-//!  None, requesting a SEND_SYNC message - note that this is an approximation only, but it should
+//!  ZERO, requesting a SEND_SYNC message - note that this is an approximation only, but it should
 //!  be close enough to the truth to be meaningful, i.e. INIT may only be sent initially.
+//!  TODO is this the right granularity and abstraction?
 //!
 //! This message is one way (though not the only reasonable one) to start a conversation.
 //!
