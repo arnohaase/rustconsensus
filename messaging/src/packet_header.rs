@@ -165,7 +165,7 @@ impl PacketHeader {
     }
 
     pub fn init_checksum(buf: &mut [u8]) {
-        todo!()
+        //TODO init checksum - or handle checksumming in the encryption wrapper?
     }
 }
 

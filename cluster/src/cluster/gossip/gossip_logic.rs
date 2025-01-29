@@ -324,7 +324,7 @@ mod tests {
     use crate::cluster::cluster_config::ClusterConfig;
     use crate::cluster::cluster_events::ClusterEventNotifier;
     use crate::cluster::cluster_state::MembershipState::*;
-    use crate::cluster::cluster_state::{ClusterState, MembershipState, NodeReachability, NodeState};
+    use crate::cluster::cluster_state::{ClusterState, NodeReachability, NodeState};
     use crate::cluster::gossip::gossip_logic::{gossip_detailed_digest_with_given_nonce, Gossip};
     use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipMessage, GossipNodesData, GossipSummaryDigestData};
     use crate::node_state;

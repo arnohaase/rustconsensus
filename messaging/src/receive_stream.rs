@@ -11,7 +11,7 @@ use tokio::select;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::message_header::MessageHeader;
 
@@ -228,6 +228,16 @@ impl ReceiveStreamInner {
     }
 
     fn consume_next_message(&mut self) -> Option<Vec<u8>> {
+        loop {
+            match self._consume_next_message() {
+                ConsumeResult::Message(buf) => return Some(buf),
+                ConsumeResult::None => return None,
+                ConsumeResult::Retry => {}
+            }
+        }
+    }
+
+    fn _consume_next_message(&mut self) -> ConsumeResult {
         //TODO there is a potential optimization here by using impl<Buf> to avoid copying
         //TODO optimization: call this only if the first missing packet was added, or the buffer was empty
 
@@ -255,18 +265,26 @@ impl ReceiveStreamInner {
             }
         }
         else {
-            return None;
+            return ConsumeResult::None;
         };
 
         if next_offs as usize >= buf.len() {
-            todo!("inconsistent packet - log, drop, sanitize, consume at new location");
+            warn!("packet #{} as low water mark with first message offset {} pointing after the end of the packet {} - skipping", low_water_mark, next_offs, buf.len());
+            self.receive_buffer.remove(&low_water_mark);
+            self.sanitize_after_update();
+            return ConsumeResult::Retry;
         }
 
         let mut buf = &buf[next_offs as usize..];
         let header = match MessageHeader::deser(&mut buf) {
             Ok(header) => header,
             Err(_) => {
-                todo!("inconsistent packet - log, drop, sanitize, consume at new location");
+                //NB: This is the *first* packet of a message, so the 'first message' offset must point
+                //     to an actual message header
+                warn!("packet #{} as low water mark: first message offset {} does not point to a valid message header - skipping", low_water_mark, next_offs);
+                self.receive_buffer.remove(&low_water_mark);
+                self.sanitize_after_update();
+                return ConsumeResult::Retry;
             }
         };
 
@@ -274,17 +292,17 @@ impl ReceiveStreamInner {
             Ordering::Less => {
                 // the message is contained in the packet
                 self.undispatched_marker = Some((low_water_mark, next_offs + MessageHeader::SERIALIZED_LEN_U16 + header.message_len as u16));
-                Some(buf[..header.message_len as usize].to_vec())
+                ConsumeResult::Message(buf[..header.message_len as usize].to_vec())
             }
             Ordering::Equal => {
-                // the message terminates the packet
+                // this packet terminates the packet
 
                 let result_buf = buf[..header.message_len as usize].to_vec(); //TODO overflow
 
                 self.undispatched_marker = None;
                 self.receive_buffer.remove(&low_water_mark);
 
-                Some(result_buf)
+                ConsumeResult::Message(result_buf)
             }
             Ordering::Greater => {
                 // start of a multi-packet message
@@ -295,6 +313,8 @@ impl ReceiveStreamInner {
                     self.receive_buffer.remove(&low_water_mark);
 
                     for packet_id in self.low_water_mark().to(PacketId::MAX) {
+                        // iterate through follow-up packets of a multi-packet message
+
                         //TODO check the assembly buffer against configured maximum message size and header.message_len
 
                         let (offs, buf) = self.receive_buffer.get(&packet_id)
@@ -307,7 +327,10 @@ impl ReceiveStreamInner {
                             }
                             Some(offs) => {
                                 if offs as usize > buf.len() {
-                                    todo!("inconsistent packet - skip the entire thing")
+                                    warn!("packet #{} has first message offset {} pointing after the end of the packet {} - skipping", packet_id, next_offs, buf.len());
+                                    self.receive_buffer.remove(&packet_id);
+                                    self.sanitize_after_update();
+                                    return ConsumeResult::Retry;
                                 }
 
                                 assembly_buffer.extend_from_slice(&buf[..offs as usize]);
@@ -325,13 +348,15 @@ impl ReceiveStreamInner {
 
                     // check buffer length against declared message length
                     if assembly_buffer.len() != header.message_len as usize {
-                        todo!("inconsistent - skip the entire thing");
+                        warn!("packet #{}: actual message length {} is different from length in messsage header {} - skipping", low_water_mark, next_offs, buf.len());
+                        self.sanitize_after_update();
+                        return ConsumeResult::Retry;
                     }
 
-                    Some(assembly_buffer)
+                    ConsumeResult::Message(assembly_buffer)
                 }
                 else {
-                    None
+                    ConsumeResult::None
                 }
             }
         }
@@ -490,4 +515,10 @@ impl ReceiveStream {
             }
         }
     }
+}
+
+enum ConsumeResult {
+    Message(Vec<u8>),
+    None,
+    Retry,
 }
