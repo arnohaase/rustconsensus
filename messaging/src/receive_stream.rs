@@ -348,7 +348,7 @@ impl ReceiveStreamInner {
 
                     // check buffer length against declared message length
                     if assembly_buffer.len() != header.message_len as usize {
-                        warn!("packet #{}: actual message length {} is different from length in messsage header {} - skipping", low_water_mark, next_offs, buf.len());
+                        warn!("packet #{}: actual message length {} is different from length in messsage header {} - skipping", low_water_mark, header.message_len, assembly_buffer.len());
                         self.sanitize_after_update();
                         return ConsumeResult::Retry;
                     }
