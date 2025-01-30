@@ -30,7 +30,7 @@ pub struct EndPoint {
     specific_send_configs: FxHashMap<u16, Arc<SendStreamConfig>>,
 }
 impl EndPoint {
-    async fn new(
+    pub async fn new(
         addrs: impl ToSocketAddrs,
         message_dispatcher: Arc<dyn MessageDispatcher>,
         default_receive_config: Arc<ReceiveStreamConfig>,
@@ -61,7 +61,7 @@ impl EndPoint {
         })
     }
 
-    async fn recv_loop(&self)  {
+    pub async fn recv_loop(&self)  {
         let mut buf = [0u8; 1500]; //TODO configurable size
         loop {
             let (num_read, from) = match self.receive_socket.recv_from(&mut buf).await {

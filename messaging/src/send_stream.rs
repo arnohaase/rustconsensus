@@ -15,9 +15,9 @@ use crate::message_header::MessageHeader;
 use crate::packet_id::PacketId;
 
 pub struct SendStreamConfig {
-    max_packet_len: usize, //TODO calculated from MTU, encryption wrapper, ...
-    late_send_delay: Option<Duration>,
-    window_size: u64, //TODO ensure that this is <= u32::MAX / 4 (or maybe a far smaller upper bound???)
+    pub max_packet_len: usize, //TODO calculated from MTU, encryption wrapper, ...
+    pub late_send_delay: Option<Duration>,
+    pub send_window_size: u64, //TODO ensure that this is <= u32::MAX / 4 (or maybe a far smaller upper bound???)
 }
 
 struct SendStreamInner {
@@ -67,7 +67,7 @@ impl SendStreamInner {
         }
 
         //TODO check for off-by-one
-        if let Some(out_of_window) = self.work_in_progress_packet_id - self.config.window_size {
+        if let Some(out_of_window) = self.work_in_progress_packet_id - self.config.send_window_size {
             if let Some(dropped_buf) = self.send_buffer.remove(&out_of_window) {
                 //TODO return buf to pool
                 debug!("unacknowledged packet moved out of the send window for stream {} with {:?}", self.stream_id, self.peer_addr);

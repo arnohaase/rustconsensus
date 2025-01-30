@@ -204,10 +204,10 @@
 
 mod packet_header;
 mod control_messages;
-mod receive_stream;
-mod end_point;
-mod send_stream;
-mod message_dispatcher;
+pub mod receive_stream;
+pub mod end_point;
+pub mod send_stream;
+pub mod message_dispatcher;
 mod send_socket;
 mod packet_id;
 mod message_header;

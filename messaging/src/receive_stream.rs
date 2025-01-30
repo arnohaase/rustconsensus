@@ -16,11 +16,11 @@ use crate::message_dispatcher::MessageDispatcher;
 use crate::message_header::MessageHeader;
 
 pub struct ReceiveStreamConfig {
-    nak_interval: Duration, // configure to roughly 2x RTT
-    sync_interval: Duration, // configure on the order of seconds
+    pub nak_interval: Duration, // configure to roughly 2x RTT
+    pub sync_interval: Duration, // configure on the order of seconds
 
-    receive_window_size: u32,
-    max_num_nak_packets: usize, //TODO limit so it fits into a single packet
+    pub receive_window_size: u32,
+    pub max_num_naks_per_packet: usize, //TODO limit so it fits into a single packet
 }
 
 struct ReceiveStreamInner {
@@ -131,7 +131,7 @@ impl ReceiveStreamInner {
                 continue;
             }
             nak_packets.push(packet_id);
-            if nak_packets.len() == self.config.max_num_nak_packets {
+            if nak_packets.len() == self.config.max_num_naks_per_packet {
                 break;
             }
         }
@@ -410,6 +410,7 @@ impl ReceiveStream {
             self_addr,
         )));
 
+        //TODO pull this up from the new() function?
         let active_handle = tokio::spawn(Self::do_loop(config.clone(), inner.clone()));
 
         ReceiveStream {
