@@ -1,6 +1,7 @@
 use bytes::{Buf, BufMut, BytesMut};
 use bytes_varint::try_get_fixed::TryGetFixedSupport;
 
+//TODO human readable Debug
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessageHeader {
     pub message_len: u32,
@@ -16,6 +17,7 @@ impl MessageHeader {
         }
     }
 
+    //TODO unit test ser / deser
     pub fn ser(&self, buf: &mut BytesMut) {
         buf.put_u32(self.message_len);
     }

@@ -38,6 +38,8 @@ impl SendStreamInner {
         PacketHeader::serialized_len_for_stream_header(self.self_reply_to_addr)
     }
 
+    //TODO unit test
+
     fn init_wip(&mut self, first_message_offset: Option<u16>) -> &mut BytesMut {
         assert!(self.work_in_progress.is_none());
 

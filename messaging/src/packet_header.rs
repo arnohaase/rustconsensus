@@ -25,6 +25,7 @@ bitflags! {
 }
 
 
+//TODO human readable Debug
 pub struct PacketHeader {
     pub checksum: u32, //TODO do the checksum at the encryption level?
     pub protocol_version: u8,
@@ -44,6 +45,7 @@ impl PacketHeader {
         }
     }
 
+    //TODO unit test
     pub fn serialized_len_for_stream_header(reply_to_address: Option<SocketAddr>) -> usize {
         let reply_to_len = match &reply_to_address {
             None => 0,
@@ -116,6 +118,7 @@ impl PacketHeader {
         }
     }
 
+    //TODO unit test
     pub fn deser(buf: &mut impl Buf) -> anyhow::Result<PacketHeader> {
         let protocol_version = buf.try_get_u8()?;
         if protocol_version != Self::PROTOCOL_VERSION_1 {

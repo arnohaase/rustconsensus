@@ -88,7 +88,8 @@ impl SendSocket for UdpSocket {
         self.finalize_and_send_packet(to, &mut send_buf).await
     }
 
-    //TODO rename 'high water mark' and 'low water mark' to 'send buffer upper bound' and 'send buffer lower bound'
+    //TODO unit test - separate to the degree reasonably possible
+
     async fn send_send_sync(&self, reply_to: Option<SocketAddr>, to: SocketAddr, stream_id: u16, high_water_mark: PacketId, low_water_mark: PacketId) {
         let header = PacketHeader::new(reply_to, PacketKind::ControlSendSync { stream_id });
 

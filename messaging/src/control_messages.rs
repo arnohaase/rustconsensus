@@ -3,6 +3,7 @@ use crate::packet_id::PacketId;
 use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use bytes_varint::{VarIntSupport, VarIntSupportMut};
 
+//TODO human readable Debug
 #[derive(Debug)]
 pub struct ControlMessageRecvSync {
     //TODO update specification to reflect this
@@ -17,6 +18,7 @@ pub struct ControlMessageRecvSync {
     pub receive_buffer_ack_threshold: PacketId,
 }
 impl ControlMessageRecvSync {
+    //TODO unit test ser / deser
     pub fn ser(&self, buf: &mut BytesMut) {
         buf.put_u64(self.receive_buffer_high_water_mark.to_raw());
         buf.put_u64(self.receive_buffer_low_water_mark.to_raw());
@@ -35,6 +37,7 @@ impl ControlMessageRecvSync {
     }
 }
 
+//TODO human readable Debug
 #[derive(Debug)]
 pub struct ControlMessageSendSync {
     /// The id *after* the highest sent packet
@@ -43,6 +46,7 @@ pub struct ControlMessageSendSync {
     pub send_buffer_low_water_mark: PacketId,
 }
 impl ControlMessageSendSync {
+    //TODO unit test ser / deser
     pub fn ser(&self, buf: &mut BytesMut) {
         buf.put_u64(self.send_buffer_high_water_mark.to_raw());
         buf.put_u64(self.send_buffer_low_water_mark.to_raw());
@@ -58,12 +62,13 @@ impl ControlMessageSendSync {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug)] //TODO human readable Debug
 pub struct ControlMessageNak {
     pub packet_id_resend_set: Vec<PacketId>,
 }
 
 impl ControlMessageNak {
+    //TODO unit test ser / deser
     fn ser(&self, buf: &mut BytesMut) {
         buf.put_usize_varint(self.packet_id_resend_set.len());
         for &packet_id in &self.packet_id_resend_set {
