@@ -12,9 +12,9 @@ use tracing::{info, span, Instrument, Level};
 
 fn init_logging() {
     tracing_subscriber::fmt()
-        // .with_max_level(Level::INFO)
+        .with_max_level(Level::INFO)
         // .with_max_level(Level::DEBUG)
-        .with_max_level(Level::TRACE)
+        // .with_max_level(Level::TRACE)
         .with_thread_ids(true)
         .try_init()
         .ok();
@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
     let addr_a: SocketAddr = SocketAddr::from_str("127.0.0.1:9100")?;
     let addr_b: SocketAddr = SocketAddr::from_str("127.0.0.1:9101")?;
 
-    let span = span!(Level::TRACE, "node a");
+    let span = span!(Level::INFO, "node a");
     let a = Arc::new(EndPoint::new(
         addr_a,
         msg_dispatcher.clone(),
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
         FxHashMap::default(),
     ).instrument(span).await?);
 
-    let span = span!(Level::TRACE, "node b");
+    let span = span!(Level::INFO, "node b");
     let b = Arc::new(EndPoint::new(
         addr_b,
         msg_dispatcher.clone(),
@@ -65,11 +65,11 @@ async fn main() -> anyhow::Result<()> {
     let cloned_a = a.clone();
     let cloned_b = b.clone();
     tokio::spawn(async move {
-        let span = span!(Level::TRACE, "node a");
+        let span = span!(Level::INFO, "node a");
         cloned_a.recv_loop().instrument(span).await
     });
     tokio::spawn(async move {
-        let span = span!(Level::TRACE, "node b");
+        let span = span!(Level::INFO, "node b");
         cloned_b.recv_loop().instrument(span).await
     });
 

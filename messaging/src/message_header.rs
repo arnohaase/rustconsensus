@@ -1,6 +1,7 @@
 use bytes::{Buf, BufMut, BytesMut};
 use bytes_varint::try_get_fixed::TryGetFixedSupport;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessageHeader {
     pub message_len: u32,
 }

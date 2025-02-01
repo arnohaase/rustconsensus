@@ -230,7 +230,7 @@ impl ReceiveStreamInner {
         loop {
             match self._consume_next_message() {
                 ConsumeResult::Message(buf) => {
-                    trace!("consume_next_message: message of length {}", buf.len());
+                    trace!("consume next message: message of length {}", buf.len());
                     return Some(buf)
                 },
                 ConsumeResult::None => {
@@ -273,8 +273,7 @@ impl ReceiveStreamInner {
             }
         }
         else {
-            println!("yo");
-
+            trace!("low water mark packet is missing");
             return ConsumeResult::None;
         };
 
@@ -298,7 +297,7 @@ impl ReceiveStreamInner {
             }
         };
 
-        match buf.len().cmp(&(header.message_len as usize)) {
+        match (header.message_len as usize).cmp(&buf.len()) {
             Ordering::Less => {
                 // the message is contained in the packet
                 self.undispatched_marker = Some((low_water_mark, next_offs + MessageHeader::SERIALIZED_LEN_U16 + header.message_len as u16));
