@@ -3,6 +3,8 @@ name = "messaging"
 edition.workspace = true
 version.workspace = true
 
+[dev-dependencies]
+tracing-subscriber = "*"
 
 [dependencies]
 anyhow = "*"

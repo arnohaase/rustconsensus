@@ -165,13 +165,12 @@ impl ReceiveStreamInner {
     ///      packet exists in both buffers, and all packets in one of the buffers is in this
     ///      range
     fn low_water_mark(&self) -> PacketId {
-        let received = self.receive_buffer.first_key_value()
-            .map(|(k, _)| *k + 1)
-            .unwrap_or(self.ack_threshold);
-        let missing = self.missing_packet_buffer.first_key_value()
-            .map(|(k, _)| *k + 1)
-            .unwrap_or(self.ack_threshold);
-        min(received, missing)
+        match (self.receive_buffer.first_key_value(), self.missing_packet_buffer.first_key_value()) {
+            (Some((&a, _)), None) => a,
+            (None, Some((&b, _))) => b,
+            (Some((&a, _)), Some((&b, _))) => min(a, b),
+            (None, None) => self.ack_threshold
+        }
     }
 
     /// ensure consistency after buffers changed
@@ -230,9 +229,17 @@ impl ReceiveStreamInner {
     fn consume_next_message(&mut self) -> Option<Vec<u8>> {
         loop {
             match self._consume_next_message() {
-                ConsumeResult::Message(buf) => return Some(buf),
-                ConsumeResult::None => return None,
-                ConsumeResult::Retry => {}
+                ConsumeResult::Message(buf) => {
+                    trace!("consume_next_message: message of length {}", buf.len());
+                    return Some(buf)
+                },
+                ConsumeResult::None => {
+                    trace!("consume next message: no message");
+                    return None
+                },
+                ConsumeResult::Retry => {
+                    trace!("retry consuming next message");
+                }
             }
         }
     }
@@ -242,6 +249,7 @@ impl ReceiveStreamInner {
         //TODO optimization: call this only if the first missing packet was added, or the buffer was empty
 
         let low_water_mark = self.low_water_mark();
+        trace!("low water mark: {:?}", low_water_mark);
 
         let (next_offs, buf) = if let Some((lwm_offs, lwm_buf)) = self.receive_buffer.get(&low_water_mark) {
             // the low-water mark packet is received, not missing
@@ -265,6 +273,8 @@ impl ReceiveStreamInner {
             }
         }
         else {
+            println!("yo");
+
             return ConsumeResult::None;
         };
 
@@ -469,6 +479,8 @@ impl ReceiveStream {
 
     pub async fn on_packet(&self, sequence_number: PacketId, first_message_offset: Option<u16>, payload: &[u8]) {
         let mut inner = self.inner.write().await;
+
+        trace!("received packet #{:?} with length {} from {:?} on stream {}, first msg offs {:?}", sequence_number.to_raw(), payload.len(), inner.peer_addr, inner.stream_id, first_message_offset);
 
         //TODO unit test, especially off-by-one corner cases
 

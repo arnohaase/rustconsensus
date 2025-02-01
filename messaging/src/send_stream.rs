@@ -56,6 +56,8 @@ impl SendStreamInner {
         let mut wip = self.work_in_progress.take()
             .expect("attempting to send uninitialized wip");
 
+        trace!("actually sending packet to {:?} on stream {}", self.peer_addr, self.stream_id);
+
         self.send_socket.finalize_and_send_packet(self.peer_addr, &mut wip).await;
         //NB: we don't handle a send error but keep the (potentially) unsent packet in our send buffer
 
@@ -173,13 +175,15 @@ impl SendStream {
     }
 
     //TODO add some tracing here for correlation
+
     /// NB: This function does not return Result because all retry / recovery handling is expected
     ///      to be done here
-    pub async fn send_message(&mut self, mut message: &[u8]) {
+    pub async fn send_message(&self, mut message: &[u8]) {
         //TODO ensure message max length - configurable upper limit?
 
         let mut inner = self.inner.write().await;
-        // let inner: &mut SendStreamInner = &mut inner;
+
+        debug!("registering message of length {} for sending to {:?} on stream {:?}", message.len(), inner.peer_addr, inner.stream_id);
 
         let mut wip_buffer = if let Some(wip) = &mut inner.work_in_progress {
             // if the message header does not fit in wip, send and re-init wip
@@ -243,10 +247,10 @@ impl SendStream {
 
                     let mut inner = inner_arc.write().await;
                     if inner.work_in_progress_packet_id != high_water_mark {
-                        debug!("late send: packet {} already sent", high_water_mark);
+                        trace!("late send: packet {} already sent", high_water_mark);
                     }
                     else {
-                        debug!("late send: sending packet {}", high_water_mark);
+                        trace!("late send: sending packet {}", high_water_mark);
                         if inner.work_in_progress.is_some() {
                             inner.do_send_work_in_progress().await;
                         }

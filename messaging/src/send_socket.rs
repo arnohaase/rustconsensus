@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use bytes_varint::VarIntSupportMut;
 use tokio::net::UdpSocket;
-use tracing::error;
+use tracing::{error, trace};
 use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::packet_header::{PacketHeader, PacketKind};
 use crate::packet_id::PacketId;
@@ -32,6 +32,8 @@ impl SendSocket for UdpSocket {
     }
 
     async fn do_send_packet(&self, to: SocketAddr, packet_buf: &[u8]) {
+        trace!("UDP socket: sending packet to {:?}", to);
+
         //TODO traffic shaping
         if let Err(e) = self.send_to(&packet_buf, to).await {
             error!("error sending UDP packet to {:?}: {}", to, e);

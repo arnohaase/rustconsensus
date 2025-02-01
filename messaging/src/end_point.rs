@@ -3,8 +3,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use rustc_hash::FxHashMap;
 use tokio::net::{ToSocketAddrs, UdpSocket};
-use tokio::sync::{Mutex, RwLock};
-use tracing::{error, warn};
+use tokio::sync::Mutex;
+use tracing::{error, info, trace, warn};
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::packet_header::{PacketHeader, PacketKind};
@@ -40,6 +40,7 @@ impl EndPoint {
     ) -> anyhow::Result<EndPoint> {
         //TODO "don't fragment" flag
         let receive_socket = Arc::new(UdpSocket::bind(addrs).await?);
+        info!("bound receive socket to {:?}", receive_socket.local_addr()?);
         let (send_socket_v4, send_socket_v6) = if receive_socket.local_addr()?.is_ipv6() {
             (Arc::new(UdpSocket::bind("0.0.0.0:0").await?), receive_socket.clone())
         }
@@ -61,7 +62,16 @@ impl EndPoint {
         })
     }
 
+    //TODO send without stream
+
+    pub async fn send_message(&self, to: SocketAddr, stream_id: u16, message: &[u8]) {
+        let send_stream = self.get_send_stream(to, stream_id).await;
+        send_stream.send_message(message).await;
+    }
+
     pub async fn recv_loop(&self)  {
+        info!("starting receive loop");
+
         let mut buf = [0u8; 1500]; //TODO configurable size
         loop {
             let (num_read, from) = match self.receive_socket.recv_from(&mut buf).await {
@@ -73,6 +83,8 @@ impl EndPoint {
                     continue;
                 }
             };
+
+            trace!("received packet from {:?}", from); //TODO instrument with unique ID per packet
 
             let parse_buf = &mut &buf[..num_read];
             let packet_header = match PacketHeader::deser(parse_buf) {
