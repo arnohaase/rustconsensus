@@ -29,3 +29,25 @@ impl MessageHeader {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case(0)]
+    #[case(1)]
+    #[case(9999)]
+    #[case(99999)]
+    #[case(u32::MAX)]
+    fn test_ser(#[case] len: u32) {
+        let original = MessageHeader { message_len: len };
+
+        let mut buf = BytesMut::new();
+        original.ser(&mut buf);
+        let deser = MessageHeader::deser(&mut buf).unwrap();
+
+        assert_eq!(deser, original);
+    }
+}
