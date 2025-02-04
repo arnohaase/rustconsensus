@@ -4,6 +4,7 @@ edition.workspace = true
 version.workspace = true
 
 [dev-dependencies]
+rstest = "*"
 tracing-subscriber = "*"
 
 [dependencies]
