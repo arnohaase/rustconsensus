@@ -46,8 +46,9 @@ mod tests {
 
         let mut buf = BytesMut::new();
         original.ser(&mut buf);
-        let deser = MessageHeader::deser(&mut buf).unwrap();
-
+        let mut b: &[u8] = &buf;
+        let deser = MessageHeader::deser(&mut b).unwrap();
+        assert!(b.is_empty());
         assert_eq!(deser, original);
     }
 }

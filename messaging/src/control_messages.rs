@@ -129,8 +129,9 @@ mod tests {
 
         let mut buf = BytesMut::new();
         original.ser(&mut buf);
-        let deser = ControlMessageRecvSync::deser(&mut buf).unwrap();
-
+        let mut b: &[u8] = &buf;
+        let deser = ControlMessageRecvSync::deser(&mut b).unwrap();
+        assert!(b.is_empty());
         assert_eq!(deser, original);
     }
 
@@ -147,8 +148,9 @@ mod tests {
 
         let mut buf = BytesMut::new();
         original.ser(&mut buf);
-        let deser = ControlMessageSendSync::deser(&mut buf).unwrap();
-
+        let mut b: &[u8] = &buf;
+        let deser = ControlMessageSendSync::deser(&mut b).unwrap();
+        assert!(b.is_empty());
         assert_eq!(deser, original);
     }
 
@@ -167,8 +169,9 @@ mod tests {
 
         let mut buf = BytesMut::new();
         original.ser(&mut buf);
-        let deser = ControlMessageNak::deser(&mut buf).unwrap();
-
+        let mut b: &[u8] = &buf;
+        let deser = ControlMessageNak::deser(&mut b).unwrap();
+        assert!(b.is_empty());
         assert_eq!(deser, original);
     }
 }

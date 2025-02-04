@@ -1,8 +1,9 @@
-use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
+use crate::packet_id::PacketId;
 use bitflags::bitflags;
 use bytes::{Buf, BufMut, BytesMut};
-use crate::packet_id::PacketId;
 use bytes_varint::try_get_fixed::TryGetFixedSupport;
+use std::fmt::Debug;
+use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 
 
 bitflags! {
@@ -24,14 +25,23 @@ bitflags! {
     }
 }
 
-
-//TODO human readable Debug
+#[derive(Clone, Eq, PartialEq)]
 pub struct PacketHeader {
     pub checksum: u32, //TODO do the checksum at the encryption level?
     pub protocol_version: u8,
     pub reply_to_address: Option<SocketAddr>,
     pub packet_kind: PacketKind,
 }
+impl Debug for PacketHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let reply_to = self.reply_to_address
+            .map(|addr| format!("[{}]", addr))
+            .unwrap_or("".to_string());
+
+        write!(f, "PCKT{{V{}{}:{:?}}}", 1, reply_to, self.packet_kind)
+    }
+}
+
 impl PacketHeader {
     pub const PROTOCOL_VERSION_1: u8 = 0;
     pub const OFFSET_MESSAGE_CONTINUES: u16 = u16::MAX;
@@ -45,7 +55,6 @@ impl PacketHeader {
         }
     }
 
-    //TODO unit test
     pub fn serialized_len_for_stream_header(reply_to_address: Option<SocketAddr>) -> usize {
         let reply_to_len = match &reply_to_address {
             None => 0,
@@ -62,7 +71,6 @@ impl PacketHeader {
             + size_of::<u64>()   // packet number
     }
 
-    //TODO unit test
     pub fn ser(&self, buf: &mut BytesMut) {
         buf.put_u8(self.protocol_version);
         buf.put_u32(self.checksum);
@@ -118,7 +126,6 @@ impl PacketHeader {
         }
     }
 
-    //TODO unit test
     pub fn deser(buf: &mut impl Buf) -> anyhow::Result<PacketHeader> {
         let protocol_version = buf.try_get_u8()?;
         if protocol_version != Self::PROTOCOL_VERSION_1 {
@@ -172,6 +179,7 @@ impl PacketHeader {
     }
 }
 
+#[derive(Clone, Eq, PartialEq)]
 pub enum PacketKind {
     RegularSequenced {
         stream_id: u16,
@@ -183,4 +191,96 @@ pub enum PacketKind {
     ControlRecvSync { stream_id: u16 },
     ControlSendSync { stream_id: u16 },
     ControlNak { stream_id: u16 },
+}
+impl Debug for PacketKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PacketKind::RegularSequenced { stream_id, first_message_offset, packet_sequence_number } => {
+                write!(f, "SEQ({}@{}:{})",
+                       stream_id,
+                       packet_sequence_number.to_raw(),
+                       first_message_offset.map(|x| x.to_string()).unwrap_or("-".to_string())
+                )
+            }
+            PacketKind::OutOfSequence => write!(f, "OOS"),
+            PacketKind::ControlInit { stream_id } => write!(f, "INIT({})", stream_id),
+            PacketKind::ControlRecvSync { stream_id } => write!(f, "RECV_SYNC({})", stream_id),
+            PacketKind::ControlSendSync { stream_id } => write!(f, "SEND_SYNC({})", stream_id),
+            PacketKind::ControlNak { stream_id } => write!(f, "NAK({})", stream_id),
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+    use PacketKind::*;
+    use std::str::FromStr;
+
+    #[rstest]
+    #[case::no_addr(PacketHeader::new(None, ControlInit{ stream_id: 1 }), "PCKT{V1:INIT(1)}")]
+    #[case::v4_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), OutOfSequence), "PCKT{V1[1.2.3.4:888]:OOS}")]
+    #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlNak { stream_id: 9}), "PCKT{V1[[1111:2222::3333:4444]:888]:NAK(9)}")]
+    fn test_packet_header_debug(#[case] header: PacketHeader, #[case] expected: &str) {
+        assert_eq!(format!("{:?}", header), expected);
+    }
+
+    #[rstest]
+    #[case::no_addr(PacketHeader::new(None, ControlInit{ stream_id: 1 }))]
+    #[case::v4_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), OutOfSequence))]
+    #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlNak { stream_id: 9}))]
+    #[case::seq_start(PacketHeader::new(None, RegularSequenced { stream_id: 0, first_message_offset: Some(999), packet_sequence_number: PacketId::from_raw(8)}))]
+    #[case::seq_continued(PacketHeader::new(None, RegularSequenced { stream_id: 4, first_message_offset: None, packet_sequence_number: PacketId::from_raw(6)}))]
+    #[case::oos(PacketHeader::new(None, OutOfSequence))]
+    #[case::init_0(PacketHeader::new(None, ControlInit { stream_id: 0 }))]
+    #[case::init_1(PacketHeader::new(None, ControlInit { stream_id: 1 }))]
+    #[case::recv_sync_0(PacketHeader::new(None, ControlRecvSync { stream_id: 0 }))]
+    #[case::recv_sync_3(PacketHeader::new(None, ControlRecvSync { stream_id: 3 }))]
+    #[case::send_sync_0(PacketHeader::new(None, ControlSendSync { stream_id: 0 }))]
+    #[case::send_sync_3(PacketHeader::new(None, ControlSendSync { stream_id: 2 }))]
+    #[case::nak_0(PacketHeader::new(None, ControlNak { stream_id: 0 }))]
+    #[case::nak_5(PacketHeader::new(None, ControlNak { stream_id: 5 }))]
+    fn test_packet_header_ser(#[case] header: PacketHeader) {
+        let mut buf = BytesMut::new();
+        header.ser(&mut buf);
+        let mut b: &[u8] = &mut buf;
+        let deser = PacketHeader::deser(&mut b).unwrap();
+        assert!(b.is_empty());
+        assert_eq!(header, deser);
+    }
+
+    #[rstest]
+    #[case::no_addr_none(PacketHeader::new(None, RegularSequenced{ stream_id: 1, first_message_offset: None, packet_sequence_number: PacketId::from_raw(1) }))]
+    #[case::no_addr_0(PacketHeader::new(None, RegularSequenced{ stream_id: 1, first_message_offset: Some(0), packet_sequence_number: PacketId::from_raw(u64::MAX) }))]
+    #[case::no_addr_8000(PacketHeader::new(None, RegularSequenced{ stream_id: 1, first_message_offset: Some(8000), packet_sequence_number: PacketId::from_raw(u64::MAX) }))]
+    #[case::v4_addr_none(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: None, packet_sequence_number: PacketId::from_raw(1) }))]
+    #[case::v4_addr_0(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(0), packet_sequence_number: PacketId::from_raw(u64::MAX) }))]
+    #[case::v4_addr_8000(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(8000), packet_sequence_number: PacketId::from_raw(u64::MAX) }))]
+    #[case::v6_addr_none(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: None, packet_sequence_number: PacketId::from_raw(1) }))]
+    #[case::v6_addr_0(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(0), packet_sequence_number: PacketId::from_raw(u64::MAX) }))]
+    #[case::v6_addr_8000(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(8000), packet_sequence_number: PacketId::from_raw(u64::MAX) }))]
+    fn test_packet_header_serialized_len_for_stream_header(#[case] header: PacketHeader) {
+        let mut buf = BytesMut::new();
+        header.ser(&mut buf);
+        let expected = buf.len();
+        assert_eq!(PacketHeader::serialized_len_for_stream_header(header.reply_to_address), expected);
+    }
+
+    #[rstest]
+    #[case::seq_start(RegularSequenced { stream_id: 0, first_message_offset: Some(999), packet_sequence_number: PacketId::from_raw(8)}, "SEQ(0@8:999)")]
+    #[case::seq_continued(RegularSequenced { stream_id: 4, first_message_offset: None, packet_sequence_number: PacketId::from_raw(6)}, "SEQ(4@6:-)")]
+    #[case::oos(OutOfSequence, "OOS")]
+    #[case::init_0(ControlInit { stream_id: 0 }, "INIT(0)")]
+    #[case::init_1(ControlInit { stream_id: 1 }, "INIT(1)")]
+    #[case::recv_sync_0(ControlRecvSync { stream_id: 0 }, "RECV_SYNC(0)")]
+    #[case::recv_sync_3(ControlRecvSync { stream_id: 3 }, "RECV_SYNC(3)")]
+    #[case::send_sync_0(ControlSendSync { stream_id: 0 }, "SEND_SYNC(0)")]
+    #[case::send_sync_3(ControlSendSync { stream_id: 2 }, "SEND_SYNC(2)")]
+    #[case::nak_0(ControlNak { stream_id: 0 }, "NAK(0)")]
+    #[case::nak_5(ControlNak { stream_id: 5 }, "NAK(5)")]
+    fn test_packet_kind_debug(#[case] kind: PacketKind, #[case] expected: &str) {
+        assert_eq!(format!("{:?}", kind), expected);
+    }
 }
