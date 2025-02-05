@@ -1,19 +1,18 @@
-use std::cmp::{min, Ordering};
 use crate::control_messages::ControlMessageSendSync;
+use crate::message_dispatcher::MessageDispatcher;
+use crate::message_header::MessageHeader;
 use crate::packet_id::PacketId;
 use crate::send_socket::SendSocket;
+use std::cmp::{min, Ordering};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{debug, trace, warn};
-use crate::message_dispatcher::MessageDispatcher;
-use crate::message_header::MessageHeader;
 
 pub struct ReceiveStreamConfig {
     pub nak_interval: Duration, // configure to roughly 2x RTT
@@ -29,7 +28,7 @@ struct ReceiveStreamInner {
     config: Arc<ReceiveStreamConfig>,
 
     stream_id: u16,
-    send_socket: Arc<UdpSocket>,
+    send_socket: Arc<SendSocket>,
     peer_addr: SocketAddr,
     self_reply_to_addr: Option<SocketAddr>,
 
@@ -77,14 +76,14 @@ impl ReceiveStreamInner {
         config: Arc<ReceiveStreamConfig>,
         stream_id: u16,
         peer_addr: SocketAddr,
-        send_socket: Arc<UdpSocket>,
+        send_socket: Arc<SendSocket>,
         self_addr: SocketAddr,
 
     ) -> ReceiveStreamInner {
         //TODO document the assumption that querying a UdpSocket's local address cannot fail
-        assert_eq!(peer_addr.is_ipv4(), send_socket.local_addr().unwrap().is_ipv4());
+        assert_eq!(peer_addr.is_ipv4(), send_socket.local_addr().is_ipv4());
 
-        let self_reply_to_addr = if send_socket.local_addr().unwrap() == self_addr {
+        let self_reply_to_addr = if send_socket.local_addr() == self_addr {
             None
         }
         else {
@@ -409,7 +408,7 @@ impl ReceiveStream {
         config: Arc<ReceiveStreamConfig>,
         stream_id: u16,
         peer_addr: SocketAddr,
-        send_socket: Arc<UdpSocket>,
+        send_socket: Arc<SendSocket>,
         self_addr: SocketAddr,
         message_dispatcher: Arc<dyn MessageDispatcher>,
     ) -> ReceiveStream {

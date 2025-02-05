@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tokio::time;
 use tracing::{debug, trace};
@@ -23,7 +22,7 @@ pub struct SendStreamConfig {
 struct SendStreamInner {
     config: Arc<SendStreamConfig>,
     stream_id: u16,
-    send_socket: Arc<UdpSocket>,
+    send_socket: Arc<SendSocket>,
     peer_addr: SocketAddr,
     self_reply_to_addr: Option<SocketAddr>,
 
@@ -92,7 +91,7 @@ impl SendStream {
     pub fn new(
         config: Arc<SendStreamConfig>,
         stream_id: u16,
-        send_socket: Arc<UdpSocket>,
+        send_socket: Arc<SendSocket>,
         peer_addr: SocketAddr,
         reply_to_addr: Option<SocketAddr>,
     ) -> SendStream {
