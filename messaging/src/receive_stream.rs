@@ -1,4 +1,4 @@
-use crate::control_messages::ControlMessageSendSync;
+use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::message_header::MessageHeader;
 use crate::packet_id::PacketId;
@@ -8,11 +8,14 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use bytes::{BufMut, BytesMut};
+use bytes_varint::VarIntSupportMut;
 use tokio::select;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{debug, trace, warn};
+use crate::packet_header::{PacketHeader, PacketKind};
 
 pub struct ReceiveStreamConfig {
     pub nak_interval: Duration, // configure to roughly 2x RTT
@@ -105,20 +108,27 @@ impl ReceiveStreamInner {
     }
 
     async fn do_send_init(&self) {
-        self.send_socket.send_control_init(self.self_reply_to_addr, self.peer_addr, self.stream_id)
-            .await
+        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlInit { stream_id: self.stream_id });
+
+        let mut send_buf = BytesMut::with_capacity(1400); //TODO from pool?
+        header.ser(&mut send_buf);
+
+        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut send_buf).await
     }
 
     async fn do_send_recv_sync(&self) {
-        self.send_socket.send_recv_sync(
-            self.self_reply_to_addr,
-            self.peer_addr,
-            self.stream_id,
-            self.high_water_mark(),
-            self.low_water_mark(),
-            self.ack_threshold
-        )
-            .await
+        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlRecvSync { stream_id: self.stream_id });
+
+        let mut send_buf = BytesMut::with_capacity(1400); //TODO from pool?
+        header.ser(&mut send_buf);
+
+        ControlMessageRecvSync {
+            receive_buffer_high_water_mark: self.high_water_mark(),
+            receive_buffer_low_water_mark: self.low_water_mark(),
+            receive_buffer_ack_threshold: self.ack_threshold,
+        }.ser(&mut send_buf);
+
+        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut send_buf).await
     }
 
     /// Send a NAK for the earliest N missing packets - the assumption is that if more packets are
@@ -142,7 +152,17 @@ impl ReceiveStreamInner {
             return;
         }
 
-        self.send_socket.send_nak(self.self_reply_to_addr, self.peer_addr, self.stream_id, &nak_packets).await;
+        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlNak { stream_id: self.stream_id });
+
+        let mut send_buf = BytesMut::with_capacity(1400); //TODO from pool?
+        header.ser(&mut send_buf);
+
+        send_buf.put_usize_varint(nak_packets.len());
+        for packet_id in nak_packets {
+            send_buf.put_u64(packet_id.to_raw());
+        }
+
+        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
         self.missing_packet_tick_counter += 1;
     }
 

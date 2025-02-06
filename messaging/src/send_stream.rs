@@ -1,4 +1,4 @@
-use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync};
+use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::packet_header::{PacketHeader, PacketKind};
 use crate::send_socket::SendSocket;
 use bytes::{BufMut, BytesMut};
@@ -51,6 +51,26 @@ impl SendStreamInner {
 
         self.work_in_progress = Some(new_buffer);
         self.work_in_progress.as_mut().unwrap()
+    }
+
+    async fn send_send_sync(&self) {
+        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlSendSync { stream_id: self.stream_id });
+
+        let mut send_buf = BytesMut::with_capacity(1400); //TODO from pool?
+        header.ser(&mut send_buf);
+
+        ControlMessageSendSync {
+            send_buffer_high_water_mark: self.work_in_progress_packet_id,
+            send_buffer_low_water_mark: self.low_water_mark(),
+        }.ser(&mut send_buf);
+
+        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut send_buf).await
+    }
+
+    fn low_water_mark(&self) -> PacketId {
+        self.send_buffer.keys().next()
+            .map(|k| *k + 1)
+            .unwrap_or(self.work_in_progress_packet_id)
     }
 
     async fn do_send_work_in_progress(&mut self) {
@@ -126,13 +146,7 @@ impl SendStream {
         inner.send_buffer.clear();
 
         // reply with a SEND_SYNC so the client can adjust its receive window
-        inner.send_socket.send_send_sync(
-            inner.self_reply_to_addr,
-            inner.peer_addr,
-            inner.stream_id,
-            inner.work_in_progress_packet_id,
-            inner.work_in_progress_packet_id,
-        ).await;
+        inner.send_send_sync().await;
     }
 
     pub async fn on_recv_sync_message(&self, message: ControlMessageRecvSync) {
@@ -153,12 +167,7 @@ impl SendStream {
         }
 
         //TODO handle / evaluate the client's packet ids
-
-        let low_water_mark = inner.send_buffer.keys().next()
-            .map(|k| *k + 1)
-            .unwrap_or(inner.work_in_progress_packet_id);
-
-        inner.send_socket.send_send_sync(inner.self_reply_to_addr, inner.peer_addr, inner.stream_id, inner.work_in_progress_packet_id, low_water_mark).await;
+        inner.send_send_sync().await;
     }
 
     pub async fn on_nak_message(&self, message: ControlMessageNak) {
