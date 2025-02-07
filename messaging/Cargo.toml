@@ -14,7 +14,6 @@ async-trait = "*"
 bitflags = "*"
 bytes = "*"
 bytes-varint = "*"
-crc = "*"
 rustc-hash = "*"
 tokio = { version = "*", features = ["full"] } # TODO
 tracing = "*"

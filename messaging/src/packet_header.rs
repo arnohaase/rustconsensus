@@ -4,8 +4,6 @@ use bytes::{Buf, BufMut, BytesMut};
 use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use std::fmt::Debug;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
-use crc::Crc;
-use tracing::{error, warn};
 
 bitflags! {
     #[derive(PartialEq, Eq, Copy, Clone)]
@@ -29,7 +27,6 @@ bitflags! {
 #[derive(Clone, Eq, PartialEq)]
 pub struct PacketHeader {
     pub protocol_version: u8,
-    pub checksum: u64,
     pub reply_to_address: Option<SocketAddr>,
     pub packet_kind: PacketKind,
 }
@@ -53,7 +50,6 @@ impl PacketHeader {
     pub fn new(reply_to_address: Option<SocketAddr>, packet_kind: PacketKind) -> PacketHeader {
         PacketHeader {
             protocol_version: Self::PROTOCOL_VERSION_1,
-            checksum: 0,
             reply_to_address,
             packet_kind,
         }
@@ -67,7 +63,6 @@ impl PacketHeader {
         };
 
         size_of::<u8>()          // protocol version
-            + size_of::<u64>()   // checksum
             + size_of::<u8>()    // flags
             + reply_to_len
             + size_of::<u16>()   // stream id
@@ -77,7 +72,6 @@ impl PacketHeader {
 
     pub fn ser(&self, buf: &mut BytesMut) {
         buf.put_u8(self.protocol_version);
-        buf.put_u64(self.checksum);
 
         let flags_ip = match self.reply_to_address {
             None => Flags::IP_SAME,
@@ -136,8 +130,6 @@ impl PacketHeader {
             return Err(anyhow::anyhow!("Unsupported protocol version {}", protocol_version));
         }
 
-        let checksum = buf.try_get_u64()?; //TODO verify
-
         let flags = Flags::from_bits_truncate(buf.try_get_u8()?);
 
         let reply_to_address: Option<SocketAddr> = match flags & Flags::MASK_IP {
@@ -171,29 +163,10 @@ impl PacketHeader {
         };
 
         Ok(PacketHeader {
-            checksum,
             protocol_version,
             reply_to_address,
             packet_kind,
         })
-    }
-
-    pub fn calc_checksum(buf: &[u8]) -> u64 {
-        assert!(buf.len() >= Self::OFFSET_MESSAGE_CONTINUES as usize, "packet buffer too short for checksum");
-
-        let hasher = Crc::<u64>::new(&crc::CRC_64_REDIS);
-        let mut digest = hasher.digest();
-
-        digest.update(&buf[Self::OFFSET_AFTER_CHECKSUM..]);
-
-        digest.finalize()
-    }
-
-    pub fn init_checksum(buf: &mut [u8]) {
-        let checksum = Self::calc_checksum(buf);
-
-        let mut buf = &mut buf[Self::OFFSET_START_CHECKSUM..];
-        buf.put_u64(checksum);
     }
 }
 
@@ -300,15 +273,5 @@ mod tests {
     #[case::nak_5(ControlNak { stream_id: 5 }, "NAK(5)")]
     fn test_packet_kind_debug(#[case] kind: PacketKind, #[case] expected: &str) {
         assert_eq!(format!("{:?}", kind), expected);
-    }
-
-    #[test]
-    fn test_calc_checksum() {
-        todo!()
-    }
-
-    #[test]
-    fn test_init_checksum() {
-        todo!()
     }
 }

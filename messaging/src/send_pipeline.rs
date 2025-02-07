@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::net::UdpSocket;
 use tracing::{error, trace};
-use crate::packet_header::PacketHeader;
+
 
 /// This is an abstraction for sending a buffer on a UDP socket, introduced to facilitate mocking
 ///  the I/O part away for testing
@@ -46,7 +46,7 @@ impl SendPipeline {
     }
 
     pub async fn finalize_and_send_packet(&self, to: SocketAddr, packet_buf: &mut [u8]) {
-        PacketHeader::init_checksum(packet_buf);
+        //TODO encrypt
         self.socket.do_send_packet(to, packet_buf).await;
     }
 
