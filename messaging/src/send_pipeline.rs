@@ -5,22 +5,20 @@ use tokio::net::UdpSocket;
 use tracing::{error, trace};
 use crate::packet_header::PacketHeader;
 
-
 /// This is an abstraction for sending a buffer on a UDP socket, introduced to facilitate mocking
 ///  the I/O part away for testing
 #[async_trait]
-pub trait RawSendSocket: Send + Sync + 'static {
+pub trait SendSocket: Send + Sync + 'static {
     async fn do_send_packet(&self, to: SocketAddr, packet_buf: &[u8]);
 
     fn local_addr(&self) -> SocketAddr;
 }
 
 #[async_trait]
-impl RawSendSocket for Arc<UdpSocket> {
+impl SendSocket for Arc<UdpSocket> {
     async fn do_send_packet(&self, to: SocketAddr, packet_buf: &[u8]) {
         trace!("UDP socket: sending packet to {:?}", to);
 
-        //TODO traffic shaping
         if let Err(e) = self.send_to(&packet_buf, to).await {
             error!("error sending UDP packet to {:?}: {}", to, e);
         }
@@ -33,14 +31,14 @@ impl RawSendSocket for Arc<UdpSocket> {
 }
 
 
-/// Convenience methods for the mechanics of sending different kinds of packet
-pub struct SendSocket {
-    socket: Arc<dyn RawSendSocket>,
+#[derive(Clone)]
+pub struct SendPipeline {
+    socket: Arc<dyn SendSocket>,
 }
 
-impl SendSocket {
-    pub fn new(socket: Arc<dyn RawSendSocket>) -> SendSocket {
-        SendSocket { socket }
+impl SendPipeline {
+    pub fn new(socket: Arc<dyn SendSocket>) -> SendPipeline {
+        SendPipeline { socket }
     }
 
     pub fn local_addr(&self) -> SocketAddr {
@@ -53,6 +51,7 @@ impl SendSocket {
     }
 
     pub async fn do_send_packet(&self, to: SocketAddr, packet_buf: &[u8]) {
+        //TODO traffic shaping
         self.socket.do_send_packet(to, packet_buf).await;
     }
 }

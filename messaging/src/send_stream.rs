@@ -1,6 +1,6 @@
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::packet_header::{PacketHeader, PacketKind};
-use crate::send_socket::SendSocket;
+use crate::send_pipeline::SendPipeline;
 use bytes::{BufMut, BytesMut};
 use std::cmp::min;
 use std::collections::BTreeMap;
@@ -22,7 +22,7 @@ pub struct SendStreamConfig {
 struct SendStreamInner {
     config: Arc<SendStreamConfig>,
     stream_id: u16,
-    send_socket: Arc<SendSocket>,
+    send_socket: Arc<SendPipeline>,
     peer_addr: SocketAddr,
     self_reply_to_addr: Option<SocketAddr>,
 
@@ -111,7 +111,7 @@ impl SendStream {
     pub fn new(
         config: Arc<SendStreamConfig>,
         stream_id: u16,
-        send_socket: Arc<SendSocket>,
+        send_socket: Arc<SendPipeline>,
         peer_addr: SocketAddr,
         reply_to_addr: Option<SocketAddr>,
     ) -> SendStream {

@@ -9,7 +9,7 @@ use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, Control
 use crate::message_dispatcher::MessageDispatcher;
 use crate::packet_header::{PacketHeader, PacketKind};
 use crate::receive_stream::{ReceiveStream, ReceiveStreamConfig};
-use crate::send_socket::SendSocket;
+use crate::send_pipeline::SendPipeline;
 use crate::send_stream::{SendStream, SendStreamConfig};
 
 
@@ -22,8 +22,8 @@ use crate::send_stream::{SendStream, SendStreamConfig};
 ///  application code to send messages.
 pub struct EndPoint {
     receive_socket: Arc<UdpSocket>,
-    send_socket_v4: Arc<SendSocket>,
-    send_socket_v6: Arc<SendSocket>,
+    send_socket_v4: Arc<SendPipeline>,
+    send_socket_v6: Arc<SendPipeline>,
     receive_streams: Mutex<FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>>>, //TODO persistent collection instead of Mutex
     send_streams: Mutex<FxHashMap<(SocketAddr, u16), Arc<SendStream>>>,
     message_dispatcher: Arc<dyn MessageDispatcher>,
@@ -53,8 +53,8 @@ impl EndPoint {
 
         Ok(EndPoint {
             receive_socket,
-            send_socket_v4: Arc::new(SendSocket::new(Arc::new(send_socket_v4))),
-            send_socket_v6: Arc::new(SendSocket::new(Arc::new(send_socket_v6))),
+            send_socket_v4: Arc::new(SendPipeline::new(Arc::new(send_socket_v4))),
+            send_socket_v6: Arc::new(SendPipeline::new(Arc::new(send_socket_v6))),
             receive_streams: Default::default(),
             send_streams: Default::default(),
             message_dispatcher,
@@ -131,7 +131,7 @@ impl EndPoint {
             .unwrap_or(self.default_send_config.clone())
     }
 
-    fn get_send_socket(&self, peer_addr: SocketAddr) -> Arc<SendSocket> {
+    fn get_send_socket(&self, peer_addr: SocketAddr) -> Arc<SendPipeline> {
         if peer_addr.is_ipv4() {
             self.send_socket_v4.clone()
         }

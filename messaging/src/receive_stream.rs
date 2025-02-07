@@ -2,7 +2,7 @@ use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::message_header::MessageHeader;
 use crate::packet_id::PacketId;
-use crate::send_socket::SendSocket;
+use crate::send_pipeline::SendPipeline;
 use std::cmp::{min, Ordering};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -31,7 +31,7 @@ struct ReceiveStreamInner {
     config: Arc<ReceiveStreamConfig>,
 
     stream_id: u16,
-    send_socket: Arc<SendSocket>,
+    send_pipeline: Arc<SendPipeline>,
     peer_addr: SocketAddr,
     self_reply_to_addr: Option<SocketAddr>,
 
@@ -79,14 +79,14 @@ impl ReceiveStreamInner {
         config: Arc<ReceiveStreamConfig>,
         stream_id: u16,
         peer_addr: SocketAddr,
-        send_socket: Arc<SendSocket>,
+        send_pipeline: Arc<SendPipeline>,
         self_addr: SocketAddr,
 
     ) -> ReceiveStreamInner {
         //TODO document the assumption that querying a UdpSocket's local address cannot fail
-        assert_eq!(peer_addr.is_ipv4(), send_socket.local_addr().is_ipv4());
+        assert_eq!(peer_addr.is_ipv4(), send_pipeline.local_addr().is_ipv4());
 
-        let self_reply_to_addr = if send_socket.local_addr() == self_addr {
+        let self_reply_to_addr = if send_pipeline.local_addr() == self_addr {
             None
         }
         else {
@@ -96,7 +96,7 @@ impl ReceiveStreamInner {
         ReceiveStreamInner {
             config,
             stream_id,
-            send_socket,
+            send_pipeline,
             peer_addr,
             self_reply_to_addr,
             ack_threshold: PacketId::ZERO,
@@ -113,7 +113,7 @@ impl ReceiveStreamInner {
         let mut send_buf = BytesMut::with_capacity(1400); //TODO from pool?
         header.ser(&mut send_buf);
 
-        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut send_buf).await
+        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await
     }
 
     async fn do_send_recv_sync(&self) {
@@ -128,7 +128,7 @@ impl ReceiveStreamInner {
             receive_buffer_ack_threshold: self.ack_threshold,
         }.ser(&mut send_buf);
 
-        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut send_buf).await
+        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await
     }
 
     /// Send a NAK for the earliest N missing packets - the assumption is that if more packets are
@@ -162,7 +162,7 @@ impl ReceiveStreamInner {
             send_buf.put_u64(packet_id.to_raw());
         }
 
-        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
+        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
         self.missing_packet_tick_counter += 1;
     }
 
@@ -428,7 +428,7 @@ impl ReceiveStream {
         config: Arc<ReceiveStreamConfig>,
         stream_id: u16,
         peer_addr: SocketAddr,
-        send_socket: Arc<SendSocket>,
+        send_socket: Arc<SendPipeline>,
         self_addr: SocketAddr,
         message_dispatcher: Arc<dyn MessageDispatcher>,
     ) -> ReceiveStream {
