@@ -1,21 +1,21 @@
 use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::message_header::MessageHeader;
+use crate::packet_header::{PacketHeader, PacketKind};
 use crate::packet_id::PacketId;
 use crate::send_pipeline::SendPipeline;
+use bytes::{BufMut, BytesMut};
+use bytes_varint::VarIntSupportMut;
 use std::cmp::{min, Ordering};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use bytes::{BufMut, BytesMut};
-use bytes_varint::VarIntSupportMut;
 use tokio::select;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{debug, trace, warn};
-use crate::packet_header::{PacketHeader, PacketKind};
 
 pub struct ReceiveStreamConfig {
     pub nak_interval: Duration, // configure to roughly 2x RTT
@@ -428,7 +428,7 @@ impl ReceiveStream {
         config: Arc<ReceiveStreamConfig>,
         stream_id: u16,
         peer_addr: SocketAddr,
-        send_socket: Arc<SendPipeline>,
+        send_pipeline: Arc<SendPipeline>,
         self_addr: SocketAddr,
         message_dispatcher: Arc<dyn MessageDispatcher>,
     ) -> ReceiveStream {
@@ -436,7 +436,7 @@ impl ReceiveStream {
             config.clone(),
             stream_id,
             peer_addr,
-            send_socket,
+            send_pipeline,
             self_addr,
         )));
 
@@ -554,4 +554,160 @@ enum ConsumeResult {
     Message(Vec<u8>),
     None,
     Retry,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message_dispatcher::MockMessageDispatcher;
+    use crate::send_pipeline::MockSendSocket;
+    use rstest::rstest;
+    use tokio::runtime::Builder;
+    use tokio::time;
+
+    #[rstest]
+    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![0, 10, 0, 25])]
+    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), vec![0, 8, 1,2,3,4, 0,1, 0,25])]
+    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), vec![0, 9, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25])]
+    fn test_do_send_init(#[case] self_address: SocketAddr, #[case] expected_buf: Vec<u8>) {
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            time::pause();
+
+            let mut send_socket = MockSendSocket::new();
+            send_socket.expect_local_addr()
+                .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
+            send_socket.expect_do_send_packet()
+                .once()
+                .withf(move |addr, buf|
+                    addr == &SocketAddr::from(([1, 2, 3, 4], 9)) &&
+                        buf == expected_buf.as_slice()
+                )
+                .returning(|_, _| ())
+            ;
+
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+
+            let message_dispatcher = MockMessageDispatcher::new();
+
+            let receive_stream = ReceiveStream::new(
+                Arc::new(ReceiveStreamConfig {
+                    nak_interval: Duration::from_millis(100),
+                    sync_interval: Duration::from_millis(100),
+                    receive_window_size: 32,
+                    max_num_naks_per_packet: 10,
+                }),
+                25,
+                SocketAddr::from(([1, 2, 3, 4], 9)),
+                Arc::new(send_pipeline),
+                self_address,
+                Arc::new(message_dispatcher),
+            );
+
+            receive_stream.do_send_init().await;
+        });
+    }
+
+    #[rstest]
+    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), 0, 0, 0, vec![0, 18, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), 0, 0, 0, vec![0, 16, 1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), 0, 0, 0, vec![0, 17, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::actual_values(SocketAddr::from(([1,2,3,4], 8)), 9, 3, 4, vec![0, 18, 0,25, 0,0,0,0,0,0,0,9, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,4])]
+    fn test_do_send_recv_sync(#[case] self_address: SocketAddr, #[case] high_water_mark: u64, #[case] low_water_mark: u64, #[case] ack_threshold: u64, #[case] expected_buf: Vec<u8>) {
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            time::pause();
+
+            let mut send_socket = MockSendSocket::new();
+            send_socket.expect_local_addr()
+                .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
+            send_socket.expect_do_send_packet()
+                .once()
+                .withf(move |addr, buf|
+                    addr == &SocketAddr::from(([1, 2, 3, 4], 9)) &&
+                        buf == expected_buf.as_slice()
+                )
+                .returning(|_, _| ())
+            ;
+
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+
+            let message_dispatcher = MockMessageDispatcher::new();
+
+            let receive_stream = ReceiveStream::new(
+                Arc::new(ReceiveStreamConfig {
+                    nak_interval: Duration::from_millis(100),
+                    sync_interval: Duration::from_millis(100),
+                    receive_window_size: 32,
+                    max_num_naks_per_packet: 10,
+                }),
+                25,
+                SocketAddr::from(([1, 2, 3, 4], 9)),
+                Arc::new(send_pipeline),
+                self_address,
+                Arc::new(message_dispatcher),
+            );
+
+            let mut inner = receive_stream.inner.write().await;
+            if high_water_mark > 0 {
+                inner.receive_buffer.insert(PacketId::from_raw(high_water_mark-1), (None, vec![]));
+            }
+            if low_water_mark < high_water_mark {
+                inner.receive_buffer.insert(PacketId::from_raw(low_water_mark), (None, vec![]));
+            }
+            inner.ack_threshold = PacketId::from_raw(ack_threshold);
+
+            inner.do_send_recv_sync().await;
+        });
+    }
+
+    #[tokio::test]
+    async fn test_do_send_nak() {
+        todo!()
+    }
+
+    #[tokio::test]
+    async fn test_do_loop() {
+        todo!()
+    }
+
+    #[tokio::test]
+    async fn test_on_packet() {
+        todo!()
+    }
+
+    #[tokio::test]
+    async fn test_on_send_sync_message() {
+        todo!()
+    }
+
+    #[tokio::test]
+    async fn test_scheduled_nak() {
+        todo!()
+    }
+
+    #[tokio::test]
+    async fn test_scheduled_sync() {
+        todo!()
+    }
+
+    #[tokio::test]
+    async fn test_high_water_mark() {
+        todo!()
+    }
+
+    #[tokio::test]
+    async fn test_is_complete_multi_packet_mesage_received() {
+        todo!()
+    }
+
+    #[tokio::test]
+    async fn test_low_water_mark() {
+        todo!()
+    }
+
+    #[tokio::test]
+    async fn test_sanitize_after_update() {
+        todo!()
+    }
 }

@@ -55,8 +55,7 @@
 //! Packet header (inside a UDP packet) - all numbers in network byte order (BE):
 //! ```ascii
 //! 0:  protocol version (u8)
-//! 1:  CRC checksum for the rest of the packet, starting after the checksum: u64
-//! 9:  flags (8 bits):
+//! 1:  flags (8 bits):
 //!     * bit 0-1: protocol version of the reply-to address:
 //!       * 00  V4, explicitly provided in packet
 //!       * 01  V6, explicitly provided in packet
@@ -69,7 +68,7 @@
 //!       * 100 RECV_SYNC
 //!       * 101 SEND_SYNC
 //!     * 5-7: unused, should be 0
-//! 10:  reply-to address (4+2 bytes if IP V4, 16+2 bytes if IP V6, 0 bytes if 'identical to UDP sender')
+//! 2:  reply-to address (4+2 bytes if IP V4, 16+2 bytes if IP V6, 0 bytes if 'identical to UDP sender')
 //! *:  stream id (u16): the id of the multiplexed stream that this frame belongs
 //!      or refers to. Not present for frame kind '001'.
 //!      NB: Each stream has its own send and receive buffers, incurring per-stream overhead
@@ -82,8 +81,8 @@
 //!      Present only for frame kind '000'.
 //!```
 //!
-//! The packet header has variable size, ranging from 10 bytes for a control message with UDP
-//!  reply-to address to 40 bytes for a sequenced packet with IP V6 reply-to address.
+//! The packet header has variable size, ranging from 2 bytes for a control message with UDP
+//!  reply-to address to 32 bytes for a sequenced packet with IP V6 reply-to address.
 //!
 //! Message header (message may be split across multiple packets)
 //!

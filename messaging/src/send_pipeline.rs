@@ -1,12 +1,14 @@
+use async_trait::async_trait;
+#[cfg(test)] use mockall::automock;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use async_trait::async_trait;
 use tokio::net::UdpSocket;
 use tracing::{error, trace};
 
 
 /// This is an abstraction for sending a buffer on a UDP socket, introduced to facilitate mocking
 ///  the I/O part away for testing
+#[cfg_attr(test, automock)]
 #[async_trait]
 pub trait SendSocket: Send + Sync + 'static {
     async fn do_send_packet(&self, to: SocketAddr, packet_buf: &[u8]);
