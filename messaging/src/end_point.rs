@@ -147,7 +147,7 @@ impl EndPoint {
         {
             Entry::Occupied(e) => e.get().clone(),
             Entry::Vacant(e) => {
-                let recv_strm = ReceiveStream::new(
+                let mut recv_strm = ReceiveStream::new(
                     self.get_receive_config(stream_id),
                     stream_id,
                     addr,
@@ -155,6 +155,7 @@ impl EndPoint {
                     self.receive_socket.local_addr().unwrap(),
                     self.message_dispatcher.clone(),
                 );
+                recv_strm.spawn_active_loop();
                 e.insert(Arc::new(recv_strm)).clone()
             }
         }
