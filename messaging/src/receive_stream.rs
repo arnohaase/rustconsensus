@@ -779,18 +779,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_high_water_mark() {
-        todo!()
-    }
-
-    #[tokio::test]
     async fn test_is_complete_multi_packet_mesage_received() {
         todo!()
     }
 
-    #[tokio::test]
-    async fn test_low_water_mark() {
-        todo!()
+    #[rstest]
+    #[case::empty(vec![], vec![], 0, 0, 0)]
+    #[case::ack_threshold(vec![], vec![], 5, 5, 5)]
+    #[case::one_present(vec![7], vec![], 5, 8, 7)]
+    #[case::two_present(vec![7, 8], vec![], 5, 9, 7)]
+    #[case::one_missing(vec![7], vec![6], 5, 8, 6)]
+    #[case::two_missing(vec![7, 9], vec![6, 8], 5, 10, 6)]
+    fn test_high_low_water_mark(#[case] received: Vec<u64>, #[case] missing: Vec<u64>, #[case] ack_threshold: u64, #[case] expected_high: u64, #[case] expected_low: u64) {
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            time::pause();
+
+            let mut send_socket = MockSendSocket::new();
+            send_socket.expect_local_addr()
+                .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+
+            let receive_stream = ReceiveStream::new(
+                Arc::new(ReceiveStreamConfig {
+                    nak_interval: Duration::from_millis(100),
+                    sync_interval: Duration::from_millis(100),
+                    receive_window_size: 32,
+                    max_num_naks_per_packet: 2,
+                }),
+                25,
+                SocketAddr::from(([1, 2, 3, 4], 9)),
+                Arc::new(send_pipeline),
+                SocketAddr::from(([1, 2, 3, 4], 8)),
+                Arc::new(MockMessageDispatcher::new()),
+            );
+
+            let mut inner = receive_stream.inner.write().await;
+            for packet in received {
+                inner.receive_buffer.insert(PacketId::from_raw(packet), (Some(0), vec![]));
+            }
+            for packet in missing {
+                inner.missing_packet_buffer.insert(PacketId::from_raw(packet), 1);
+            }
+            inner.ack_threshold = PacketId::from_raw(ack_threshold);
+
+            assert_eq!(inner.high_water_mark(), PacketId::from_raw(expected_high));
+            assert_eq!(inner.low_water_mark(), PacketId::from_raw(expected_low));
+        });
     }
 
     #[tokio::test]
