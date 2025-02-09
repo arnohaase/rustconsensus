@@ -6,7 +6,7 @@ use crate::packet_id::PacketId;
 use crate::send_pipeline::SendPipeline;
 use bytes::{BufMut, BytesMut};
 use bytes_varint::VarIntSupportMut;
-use std::cmp::{min, Ordering};
+use std::cmp::{max, min, Ordering};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -167,15 +167,14 @@ impl ReceiveStreamInner {
         self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
     }
 
-    /// This is the id *after* the highest packet that was received.
+    /// This is the id *after* the highest packet that was received or is missing
     fn high_water_mark(&self) -> PacketId {
-        // This is the highest entry in the receive buffer, or the ack threshold if all received
-        //  packets are acknowledged
-        // NB: Missing packets are only stored when a higher-id packet is received, so it is
-        //      irrelevant for the high-water mark
-        self.receive_buffer.last_key_value()
-            .map(|(k, _)| *k + 1)
-            .unwrap_or(self.ack_threshold)
+        match (self.receive_buffer.last_key_value(), self.missing_packet_buffer.last_key_value()) {
+            (Some((&a, _)), None) => a+1,
+            (None, Some((&b, _))) => b+1,
+            (Some((&a, _)), Some((&b, _))) => max(a, b)+1,
+            (None, None) => self.ack_threshold
+        }
     }
 
     /// This is the id below which all packets will be discarded. Because all packets between
@@ -197,18 +196,20 @@ impl ReceiveStreamInner {
 
     /// ensure consistency after buffers changed
     fn sanitize_after_update(&mut self) {
-        // adjust the ack threshold, which may have changed either because a previously missing
-        //  packet has now arrived, or because the high-water mark increased and there are no
-        //  missing packets
-        self.ack_threshold = self.missing_packet_buffer.keys().next()
-            .cloned()
-            //NB: high_water_mark() falls back to 'ack_threshold' :-)
-            .unwrap_or(self.high_water_mark());
+        // NB: this function is called frequently enough that no details are lost - in particular,
+        //  it is called after a packet is received but before messages are dispatched, so the
+        //  ack threshold is not lost if the receive buffer is drained
+
+        // NB: Within this function, ack_threshold may be outdated and inconsistent with buffer state
+
+        let high_water_mark = self.high_water_mark();
 
         // discard packets that are now outside the maximum receive window
-        if let Some(lower_bound) = self.high_water_mark() - self.config.receive_window_size as u64 {
+        if let Some(lower_bound) = high_water_mark - self.config.receive_window_size as u64 {
+            println!("lower bound: {}", lower_bound);
+
             while let Some((&packet_id, _)) = self.receive_buffer.first_key_value() {
-                if packet_id > lower_bound {
+                if packet_id >= lower_bound {
                     break;
                 }
                 debug!("received packet #{} moved out of the receive window - discarding", packet_id);
@@ -216,19 +217,23 @@ impl ReceiveStreamInner {
             }
 
             while let Some((&packet_id, _)) = self.missing_packet_buffer.first_key_value() {
-                if packet_id > lower_bound {
+                if packet_id >= lower_bound {
                     break;
                 }
                 debug!("missing packet #{} moved out of the receive window - discarding", packet_id);
                 self.missing_packet_buffer.remove(&packet_id);
             }
 
+            println!("{:?}  {:?}", self.receive_buffer, self.missing_packet_buffer);
+
             // As an optimization: If the receive window (NB: *not* just the receive buffer!)
             //  starts with continuation packets, we can safely discard them since they can
             //  never be dispatched without the start of the message.
-            for packet_id in (lower_bound + 1).to(PacketId::MAX) {
+            for packet_id in lower_bound.to(PacketId::MAX) {
                 if let Some((first_msg_offs, buf)) = self.receive_buffer.get(&packet_id) {
                     if first_msg_offs.is_none() || *first_msg_offs == Some(buf.len() as u16) {
+                        println!("removing recv {}", packet_id);
+
                         // continuation packet or ends a multi-packet message: drop the packet
                         self.receive_buffer.remove(&packet_id);
                     }
@@ -246,6 +251,14 @@ impl ReceiveStreamInner {
                 }
             }
         }
+
+        // adjust the ack threshold, which may have changed either because a previously missing
+        //  packet has now arrived, or because the high-water mark increased and there are no
+        //  missing packets
+        self.ack_threshold = self.missing_packet_buffer.keys().next()
+            .cloned()
+            //NB: high_water_mark() falls back to 'ack_threshold' :-)
+            .unwrap_or(high_water_mark);
     }
 
     fn consume_next_message(&mut self) -> Option<Vec<u8>> {
@@ -572,7 +585,6 @@ mod tests {
     use crate::send_pipeline::MockSendSocket;
     use rstest::rstest;
     use tokio::runtime::Builder;
-    use tokio::time;
 
     #[rstest]
     #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![0, 10, 0, 25])]
@@ -581,8 +593,6 @@ mod tests {
     fn test_do_send_init(#[case] self_address: SocketAddr, #[case] expected_buf: Vec<u8>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
-            time::pause();
-
             let mut send_socket = MockSendSocket::new();
             send_socket.expect_local_addr()
                 .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
@@ -631,8 +641,6 @@ mod tests {
     fn test_do_send_recv_sync(#[case] self_address: SocketAddr, #[case] high_water_mark: u64, #[case] low_water_mark: u64, #[case] ack_threshold: u64, #[case] expected_buf: Vec<u8>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
-            time::pause();
-
             let mut send_socket = MockSendSocket::new();
             send_socket.expect_local_addr()
                 .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
@@ -704,8 +712,6 @@ mod tests {
     fn test_do_send_nak(#[case] self_address: SocketAddr, #[case] missing: Vec<(u64, u64)>, #[case] expected_bufs: Vec<Vec<u8>>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
-            time::pause();
-
             let mut send_socket = MockSendSocket::new();
             send_socket.expect_local_addr()
                 .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
@@ -790,46 +796,99 @@ mod tests {
     #[case::two_present(vec![7, 8], vec![], 5, 9, 7)]
     #[case::one_missing(vec![7], vec![6], 5, 8, 6)]
     #[case::two_missing(vec![7, 9], vec![6, 8], 5, 10, 6)]
+    #[case::missing_only(vec![], vec![5], 5, 6, 5)]
+    #[case::two_missing(vec![], vec![5, 6], 5, 7, 5)]
     fn test_high_low_water_mark(#[case] received: Vec<u64>, #[case] missing: Vec<u64>, #[case] ack_threshold: u64, #[case] expected_high: u64, #[case] expected_low: u64) {
-        let rt = Builder::new_current_thread().enable_all().build().unwrap();
-        rt.block_on(async {
-            time::pause();
+        let mut send_socket = MockSendSocket::new();
+        send_socket.expect_local_addr()
+            .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
+        let send_pipeline = SendPipeline::new(Arc::new(send_socket));
 
-            let mut send_socket = MockSendSocket::new();
-            send_socket.expect_local_addr()
-                .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+        let mut inner = ReceiveStreamInner::new(
+            Arc::new(ReceiveStreamConfig {
+                nak_interval: Duration::from_millis(100),
+                sync_interval: Duration::from_millis(100),
+                receive_window_size: 32,
+                max_num_naks_per_packet: 2,
+            }),
+            25,
+            SocketAddr::from(([1, 2, 3, 4], 9)),
+            Arc::new(send_pipeline),
+            SocketAddr::from(([1, 2, 3, 4], 8)),
+        );
 
-            let receive_stream = ReceiveStream::new(
-                Arc::new(ReceiveStreamConfig {
-                    nak_interval: Duration::from_millis(100),
-                    sync_interval: Duration::from_millis(100),
-                    receive_window_size: 32,
-                    max_num_naks_per_packet: 2,
-                }),
-                25,
-                SocketAddr::from(([1, 2, 3, 4], 9)),
-                Arc::new(send_pipeline),
-                SocketAddr::from(([1, 2, 3, 4], 8)),
-                Arc::new(MockMessageDispatcher::new()),
-            );
+        for packet in received {
+            inner.receive_buffer.insert(PacketId::from_raw(packet), (Some(0), vec![]));
+        }
+        for packet in missing {
+            inner.missing_packet_buffer.insert(PacketId::from_raw(packet), 1);
+        }
+        inner.ack_threshold = PacketId::from_raw(ack_threshold);
 
-            let mut inner = receive_stream.inner.write().await;
-            for packet in received {
-                inner.receive_buffer.insert(PacketId::from_raw(packet), (Some(0), vec![]));
-            }
-            for packet in missing {
-                inner.missing_packet_buffer.insert(PacketId::from_raw(packet), 1);
-            }
-            inner.ack_threshold = PacketId::from_raw(ack_threshold);
-
-            assert_eq!(inner.high_water_mark(), PacketId::from_raw(expected_high));
-            assert_eq!(inner.low_water_mark(), PacketId::from_raw(expected_low));
-        });
+        assert_eq!(inner.high_water_mark(), PacketId::from_raw(expected_high));
+        assert_eq!(inner.low_water_mark(), PacketId::from_raw(expected_low));
     }
 
-    #[tokio::test]
-    async fn test_sanitize_after_update() {
-        todo!()
+    #[rstest]
+    #[case::empty(vec![], vec![], 0, vec![], vec![], 0)]
+    #[case::starting(vec![(1, Some(0)), (2, None)], vec![0], 0, vec![1, 2], vec![0], 0)]
+    #[case::starting_ack(vec![(2, None)], vec![1], 0, vec![2], vec![1], 1)]
+    #[case::regular(vec![(11, Some(0)), (12, None)], vec![10], 10, vec![11, 12], vec![10], 10)]
+    #[case::regular_ack_1(vec![(12, None)], vec![11], 10, vec![12], vec![11], 11)]
+    #[case::regular_ack_2(vec![(12, None)], vec![11], 9, vec![12], vec![11], 11)]
+    #[case::regular_ack_3(vec![(12, None)], vec![11], 8, vec![12], vec![11], 11)]
+    #[case::out_of_window_received(vec![(12, Some(0)), (9, Some(0)), (8, Some(0))], vec![10,11], 8, vec![9, 12], vec![10,11], 10)]
+    #[case::out_of_window_missing(vec![(12, None)], vec![8,9,10,11], 8, vec![12], vec![9,10,11], 9)]
+    #[case::out_of_window_both(vec![(12, None),(7,Some(0))], vec![8,9,10,11], 7, vec![12], vec![9,10,11], 9)]
+    #[case::mid_of_msg_all(vec![(12, None),(11, None),(10, None),(9, None)], vec![8], 8, vec![], vec![], 13)]
+    #[case::mid_of_msg_until_received(vec![(12, None),(11, Some(0)),(10, None),(9, None)], vec![8], 8, vec![11,12], vec![], 13)]
+    #[case::mid_of_msg_until_missing(vec![(12, None),(10, None),(9, None)], vec![11,8], 8, vec![12], vec![11], 11)]
+    #[case::mid_of_msg_buf_len(vec![(12, None),(11, Some(0)),(10, Some(3)),(9, None)], vec![8], 8, vec![11,12], vec![], 13)]
+    fn test_sanitize_after_update(
+        #[case] received: Vec<(u64, Option<u16>)>,
+        #[case] missing: Vec<u64>,
+        #[case] ack_threshold: u64,
+        #[case] expected_received: Vec<u64>,
+        #[case] expected_missing: Vec<u64>,
+        #[case] expected_ack_threshold: u64,
+    ) {
+        let expected_received = expected_received.iter()
+            .map(|&n| PacketId::from_raw(n))
+            .collect::<Vec<_>>();
+        let expected_missing = expected_missing.iter()
+            .map(|&n| PacketId::from_raw(n))
+            .collect::<Vec<_>>();
+
+        let mut send_socket = MockSendSocket::new();
+        send_socket.expect_local_addr()
+            .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
+        let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+
+        let mut inner = ReceiveStreamInner::new(
+            Arc::new(ReceiveStreamConfig {
+                nak_interval: Duration::from_millis(100),
+                sync_interval: Duration::from_millis(100),
+                receive_window_size: 4,
+                max_num_naks_per_packet: 2,
+            }),
+            25,
+            SocketAddr::from(([1, 2, 3, 4], 9)),
+            Arc::new(send_pipeline),
+            SocketAddr::from(([1, 2, 3, 4], 8)),
+        );
+
+        for (packet, offs_first) in received {
+            inner.receive_buffer.insert(PacketId::from_raw(packet), (offs_first, vec![1,2,3]));
+        }
+        for packet in missing {
+            inner.missing_packet_buffer.insert(PacketId::from_raw(packet), 1);
+        }
+        inner.ack_threshold = PacketId::from_raw(ack_threshold);
+
+        inner.sanitize_after_update();
+
+        assert_eq!(inner.receive_buffer.keys().cloned().collect::<Vec<_>>(), expected_received);
+        assert_eq!(inner.missing_packet_buffer.keys().cloned().collect::<Vec<_>>(), expected_missing);
+        assert_eq!(inner.ack_threshold, PacketId::from_raw(expected_ack_threshold));
     }
 }
