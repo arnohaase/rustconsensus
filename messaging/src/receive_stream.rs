@@ -402,11 +402,13 @@ impl ReceiveStreamInner {
         }
     }
 
+    /// called after testing that the low-water mark packet ends with a message that continues
+    ///  in following packets: returns true iff all packets for that message have been received
     fn is_complete_multipacket_message_received(&self) -> bool {
         for packet_id in (self.low_water_mark() + 1).to(PacketId::MAX) {
             if let Some((offs, _)) = self.receive_buffer.get(&packet_id) {
                 if offs.is_some() {
-                    // end of message
+                    // end of previous message - no need to check for 'after end of packet' etc.
                     return true;
                 }
                 // continuation packet
@@ -780,9 +782,41 @@ mod tests {
         todo!()
     }
 
-    #[tokio::test]
-    async fn test_is_complete_multi_packet_mesage_received() {
-        todo!()
+    #[rstest]
+    #[case::empty(vec![], false)]
+    #[case::ends_unterminated(vec![(2, None)], false)]
+    #[case::start_gap(vec![(2, None), (4, Some(1))], false)]
+    #[case::inner_gap(vec![(2, None), (3, None), (5, Some(1))], false)]
+    #[case::complete_1(vec![(2, None), (3, Some(1))], true)]
+    #[case::complete_2(vec![(2, None), (3, None), (4, Some(1))], true)]
+    #[case::complete_3(vec![(2, None), (3, None), (4, None), (5, Some(1))], true)]
+    #[case::offs_0(vec![(2, None), (3, Some(0))], true)]
+    #[case::offs_len(vec![(2, None), (3, Some(3))], true)]
+    #[case::trailing_continuation(vec![(2, None), (3, Some(1)), (4, None)], true)]
+    fn test_is_complete_multi_packet_message_received(#[case] received: Vec<(u64, Option<u16>)>, #[case] expected: bool) {
+        let mut send_socket = MockSendSocket::new();
+        send_socket.expect_local_addr()
+            .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
+        let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+
+        let mut inner = ReceiveStreamInner::new(
+            Arc::new(ReceiveStreamConfig {
+                nak_interval: Duration::from_millis(100),
+                sync_interval: Duration::from_millis(100),
+                receive_window_size: 32,
+                max_num_naks_per_packet: 2,
+            }),
+            25,
+            SocketAddr::from(([1, 2, 3, 4], 9)),
+            Arc::new(send_pipeline),
+            SocketAddr::from(([1, 2, 3, 4], 8)),
+        );
+
+        for (packet, offs) in received {
+            inner.receive_buffer.insert(PacketId::from_raw(packet), (offs, vec![1,2,3]));
+        }
+
+        assert_eq!(inner.is_complete_multipacket_message_received(), expected)
     }
 
     #[rstest]
