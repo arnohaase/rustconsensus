@@ -206,8 +206,6 @@ impl ReceiveStreamInner {
 
         // discard packets that are now outside the maximum receive window
         if let Some(lower_bound) = high_water_mark - self.config.receive_window_size as u64 {
-            println!("lower bound: {}", lower_bound);
-
             while let Some((&packet_id, _)) = self.receive_buffer.first_key_value() {
                 if packet_id >= lower_bound {
                     break;
@@ -223,8 +221,6 @@ impl ReceiveStreamInner {
                 debug!("missing packet #{} moved out of the receive window - discarding", packet_id);
                 self.missing_packet_buffer.remove(&packet_id);
             }
-
-            println!("{:?}  {:?}", self.receive_buffer, self.missing_packet_buffer);
 
             // As an optimization: If the receive window (NB: *not* just the receive buffer!)
             //  starts with continuation packets, we can safely discard them since they can
@@ -798,6 +794,7 @@ mod tests {
     #[case::two_missing(vec![7, 9], vec![6, 8], 5, 10, 6)]
     #[case::missing_only(vec![], vec![5], 5, 6, 5)]
     #[case::two_missing(vec![], vec![5, 6], 5, 7, 5)]
+    #[case::missing_highest(vec![4], vec![5], 5, 6, 4)]
     fn test_high_low_water_mark(#[case] received: Vec<u64>, #[case] missing: Vec<u64>, #[case] ack_threshold: u64, #[case] expected_high: u64, #[case] expected_low: u64) {
         let mut send_socket = MockSendSocket::new();
         send_socket.expect_local_addr()
@@ -840,6 +837,26 @@ mod tests {
     #[case::out_of_window_received(vec![(12, Some(0)), (9, Some(0)), (8, Some(0))], vec![10,11], 8, vec![9, 12], vec![10,11], 10)]
     #[case::out_of_window_missing(vec![(12, None)], vec![8,9,10,11], 8, vec![12], vec![9,10,11], 9)]
     #[case::out_of_window_both(vec![(12, None),(7,Some(0))], vec![8,9,10,11], 7, vec![12], vec![9,10,11], 9)]
+
+    #[case::missing_only_starting(vec![], vec![0,1,2], 0, vec![], vec![0,1,2], 0)]
+    #[case::missing_highest_starting(vec![(1, Some(0))], vec![0,2], 0, vec![1], vec![0,2], 0)]
+    #[case::missing_only_starting_ack(vec![], vec![1,2], 0, vec![], vec![1,2], 1)]
+    #[case::missing_highest_starting_ack(vec![(1, None)], vec![2], 0, vec![1], vec![2], 2)]
+    #[case::missing_only_regular(vec![], vec![10,11,12], 10, vec![], vec![10,11,12], 10)]
+    #[case::missing_highest_regular(vec![(11, Some(0))], vec![10,12], 10, vec![11], vec![10,12], 10)]
+    #[case::missing_only_regular_ack_1(vec![], vec![11,12], 10, vec![], vec![11,12], 11)]
+    #[case::missing_highest_regular_ack_1(vec![(11, None)], vec![12], 10, vec![11], vec![12], 12)]
+    #[case::missing_only_regular_ack_2(vec![], vec![11,12], 9, vec![], vec![11,12], 11)]
+    #[case::missing_highest_regular_ack_2(vec![(11, None)], vec![12], 9, vec![11], vec![12], 12)]
+    #[case::missing_only_regular_ack_3(vec![], vec![11,12], 8, vec![], vec![11,12], 11)]
+    #[case::missing_highest_regular_ack_3(vec![(11, None)], vec![12], 8, vec![11], vec![12], 12)]
+    #[case::missing_only_out_of_window_received(vec![], vec![8,9,10,11,12], 8, vec![], vec![9,10,11,12], 9)]
+    #[case::missing_highest_out_of_window_received(vec![(9, Some(0)), (8, Some(0))], vec![10,11,12], 8, vec![9], vec![10,11,12], 10)]
+    #[case::missing_only_out_of_window_missing(vec![], vec![8,9,10,11,12], 8, vec![], vec![9,10,11,12], 9)]
+    #[case::missing_highest_out_of_window_missing(vec![(11, None)], vec![8,9,10,12], 8, vec![11], vec![9,10,12], 9)]
+    #[case::missing_only_out_of_window_both(vec![], vec![7,8,9,10,11,12], 7, vec![], vec![9,10,11,12], 9)]
+    #[case::missing_highest_out_of_window_both(vec![(7,Some(0)),(9,Some(0)),(10,None)], vec![8,11,12], 7, vec![9,10], vec![11,12], 11)]
+
     #[case::mid_of_msg_all(vec![(12, None),(11, None),(10, None),(9, None)], vec![8], 8, vec![], vec![], 13)]
     #[case::mid_of_msg_until_received(vec![(12, None),(11, Some(0)),(10, None),(9, None)], vec![8], 8, vec![11,12], vec![], 13)]
     #[case::mid_of_msg_until_missing(vec![(12, None),(10, None),(9, None)], vec![11,8], 8, vec![12], vec![11], 11)]
