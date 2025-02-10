@@ -228,8 +228,6 @@ impl ReceiveStreamInner {
             for packet_id in lower_bound.to(PacketId::MAX) {
                 if let Some((first_msg_offs, buf)) = self.receive_buffer.get(&packet_id) {
                     if first_msg_offs.is_none() || *first_msg_offs == Some(buf.len() as u16) {
-                        println!("removing recv {}", packet_id);
-
                         // continuation packet or ends a multi-packet message: drop the packet
                         self.receive_buffer.remove(&packet_id);
                     }
@@ -244,6 +242,26 @@ impl ReceiveStreamInner {
                     // NB: we could discard missing packets as well based on the known message size
                     //      of a discarded initial message, but that may not be worth the complexity
                     break;
+                }
+            }
+        }
+
+        //TODO unit test packet sequence with inconsistent offsets, e.g. end-of-buffer for a packet that should start a message
+
+        let low_water_mark = self.low_water_mark();
+        match self.undispatched_marker {
+            None => {
+                if let Some((Some(first_msg_offs), _)) = self.receive_buffer.get(&low_water_mark) {
+                    let first_msg_offs = *first_msg_offs;
+                    self.undispatched_marker = Some((low_water_mark, first_msg_offs));
+                }
+            }
+            Some((packet_id, _)) => {
+                if packet_id != low_water_mark {
+                    self.undispatched_marker = None;
+                }
+                if self.receive_buffer.get(&low_water_mark).is_none() {
+                    self.undispatched_marker = None;
                 }
             }
         }
@@ -509,7 +527,7 @@ impl ReceiveStream {
             }
         }
 
-        // adjust the high-water mark by adding 'missing' packet ids up to it?
+        // adjust the high-water mark by adding 'missing' packet ids up to it
         for packet_id in inner.high_water_mark().to(message.send_buffer_high_water_mark) {
             let tick_counter = inner.missing_packet_tick_counter;
             inner.missing_packet_buffer.insert(packet_id, tick_counter);
@@ -577,7 +595,7 @@ enum ConsumeResult {
 
 #[cfg(test)]
 mod tests {
-    use mockall::{automock, Sequence};
+    use mockall::Sequence;
     use super::*;
     use crate::message_dispatcher::MockMessageDispatcher;
     use crate::send_pipeline::MockSendSocket;
@@ -624,12 +642,6 @@ mod tests {
             receive_stream.do_send_init().await;
         });
     }
-
-    #[automock]
-    trait Asdf {
-        fn do_it(&self, n: u32);
-    }
-
 
     #[rstest]
     #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), 0, 0, 0, vec![0, 18, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
@@ -861,40 +873,65 @@ mod tests {
     }
 
     #[rstest]
-    #[case::empty(vec![], vec![], 0, vec![], vec![], 0)]
-    #[case::starting(vec![(1, Some(0)), (2, None)], vec![0], 0, vec![1, 2], vec![0], 0)]
-    #[case::starting_ack(vec![(2, None)], vec![1], 0, vec![2], vec![1], 1)]
-    #[case::regular(vec![(11, Some(0)), (12, None)], vec![10], 10, vec![11, 12], vec![10], 10)]
-    #[case::regular_ack_1(vec![(12, None)], vec![11], 10, vec![12], vec![11], 11)]
-    #[case::regular_ack_2(vec![(12, None)], vec![11], 9, vec![12], vec![11], 11)]
-    #[case::regular_ack_3(vec![(12, None)], vec![11], 8, vec![12], vec![11], 11)]
-    #[case::out_of_window_received(vec![(12, Some(0)), (9, Some(0)), (8, Some(0))], vec![10,11], 8, vec![9, 12], vec![10,11], 10)]
-    #[case::out_of_window_missing(vec![(12, None)], vec![8,9,10,11], 8, vec![12], vec![9,10,11], 9)]
-    #[case::out_of_window_both(vec![(12, None),(7,Some(0))], vec![8,9,10,11], 7, vec![12], vec![9,10,11], 9)]
+    #[case::empty(vec![], vec![], 0, vec![], vec![], 0, None, None)]
+    #[case::starting_1(vec![(1, Some(0)), (2, None)], vec![0], 0, vec![1, 2], vec![0], 0, Some((1, 2)), None)]
+    #[case::starting_2(vec![(0, Some(0)), (1, Some(0)), (2, None)], vec![], 0, vec![0, 1, 2], vec![], 3, Some((0, 0)), Some((0,0)))]
+    #[case::starting_3(vec![(1, Some(0)), (2, None)], vec![0], 0, vec![1, 2], vec![0], 0, Some((1, 0)), None)]
+    #[case::starting_4(vec![(1, Some(0)), (2, None)], vec![0], 0, vec![1, 2], vec![0], 0, None, None)]
+    #[case::starting_ack(vec![(2, None)], vec![1], 0, vec![2], vec![1], 1, None, None)]
+    #[case::regular(vec![(11, Some(0)), (12, None)], vec![10], 10, vec![11, 12], vec![10], 10, None, None)]
+    #[case::regular_ack_1(vec![(12, None)], vec![11], 10, vec![12], vec![11], 11, Some((10, 0)), None)]
+    #[case::regular_ack_2(vec![(12, None)], vec![11], 9, vec![12], vec![11], 11, None, None)]
+    #[case::regular_ack_3(vec![(12, None)], vec![11], 8, vec![12], vec![11], 11, None, None)]
+    #[case::out_of_window_received(vec![(12, Some(0)), (9, Some(0)), (8, Some(0))], vec![10,11], 8, vec![9, 12], vec![10,11], 10, Some((8, 0)), Some((9, 0)))]
+    #[case::out_of_window_missing(vec![(12, None)], vec![8,9,10,11], 8, vec![12], vec![9,10,11], 9, Some((8, 0)), None)]
+    #[case::out_of_window_both(vec![(12, None),(7,Some(0))], vec![8,9,10,11], 7, vec![12], vec![9,10,11], 9, Some((7,0)), None)]
 
-    #[case::missing_only_starting(vec![], vec![0,1,2], 0, vec![], vec![0,1,2], 0)]
-    #[case::missing_highest_starting(vec![(1, Some(0))], vec![0,2], 0, vec![1], vec![0,2], 0)]
-    #[case::missing_only_starting_ack(vec![], vec![1,2], 0, vec![], vec![1,2], 1)]
-    #[case::missing_highest_starting_ack(vec![(1, None)], vec![2], 0, vec![1], vec![2], 2)]
-    #[case::missing_only_regular(vec![], vec![10,11,12], 10, vec![], vec![10,11,12], 10)]
-    #[case::missing_highest_regular(vec![(11, Some(0))], vec![10,12], 10, vec![11], vec![10,12], 10)]
-    #[case::missing_only_regular_ack_1(vec![], vec![11,12], 10, vec![], vec![11,12], 11)]
-    #[case::missing_highest_regular_ack_1(vec![(11, None)], vec![12], 10, vec![11], vec![12], 12)]
-    #[case::missing_only_regular_ack_2(vec![], vec![11,12], 9, vec![], vec![11,12], 11)]
-    #[case::missing_highest_regular_ack_2(vec![(11, None)], vec![12], 9, vec![11], vec![12], 12)]
-    #[case::missing_only_regular_ack_3(vec![], vec![11,12], 8, vec![], vec![11,12], 11)]
-    #[case::missing_highest_regular_ack_3(vec![(11, None)], vec![12], 8, vec![11], vec![12], 12)]
-    #[case::missing_only_out_of_window_received(vec![], vec![8,9,10,11,12], 8, vec![], vec![9,10,11,12], 9)]
-    #[case::missing_highest_out_of_window_received(vec![(9, Some(0)), (8, Some(0))], vec![10,11,12], 8, vec![9], vec![10,11,12], 10)]
-    #[case::missing_only_out_of_window_missing(vec![], vec![8,9,10,11,12], 8, vec![], vec![9,10,11,12], 9)]
-    #[case::missing_highest_out_of_window_missing(vec![(11, None)], vec![8,9,10,12], 8, vec![11], vec![9,10,12], 9)]
-    #[case::missing_only_out_of_window_both(vec![], vec![7,8,9,10,11,12], 7, vec![], vec![9,10,11,12], 9)]
-    #[case::missing_highest_out_of_window_both(vec![(7,Some(0)),(9,Some(0)),(10,None)], vec![8,11,12], 7, vec![9,10], vec![11,12], 11)]
+    #[case::missing_only_starting(vec![], vec![0,1,2], 0, vec![], vec![0,1,2], 0, Some((0, 0)), None)]
+    #[case::missing_highest_starting(vec![(1, Some(0))], vec![0,2], 0, vec![1], vec![0,2], 0, Some((0,0)), None)]
+    #[case::missing_highest_starting(vec![(0, Some(0)), (1, Some(0))], vec![2], 0, vec![0,1], vec![2], 2, None, Some((0,0)))]
+    #[case::missing_only_starting_ack(vec![], vec![1,2], 0, vec![], vec![1,2], 1, Some((0,0)), None)]
+    #[case::missing_highest_starting_ack(vec![(1, None)], vec![2], 0, vec![1], vec![2], 2, Some((0,0)), None)]
+    #[case::missing_only_regular(vec![], vec![10,11,12], 10, vec![], vec![10,11,12], 10, Some((10,0)), None)]
+    #[case::missing_highest_regular(vec![(11, Some(0))], vec![10,12], 10, vec![11], vec![10,12], 10, Some((10,0)), None)]
+    #[case::missing_highest_regular(vec![(10, Some(0)), (11, Some(0))], vec![12], 10, vec![10,11], vec![12], 12, Some((10,0)), Some((10,0)))]
+    #[case::missing_only_regular_ack_1(vec![], vec![11,12], 10, vec![], vec![11,12], 11, Some((10,0)), None)]
+    #[case::missing_highest_regular_ack_1(vec![(11, None)], vec![12], 10, vec![11], vec![12], 12, Some((10,0)), None)]
+    #[case::missing_only_regular_ack_2(vec![], vec![11,12], 9, vec![], vec![11,12], 11, Some((10,0)), None)]
+    #[case::missing_only_regular_ack_2(vec![], vec![11,12], 9, vec![], vec![11,12], 11, Some((11,0)), None)]
+    #[case::missing_highest_regular_ack_2(vec![(11, None)], vec![12], 9, vec![11], vec![12], 12, Some((10,0)), None)]
+    #[case::missing_highest_regular_ack_2(vec![(11, None)], vec![12], 9, vec![11], vec![12], 12, Some((11,1)), Some((11,1)))]
+    #[case::missing_only_regular_ack_3(vec![], vec![11,12], 8, vec![], vec![11,12], 11, Some((10,0)), None)]
+    #[case::missing_only_regular_ack_3(vec![], vec![11,12], 8, vec![], vec![11,12], 11, Some((11,0)), None)]
+    #[case::missing_highest_regular_ack_3(vec![(11, None)], vec![12], 8, vec![11], vec![12], 12, Some((10,0)), None)]
+    #[case::missing_highest_regular_ack_3(vec![(11, None)], vec![12], 8, vec![11], vec![12], 12, Some((11,1)), Some((11,1)))]
+    #[case::missing_only_out_of_window_received(vec![], vec![8,9,10,11,12], 8, vec![], vec![9,10,11,12], 9, Some((8,0)), None)]
+    #[case::missing_only_out_of_window_received(vec![], vec![8,9,10,11,12], 8, vec![], vec![9,10,11,12], 9, Some((9,0)), None)]
+    #[case::missing_highest_out_of_window_received(vec![(9, Some(0)), (8, Some(0))], vec![10,11,12], 8, vec![9], vec![10,11,12], 10, Some((8,0)), Some((9,0)))]
+    #[case::missing_only_out_of_window_missing(vec![], vec![8,9,10,11,12], 8, vec![], vec![9,10,11,12], 9, Some((8,0)), None)]
+    #[case::missing_only_out_of_window_missing(vec![], vec![8,9,10,11,12], 8, vec![], vec![9,10,11,12], 9, None, None)]
+    #[case::missing_highest_out_of_window_missing(vec![(11, None)], vec![8,9,10,12], 8, vec![11], vec![9,10,12], 9, Some((8,0)), None)]
+    #[case::missing_highest_out_of_window_missing(vec![(9, Some(0))], vec![8,10,11,12], 8, vec![9], vec![10,11,12], 10, Some((8,0)), Some((9,0)))]
+    #[case::missing_highest_out_of_window_missing(vec![(9, Some(0))], vec![8,10,11,12], 8, vec![9], vec![10,11,12], 10, None, Some((9,0)))]
+    #[case::missing_only_out_of_window_both(vec![], vec![7,8,9,10,11,12], 7, vec![], vec![9,10,11,12], 9, Some((7,8)), None)]
+    #[case::missing_only_out_of_window_both(vec![], vec![7,8,9,10,11,12], 7, vec![], vec![9,10,11,12], 9, Some((8,2)), None)]
+    #[case::missing_only_out_of_window_both(vec![], vec![7,8,9,10,11,12], 7, vec![], vec![9,10,11,12], 9, None, None)]
+    #[case::missing_highest_out_of_window_both(vec![(7,Some(0)),(9,Some(1)),(10,None)], vec![8,11,12], 7, vec![9,10], vec![11,12], 11, Some((7,2)), Some((9,1)))]
+    #[case::missing_highest_out_of_window_both(vec![(7,Some(0)),(9,Some(1)),(10,None)], vec![8,11,12], 7, vec![9,10], vec![11,12], 11, Some((8,2)), Some((9,1)))]
+    #[case::missing_highest_out_of_window_both(vec![(7,Some(0)),(9,Some(1)),(10,None)], vec![8,11,12], 7, vec![9,10], vec![11,12], 11, None, Some((9,1)))]
 
-    #[case::mid_of_msg_all(vec![(12, None),(11, None),(10, None),(9, None)], vec![8], 8, vec![], vec![], 13)]
-    #[case::mid_of_msg_until_received(vec![(12, None),(11, Some(0)),(10, None),(9, None)], vec![8], 8, vec![11,12], vec![], 13)]
-    #[case::mid_of_msg_until_missing(vec![(12, None),(10, None),(9, None)], vec![11,8], 8, vec![12], vec![11], 11)]
-    #[case::mid_of_msg_buf_len(vec![(12, None),(11, Some(0)),(10, Some(3)),(9, None)], vec![8], 8, vec![11,12], vec![], 13)]
+    #[case::mid_of_msg_all(vec![(12, None),(11, None),(10, None),(9, None)], vec![8], 8, vec![], vec![], 13, None, None)]
+    #[case::mid_of_msg_all(vec![(12, None),(11, None),(10, None),(9, None)], vec![8], 8, vec![], vec![], 13, Some((8,2)), None)]
+    #[case::mid_of_msg_all(vec![(12, None),(11, None),(10, None),(9, None)], vec![8], 8, vec![], vec![], 13, Some((9,1)), None)]
+    #[case::mid_of_msg_until_received(vec![(12, None),(11, Some(2)),(10, None),(9, None)], vec![8], 8, vec![11,12], vec![], 13, Some((8,1)), Some((11,2)))]
+    #[case::mid_of_msg_until_received(vec![(12, None),(11, Some(2)),(10, None),(9, None)], vec![8], 8, vec![11,12], vec![], 13, Some((9,0)), Some((11,2)))]
+    #[case::mid_of_msg_until_received(vec![(12, None),(11, Some(2)),(10, None),(9, None)], vec![8], 8, vec![11,12], vec![], 13, None,        Some((11,2)))]
+    #[case::mid_of_msg_until_missing(vec![(12, None),(10, None),(9, None)], vec![11,8], 8, vec![12], vec![11], 11, Some((8,0)), None)]
+    #[case::mid_of_msg_until_missing(vec![(12, None),(10, None),(9, None)], vec![11,8], 8, vec![12], vec![11], 11, Some((9,5)), None)]
+    #[case::mid_of_msg_until_missing(vec![(12, None),(10, None),(9, None)], vec![11,8], 8, vec![12], vec![11], 11, None,        None)]
+    #[case::mid_of_msg_buf_len(vec![(12, None),(11, Some(0)),(10, Some(3)),(9, None)], vec![8], 8, vec![11,12], vec![], 13, Some((8,0)), Some((11,0)))]
+    #[case::mid_of_msg_buf_len(vec![(12, None),(11, Some(0)),(10, Some(3)),(9, None)], vec![8], 8, vec![11,12], vec![], 13, Some((9,0)), Some((11,0)))]
+    #[case::mid_of_msg_buf_len(vec![(12, None),(11, Some(0)),(10, Some(3)),(9, None)], vec![8], 8, vec![11,12], vec![], 13, None, Some((11,0)))]
     fn test_sanitize_after_update(
         #[case] received: Vec<(u64, Option<u16>)>,
         #[case] missing: Vec<u64>,
@@ -902,6 +939,8 @@ mod tests {
         #[case] expected_received: Vec<u64>,
         #[case] expected_missing: Vec<u64>,
         #[case] expected_ack_threshold: u64,
+        #[case] undispatched_marker: Option<(u64, u16)>,
+        #[case] expected_undispatched_marker: Option<(u64, u16)>,
     ) {
         let expected_received = expected_received.iter()
             .map(|&n| PacketId::from_raw(n))
@@ -935,11 +974,13 @@ mod tests {
             inner.missing_packet_buffer.insert(PacketId::from_raw(packet), 1);
         }
         inner.ack_threshold = PacketId::from_raw(ack_threshold);
+        inner.undispatched_marker = undispatched_marker.map(|(packet_id, offset)| (PacketId::from_raw(packet_id), offset));
 
         inner.sanitize_after_update();
 
         assert_eq!(inner.receive_buffer.keys().cloned().collect::<Vec<_>>(), expected_received);
         assert_eq!(inner.missing_packet_buffer.keys().cloned().collect::<Vec<_>>(), expected_missing);
         assert_eq!(inner.ack_threshold, PacketId::from_raw(expected_ack_threshold));
+        assert_eq!(inner.undispatched_marker, expected_undispatched_marker.map(|(packet, offset)| (PacketId::from_raw(packet), offset)));
     }
 }
