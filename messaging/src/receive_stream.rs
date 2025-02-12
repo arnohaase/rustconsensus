@@ -802,26 +802,59 @@ mod tests {
     }
 
     #[rstest]
-    #[case::first_packet_simple(vec![], vec![], None, (0, Some(0), vec![0,0,0,3,1,2,3]), vec![], vec![], None, vec![vec![1,2,3]])]
-    //two, three messages
-    // one message continued
-    // two messages continued
-    // unfinished message continued
-    // unfinished message completed
+    #[case::first_packet_simple(vec![], vec![], None, (2, Some(0), vec![0,0,0,3,1,2,3]), vec![], vec![], None, vec![vec![1,2,3]])]
+    #[case::first_packet_two(vec![], vec![], None, (2, Some(0), vec![0,0,0,3,1,2,3, 0,0,0,2,5,6]), vec![], vec![], None, vec![vec![1,2,3], vec![5,6]])]
+    #[case::first_packet_three(vec![], vec![], None, (2, Some(0), vec![0,0,0,3,1,2,3, 0,0,0,1,4, 0,0,0,2,5,6]), vec![], vec![], None, vec![vec![1,2,3], vec![4], vec![5,6]])]
 
-    // missing packet at start, single message, no overlap
-    // missing packet at start, two / three messages, no overlap
-    // missing packet at start, one / two / three messages continued -> continued messgae complete, incomplete by high-water / missing
+    #[case::message_continued(vec![(2, Some(0), vec![0,0,0,4,1,2])], vec![], None, (3, Some(2), vec![3,4]), vec![], vec![], None, vec![vec![1,2,3,4]])]
+    #[case::message_continued_offs(vec![(2, Some(1), vec![8, 0,0,0,4,1,2])], vec![], Some((2, 1)), (3, Some(2), vec![3,4]), vec![], vec![], None, vec![vec![1,2,3,4]])]
+    #[case::message_continued_offs2(vec![(2, Some(0), vec![8, 0,0,0,4,1,2])], vec![], Some((2, 1)), (3, Some(2), vec![3,4]), vec![], vec![], None, vec![vec![1,2,3,4]])]
+    #[case::message_continued_offs3(vec![(2, Some(1), vec![8, 0,0,0,4,1,2])], vec![], None, (3, Some(2), vec![3,4]), vec![], vec![], None, vec![vec![1,2,3,4]])]
+    #[case::message_continued_ooo(vec![(3, Some(2), vec![3,4])], vec![2], None, (2, Some(0), vec![0,0,0,4,1,2]), vec![], vec![], None, vec![vec![1,2,3,4]])]
+    #[case::message_continued_ooo_offs(vec![(3, Some(2), vec![3,4])], vec![2], None, (2, Some(2), vec![8,9, 0,0,0,4,1,2]), vec![], vec![], None, vec![vec![1,2,3,4]])]
+    #[case::second_message_continued(vec![(2, Some(0), vec![0,0,0,1,5, 0,0,0,4,1,2])], vec![], None, (3, Some(2), vec![3,4]), vec![], vec![], None, vec![vec![5], vec![1,2,3,4]])]
+    #[case::second_message_continued_offs(vec![(2, Some(1), vec![8, 0,0,0,1,5, 0,0,0,4,1,2])], vec![], Some((2,1)), (3, Some(2), vec![3,4]), vec![], vec![], None, vec![vec![5], vec![1,2,3,4]])]
+    #[case::second_message_continued_offs2(vec![(2, Some(0), vec![8, 0,0,0,1,5, 0,0,0,4,1,2])], vec![], Some((2,1)), (3, Some(2), vec![3,4]), vec![], vec![], None, vec![vec![5], vec![1,2,3,4]])]
+    #[case::second_message_continued_offs3(vec![(2, Some(1), vec![8, 0,0,0,1,5, 0,0,0,4,1,2])], vec![], None, (3, Some(2), vec![3,4]), vec![], vec![], None, vec![vec![5], vec![1,2,3,4]])]
+    #[case::second_message_continued_ooo(vec![(3, Some(2), vec![3,4])], vec![2], None, (2, Some(0), vec![0,0,0,1,5, 0,0,0,4,1,2]), vec![], vec![], None, vec![vec![5], vec![1,2,3,4]])]
+    #[case::second_message_continued_ooo_offs(vec![(3, Some(2), vec![3,4])], vec![2], None, (2, Some(2), vec![7,8, 0,0,0,1,5, 0,0,0,4,1,2]), vec![], vec![], None, vec![vec![5], vec![1,2,3,4]])]
+    #[case::message_continued_with_continuation(vec![(2, Some(0), vec![0,0,0,4,1,2])], vec![], None, (3, Some(2), vec![3,4, 0,0,0,3,7]), vec![(3, Some(2))], vec![], Some((3, 2)), vec![vec![1,2,3,4]])]
+    #[case::message_continued_with_continuation_offs(vec![(2, Some(1), vec![8, 0,0,0,4,1,2])], vec![], Some((2, 1)), (3, Some(2), vec![3,4, 0,0,0,3,7]), vec![(3, Some(2))], vec![], Some((3, 2)), vec![vec![1,2,3,4]])]
+    #[case::message_continued_with_continuation_offs2(vec![(2, Some(0), vec![8, 0,0,0,4,1,2])], vec![], Some((2, 1)), (3, Some(2), vec![3,4, 0,0,0,3,7]), vec![(3, Some(2))], vec![], Some((3, 2)), vec![vec![1,2,3,4]])]
+    #[case::message_continued_with_continuation_offs3(vec![(2, Some(1), vec![8, 0,0,0,4,1,2])], vec![], None, (3, Some(2), vec![3,4, 0,0,0,3,7]), vec![(3, Some(2))], vec![], Some((3, 2)), vec![vec![1,2,3,4]])]
+    #[case::message_continued_with_continuation_ooo(vec![(3, Some(2), vec![3,4, 0,0,0,3,7])], vec![2], None, (2, Some(0), vec![0,0,0,4,1,2]), vec![(3, Some(2))], vec![], Some((3, 2)), vec![vec![1,2,3,4]])]
+    #[case::message_continued_with_continuation_ooo_offs(vec![(3, Some(2), vec![3,4, 0,0,0,3,7])], vec![2], None, (2, Some(2), vec![7,8, 0,0,0,4,1,2]), vec![(3, Some(2))], vec![], Some((3, 2)), vec![vec![1,2,3,4]])]
+    #[case::second_message_continued_with_continuation(vec![(2, Some(0), vec![0,0,0,1,8, 0,0,0,4,1,2])], vec![], None, (3, Some(2), vec![3,4, 0,0,0,3,7]), vec![(3, Some(2))], vec![], Some((3, 2)), vec![vec![8], vec![1,2,3,4]])]
+    #[case::second_message_continued_with_continuation_offs(vec![(2, Some(1), vec![8, 0,0,0,1,8, 0,0,0,4,1,2])], vec![], Some((2, 1)), (3, Some(2), vec![3,4, 0,0,0,3,7]), vec![(3, Some(2))], vec![], Some((3, 2)), vec![vec![8], vec![1,2,3,4]])]
+    #[case::second_message_continued_with_continuation_offs2(vec![(2, Some(0), vec![8, 0,0,0,1,8, 0,0,0,4,1,2])], vec![], Some((2, 1)), (3, Some(2), vec![3,4, 0,0,0,3,7]), vec![(3, Some(2))], vec![], Some((3, 2)), vec![vec![8], vec![1,2,3,4]])]
+    #[case::second_message_continued_with_continuation_offs3(vec![(2, Some(1), vec![8, 0,0,0,1,8, 0,0,0,4,1,2])], vec![], None, (3, Some(2), vec![3,4, 0,0,0,3,7]), vec![(3, Some(2))], vec![], Some((3, 2)), vec![vec![8], vec![1,2,3,4]])]
+    #[case::second_message_continued_with_continuation_ooo(vec![(3, Some(2), vec![3,4, 0,0,0,3,7])], vec![2], None, (2, Some(0), vec![0,0,0,1,8, 0,0,0,4,1,2]), vec![(3, Some(2))], vec![], Some((3, 2)), vec![vec![8], vec![1,2,3,4]])]
+    #[case::second_message_continued_with_continuation_ooo_offs(vec![(3, Some(2), vec![3,4, 0,0,0,3,7])], vec![2], None, (2, Some(2), vec![7,8, 0,0,0,1,8, 0,0,0,4,1,2]), vec![(3, Some(2))], vec![], Some((3, 2)), vec![vec![8], vec![1,2,3,4]])]
 
-    // packet above high-water mark: creates missing gap
+    #[case::long_continued(vec![(2, Some(2), vec![3,4, 0,0,0,3,1]), (3, None, vec![2])], vec![], None, (4, Some(1), vec![3]), vec![], vec![], None, vec![vec![1,2,3]])]
+    #[case::long_continued_with_more(vec![(2, Some(2), vec![3,4, 0,0,0,3,1]), (3, None, vec![2])], vec![], None, (4, Some(1), vec![3, 0,0,0,2,5,6]), vec![], vec![], None, vec![vec![1,2,3], vec![5,6]])]
+    #[case::long_continued_with_more2(vec![(2, Some(2), vec![3,4, 0,0,0,3,1]), (3, None, vec![2])], vec![], None, (4, Some(1), vec![3, 0,0,0,2,5,6, 0,0,0,1]), vec![(4, Some(1))], vec![], Some((4,7)), vec![vec![1,2,3], vec![5,6]])]
+    #[case::long_continued_ooo1(vec![(2, Some(2), vec![3,4, 0,0,0,3,1]), (4, Some(1), vec![3])], vec![3], None, (3, None, vec![2]), vec![], vec![], None, vec![vec![1,2,3]])]
+    #[case::long_continued_ooo1_with_more(vec![(2, Some(2), vec![3,4, 0,0,0,3,1]), (4, Some(1), vec![3, 0,0,0,2,5,6])], vec![3], None, (3, None, vec![2]), vec![], vec![], None, vec![vec![1,2,3], vec![5,6]])]
+    #[case::long_continued_ooo1_with_more2(vec![(2, Some(2), vec![3,4, 0,0,0,3,1]), (4, Some(1), vec![3, 0,0,0,2,5,6, 0,0,0,1])], vec![3], None, (3, None, vec![2]), vec![(4, Some(1))], vec![], Some((4,7)), vec![vec![1,2,3], vec![5,6]])]
+    #[case::long_continued_ooo2(vec![(3, None, vec![2]), (4, Some(1), vec![3])], vec![2], None, (2, Some(2), vec![3,4, 0,0,0,3,1]), vec![], vec![], None, vec![vec![1,2,3]])]
+    #[case::long_continued_ooo2_with_more(vec![(3, None, vec![2]), (4, Some(1), vec![3, 0,0,0,2,5,6])], vec![2], None, (2, Some(2), vec![3,4, 0,0,0,3,1]), vec![], vec![], None, vec![vec![1,2,3], vec![5,6]])]
+    #[case::long_continued_ooo2_with_more2(vec![(3, None, vec![2]), (4, Some(1), vec![3, 0,0,0,2,5,6, 0,0,0,1])], vec![2], None, (2, Some(2), vec![3,4, 0,0,0,3,1]), vec![(4, Some(1))], vec![], Some((4,7)), vec![vec![1,2,3], vec![5,6]])]
+
+
+
+
+    // packet above high-water mark: creates missing gap -> based on ack threshold or received packet
     // packet below ack threshold, below low-water mark
+    // packet overflows receive window
 
     // strange / broken packets: offset points to end / after end of buffer
     // message length exceeds configured maximum
+    // message continues beyond declared message length
 
 
 
-    #[case::todo(vec![], vec![], None, (0, Some(0), vec![0,0,0,2,1,2,3]), vec![], vec![], None, vec![vec![1,2,3]])]
+    // #[case::todo(vec![], vec![], None, (0, Some(0), vec![0,0,0,2,1,2,3]), vec![], vec![], None, vec![vec![1,2,3]])]
     fn test_on_packet(
         #[case] received: Vec<(u64, Option<u16>, Vec<u8>)>,
         #[case] missing: Vec<u64>,
@@ -865,10 +898,9 @@ mod tests {
                     inner.missing_packet_buffer.insert(PacketId::from_raw(packet), 0);
                 }
                 inner.undispatched_marker = undispatched_marker.map(|(packet, offs)| (PacketId::from_raw(packet), offs));
+                inner.ack_threshold = PacketId::from_raw(2);
             }
-
-            let (sequence_number, offs, payload) = new_packet;
-            receive_stream.on_packet(PacketId::from_raw(sequence_number), offs, &payload).await;
+let (sequence_number, offs, payload) = new_packet;receive_stream.on_packet(PacketId::from_raw(sequence_number), offs, &payload).await;
 
             message_dispatcher.assert_messages(SocketAddr::from(([1,2,3,4], 9)), 25, expected_messages).await;
 
