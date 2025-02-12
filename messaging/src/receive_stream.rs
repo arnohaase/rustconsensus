@@ -595,12 +595,14 @@ enum ConsumeResult {
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
     use mockall::Sequence;
     use super::*;
     use crate::message_dispatcher::MockMessageDispatcher;
     use crate::send_pipeline::MockSendSocket;
     use rstest::rstest;
     use tokio::runtime::Builder;
+    use tokio::sync::Mutex;
 
     #[rstest]
     #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![0, 10, 0, 25])]
@@ -769,14 +771,113 @@ mod tests {
         });
     }
 
+    struct CollectingMessageDispatcher {
+        messages: Mutex<Vec<(SocketAddr, Option<u16>, Vec<u8>)>>,
+    }
+    impl CollectingMessageDispatcher {
+        fn new() -> CollectingMessageDispatcher {
+            CollectingMessageDispatcher {
+                messages: Default::default(),
+            }
+        }
+
+        async fn assert_messages(&self, expected_sender: SocketAddr, expected_stream_id: u16, expected_messages: Vec<Vec<u8>>) {
+            let expected = expected_messages.into_iter()
+                .map(|buf| (expected_sender, Some(expected_stream_id), buf))
+                .collect::<Vec<_>>();
+
+            assert_eq!(self.messages.lock().await.clone(), expected);
+        }
+    }
+    #[async_trait]
+    impl MessageDispatcher for CollectingMessageDispatcher {
+        async fn on_message(&self, sender: SocketAddr, stream_id: Option<u16>, msg_buf: &[u8]) {
+            self.messages.lock().await.push((sender, stream_id, msg_buf.to_vec()));
+        }
+    }
+
     #[tokio::test]
     async fn test_do_loop() {
         todo!()
     }
 
-    #[tokio::test]
-    async fn test_on_packet() {
-        todo!()
+    #[rstest]
+    #[case::first_packet_simple(vec![], vec![], None, (0, Some(0), vec![0,0,0,3,1,2,3]), vec![], vec![], None, vec![vec![1,2,3]])]
+    //two, three messages
+    // one message continued
+    // two messages continued
+    // unfinished message continued
+    // unfinished message completed
+
+    // missing packet at start, single message, no overlap
+    // missing packet at start, two / three messages, no overlap
+    // missing packet at start, one / two / three messages continued -> continued messgae complete, incomplete by high-water / missing
+
+    // packet above high-water mark: creates missing gap
+    // packet below ack threshold, below low-water mark
+
+    // strange / broken packets: offset points to end / after end of buffer
+    // message length exceeds configured maximum
+
+
+
+    #[case::todo(vec![], vec![], None, (0, Some(0), vec![0,0,0,2,1,2,3]), vec![], vec![], None, vec![vec![1,2,3]])]
+    fn test_on_packet(
+        #[case] received: Vec<(u64, Option<u16>, Vec<u8>)>,
+        #[case] missing: Vec<u64>,
+        #[case] undispatched_marker: Option<(u64, u16)>,
+        #[case] new_packet: (u64, Option<u16>, Vec<u8>),
+        #[case] expected_received: Vec<(u64, Option<u16>)>,
+        #[case] expected_missing: Vec<u64>,
+        #[case] expected_undispatched_marker: Option<(u64, u16)>,
+        #[case] expected_messages: Vec<Vec<u8>>,
+    ) {
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let mut send_socket = MockSendSocket::new();
+            send_socket.expect_local_addr()
+                .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
+
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+
+            let message_dispatcher = Arc::new(CollectingMessageDispatcher::new());
+
+            let receive_stream = ReceiveStream::new(
+                Arc::new(ReceiveStreamConfig {
+                    nak_interval: Duration::from_millis(100),
+                    sync_interval: Duration::from_millis(100),
+                    receive_window_size: 32,
+                    max_num_naks_per_packet: 10,
+                }),
+                25,
+                SocketAddr::from(([1, 2, 3, 4], 9)),
+                Arc::new(send_pipeline),
+                SocketAddr::from(([1, 2, 3, 4], 8)),
+                message_dispatcher.clone(),
+            );
+
+            {
+                let mut inner = receive_stream.inner.write().await;
+                for (packet, offs, buf) in received {
+                    inner.receive_buffer.insert(PacketId::from_raw(packet), (offs, buf));
+                }
+                for packet in missing {
+                    inner.missing_packet_buffer.insert(PacketId::from_raw(packet), 0);
+                }
+                inner.undispatched_marker = undispatched_marker.map(|(packet, offs)| (PacketId::from_raw(packet), offs));
+            }
+
+            let (sequence_number, offs, payload) = new_packet;
+            receive_stream.on_packet(PacketId::from_raw(sequence_number), offs, &payload).await;
+
+            message_dispatcher.assert_messages(SocketAddr::from(([1,2,3,4], 9)), 25, expected_messages).await;
+
+            let inner = receive_stream.inner.read().await;
+            //TODO expected_received
+            assert_eq!(inner.receive_buffer.iter().map(|(packet, (offs, _))| (packet.to_raw(), *offs)).collect::<Vec<_>>(), expected_received);
+            assert_eq!(inner.missing_packet_buffer.keys().cloned().collect::<Vec<_>>(), expected_missing.iter().map(|&packet| PacketId::from_raw(packet)).collect::<Vec<_>>());
+            assert_eq!(inner.undispatched_marker, expected_undispatched_marker.map(|(packet, offs)| (PacketId::from_raw(packet), offs)));
+        });
     }
 
     #[tokio::test]
