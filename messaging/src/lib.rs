@@ -51,6 +51,7 @@
 //! ## Header
 //!
 //! TODO packet id as u64 to make it guaranteed unique per stream
+//! TODO sender 'unique part' to  detect and handle server restart
 //!
 //! Packet header (inside a UDP packet) - all numbers in network byte order (BE):
 //! ```ascii

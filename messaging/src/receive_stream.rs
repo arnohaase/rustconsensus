@@ -841,12 +841,12 @@ mod tests {
     #[case::long_continued_ooo2_with_more(vec![(3, None, vec![2]), (4, Some(1), vec![3, 0,0,0,2,5,6])], vec![2], None, (2, Some(2), vec![3,4, 0,0,0,3,1]), vec![], vec![], None, vec![vec![1,2,3], vec![5,6]])]
     #[case::long_continued_ooo2_with_more2(vec![(3, None, vec![2]), (4, Some(1), vec![3, 0,0,0,2,5,6, 0,0,0,1])], vec![2], None, (2, Some(2), vec![3,4, 0,0,0,3,1]), vec![(4, Some(1))], vec![], Some((4,7)), vec![vec![1,2,3], vec![5,6]])]
 
-
-
-
-    // packet above high-water mark: creates missing gap -> based on ack threshold or received packet
-    // packet below ack threshold, below low-water mark
-    // packet overflows receive window
+    #[case::gap_above_high_water_mark(vec![(1, Some(0), vec![0,0,0,5,1,2,3])], vec![], None, (3, Some(0), vec![0,0,0,1,5]), vec![(1,Some(0)), (3,Some(0))], vec![2], Some((1,0)), vec![])]
+    #[case::below_ack_threshold(vec![(1, Some(0), vec![0,0,0,5,1,2,3])], vec![], None, (0, Some(0), vec![0,0,0,1,5]), vec![(1,Some(0))], vec![], None, vec![])]
+    #[case::below_receive_window(vec![(8, Some(0), vec![0,0,0,5,1,2,3])], vec![5,6,7], None, (4, Some(0), vec![0,0,0,1,5]), vec![(8,Some(0))], vec![5,6,7], None, vec![])]
+    #[case::overflow_received(vec![(5,Some(2),vec![5,6, 0,0,0,8,1,2,3]), (8,Some(0),vec![0,0,0,5,1,2,3])], vec![6,7], None, (9, Some(0), vec![0,0,0,1,5]), vec![(8,Some(0)), (9,Some(0))], vec![6,7], None, vec![])]
+    #[case::overflow_received_discarded(vec![(5,Some(2),vec![5,6, 0,0,0,8,1,2,3]), (6,None,vec![4]), (8,Some(0),vec![0,0,0,5,1,2,3])], vec![7], None, (9, Some(0), vec![0,0,0,1,5]), vec![(8,Some(0)), (9,Some(0))], vec![7], None, vec![])]
+    #[case::overflow_missing(vec![(8, Some(0), vec![0,0,0,5,1,2,3])], vec![5,6,7], None, (9, Some(0), vec![0,0,0,1,5]), vec![(8,Some(0)),((9,Some(0)))], vec![6,7], None, vec![])]
 
     // strange / broken packets: offset points to end / after end of buffer
     // message length exceeds configured maximum
@@ -879,7 +879,7 @@ mod tests {
                 Arc::new(ReceiveStreamConfig {
                     nak_interval: Duration::from_millis(100),
                     sync_interval: Duration::from_millis(100),
-                    receive_window_size: 32,
+                    receive_window_size: 4,
                     max_num_naks_per_packet: 10,
                 }),
                 25,
