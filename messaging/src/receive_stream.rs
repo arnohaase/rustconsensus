@@ -23,6 +23,8 @@ pub struct ReceiveStreamConfig {
 
     pub receive_window_size: u32,
     pub max_num_naks_per_packet: usize, //TODO limit so it fits into a single packet
+
+    pub max_message_size: u32,
 }
 
 //TODO unit test
@@ -246,6 +248,27 @@ impl ReceiveStreamInner {
             }
         }
 
+        // remove non-starting packets at the start of the buffer
+        loop {
+            let low_water_mark = self.low_water_mark();
+            match self.receive_buffer.get(&low_water_mark) {
+                None => {
+                    break;
+                }
+                Some((None, _)) => {
+                    self.receive_buffer.remove(&low_water_mark);
+                }
+                Some((Some(offs), buf)) => {
+                    if buf.len() <= *offs as usize {
+                        self.receive_buffer.remove(&low_water_mark);
+                    }
+                    else {
+                        break;
+                    }
+                }
+            }
+        }
+
         //TODO unit test packet sequence with inconsistent offsets, e.g. end-of-buffer for a packet that should start a message
 
         let low_water_mark = self.low_water_mark();
@@ -297,11 +320,15 @@ impl ReceiveStreamInner {
         //TODO there is a potential optimization here by using impl<Buf> to avoid copying
         //TODO optimization: call this only if the first missing packet was added, or the buffer was empty
 
+        println!("_consume {:?}", self.receive_buffer);
+
         let low_water_mark = self.low_water_mark();
         trace!("low water mark: {:?}", low_water_mark);
 
         let (next_offs, buf) = if let Some((lwm_offs, lwm_buf)) = self.receive_buffer.get(&low_water_mark) {
             // the low-water mark packet is received, not missing
+
+            println!("next_offs {:?} / buf {:?}", lwm_offs, lwm_buf);
 
             // assert that the lwm packet actually starts a message
             let lwm_offs = lwm_offs.expect("non-starting packets should have been skipped");
@@ -346,6 +373,20 @@ impl ReceiveStreamInner {
             }
         };
 
+        if header.message_len > self.config.max_message_size {
+            warn!("packet #{} declares a message length of {} which is longer than the configured maximum of {}", low_water_mark, header.message_len, self.config.max_message_size);
+
+            println!("{:?}", self.receive_buffer);
+
+            self.receive_buffer.remove(&low_water_mark);
+            println!("{:?}", self.receive_buffer);
+            self.sanitize_after_update();
+            println!("{:?}", self.receive_buffer);
+            return ConsumeResult::Retry;
+        }
+
+        //TODO check message length against configured maximum message length
+
         match (header.message_len as usize).cmp(&buf.len()) {
             Ordering::Less => {
                 // the message is contained in the packet
@@ -380,12 +421,27 @@ impl ReceiveStreamInner {
 
                         match *offs {
                             None => {
+                                if assembly_buffer.len() + buf.len() > header.message_len as usize {
+                                    warn!("packet {}: message (started in packet {}) exceeds declared message length of {} - this is a bug on the sender side and may be a DoS attack", low_water_mark, packet_id, header.message_len);
+                                    self.receive_buffer.remove(&packet_id);
+                                    self.sanitize_after_update();
+                                    return ConsumeResult::Retry;
+                                }
+
                                 assembly_buffer.extend_from_slice(buf);
                                 self.receive_buffer.remove(&packet_id);
+                                //TODO check the assembly buffer against configured maximum length
                             }
                             Some(offs) => {
                                 if offs as usize > buf.len() {
                                     warn!("packet #{} has first message offset {} pointing after the end of the packet {} - skipping", packet_id, next_offs, buf.len());
+                                    self.receive_buffer.remove(&packet_id);
+                                    self.sanitize_after_update();
+                                    return ConsumeResult::Retry;
+                                }
+
+                                if assembly_buffer.len() + offs as usize > header.message_len as usize {
+                                    warn!("packet {}: message (started in packet {}) exceeds declared message size of {} - this is a bug on the sender side and may be a DoS attack", low_water_mark, packet_id, header.message_len);
                                     self.receive_buffer.remove(&packet_id);
                                     self.sanitize_after_update();
                                     return ConsumeResult::Retry;
@@ -558,8 +614,12 @@ impl ReceiveStream {
         // remove it from the 'missing' set
         inner.missing_packet_buffer.remove(&sequence_number);
 
+        println!("before sanitize: {:?}", inner.receive_buffer);
+
         // clean up internal data structures
         inner.sanitize_after_update();
+
+        println!("after sanitize: {:?}", inner.receive_buffer);
 
         while let Some(buf) = inner.consume_next_message() {
             self.message_dispatcher.on_message(inner.peer_addr, Some(inner.stream_id), &buf).await;
@@ -633,6 +693,7 @@ mod tests {
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 32,
                     max_num_naks_per_packet: 10,
+                    max_message_size: 10,
                 }),
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -675,6 +736,7 @@ mod tests {
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 32,
                     max_num_naks_per_packet: 10,
+                    max_message_size: 10,
                 }),
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -752,6 +814,7 @@ mod tests {
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 32,
                     max_num_naks_per_packet: 2,
+                    max_message_size: 10,
                 }),
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -848,13 +911,27 @@ mod tests {
     #[case::overflow_received_discarded(vec![(5,Some(2),vec![5,6, 0,0,0,8,1,2,3]), (6,None,vec![4]), (8,Some(0),vec![0,0,0,5,1,2,3])], vec![7], None, (9, Some(0), vec![0,0,0,1,5]), vec![(8,Some(0)), (9,Some(0))], vec![7], None, vec![])]
     #[case::overflow_missing(vec![(8, Some(0), vec![0,0,0,5,1,2,3])], vec![5,6,7], None, (9, Some(0), vec![0,0,0,1,5]), vec![(8,Some(0)),((9,Some(0)))], vec![6,7], None, vec![])]
 
-    // strange / broken packets: offset points to end / after end of buffer
-    // message length exceeds configured maximum
-    // message continues beyond declared message length
+    #[case::offset_after_buf_standalone(vec![], vec![], None, (2,Some(5),vec![1,2,3,4]), vec![], vec![], None, vec![])]
+    #[case::offset_after_buf_continuation(vec![(1,Some(0),vec![0,0,0,5,1,2,3])], vec![], None, (2,Some(5),vec![1,2,3,4]), vec![], vec![], None, vec![])] //TODO there should be some logging at least that the message and packet(s) are discarded
+    #[case::offset_incomplete_len_standalone(vec![], vec![], None, (2,Some(1),vec![1,2,3,4]), vec![], vec![], None, vec![])]
+    #[case::offset_incomplete_len_continuation(vec![(1,Some(0),vec![0,0,0,5,1,2,3])], vec![], None, (2,Some(2),vec![1,2,3,4]), vec![], vec![], None, vec![vec![1,2,3,1,2]])]
+    #[case::offset_to_end_standalone(vec![], vec![], None, (2,Some(4),vec![1,2,3,4]), vec![], vec![], None, vec![])]
+    #[case::offset_to_end_continuation(vec![(1,Some(0),vec![0,0,0,5,1,2,3])], vec![], None, (2,Some(2), vec![1,2]), vec![], vec![], None, vec![vec![1,2,3,1,2]])]
+    #[case::message_longer_than_declared(vec![(1,Some(0),vec![0,0,0,5,1,2,3])], vec![], None, (2,Some(3), vec![1,2,3]), vec![], vec![], None, vec![])] //TODO there should be some logging
+    #[case::message_shorter_than_declared(vec![(1,Some(0),vec![0,0,0,5,1,2,3])], vec![], None, (2,Some(1), vec![1]), vec![], vec![], None, vec![])] //TODO there should be some logging
 
-
-
-    // #[case::todo(vec![], vec![], None, (0, Some(0), vec![0,0,0,2,1,2,3]), vec![], vec![], None, vec![vec![1,2,3]])]
+    #[case::message_max_len_simple(vec![], vec![], None, (2,Some(0),vec![0,0,0,10,1,2,3,4,5,6,7,8,9,10,10]), vec![], vec![], None, vec![vec![1,2,3,4,5,6,7,8,9,10]])]
+    #[case::message_too_long_simple(vec![], vec![], None, (2,Some(0),vec![0,0,0,11,1,2,3,4,5,6,7,8,9,10,11]), vec![], vec![], None, vec![])]
+    #[case::message_too_long_simple_continued(vec![], vec![], None, (2,Some(0),vec![0,0,0,11,1,2,3,4,5,6,7,8,9,10,11, 0,0,0,1,4]), vec![], vec![], None, vec![])]
+    #[case::message_too_long_simple_continued_multi(vec![], vec![], None, (2,Some(0),vec![0,0,0,11,1,2,3,4,5,6,7,8,9,10,11, 0,0,0,5]), vec![], vec![], None, vec![])]
+    #[case::message_body_too_long_two_packets(vec![(1,Some(2),vec![5,6, 0,0,0,10,1,2,3,4,5])], vec![], None, (2,Some(6),vec![1,2,3,4,5,6]), vec![], vec![], None, vec![])]
+    #[case::message_decl_too_long_two_packets(vec![(1,Some(2),vec![5,6, 0,0,0,11,1,2,3,4,5])], vec![], None, (2,Some(6),vec![1,2,3,4,5,6]), vec![], vec![], None, vec![])]
+    #[case::message_body_too_long_two_packets_continued(vec![(1,Some(2),vec![5,6, 0,0,0,10,1,2,3,4,5])], vec![], None, (2,Some(6),vec![1,2,3,4,5,6, 0,0,0,1,9]), vec![], vec![], None, vec![])]
+    #[case::message_decl_too_long_two_packets_continued(vec![(1,Some(2),vec![5,6, 0,0,0,11,1,2,3,4,5])], vec![], None, (2,Some(6),vec![1,2,3,4,5,6, 0,0,0,1,9]), vec![], vec![], None, vec![vec![9]])]
+    #[case::message_body_too_long_three_packets(vec![(0,Some(2),vec![5,6, 0,0,0,10,1,2,3,4,5]), (1,None,vec![6,7,8])], vec![], None, (2,Some(3),vec![9,10,11]), vec![], vec![], None, vec![])]
+    #[case::message_decl_too_long_three_packets(vec![(0,Some(2),vec![5,6, 0,0,0,11,1,2,3,4,5]), (1,None,vec![6,7,8])], vec![], None, (2,Some(3),vec![9,10,11]), vec![], vec![], None, vec![])]
+    #[case::message_body_too_long_three_packets_continued(vec![(0,Some(2),vec![5,6, 0,0,0,10,1,2,3,4,5]), (1,None,vec![6,7,8])], vec![], None, (2,Some(3),vec![9,10,11, 0,0,0,1,4]), vec![], vec![], None, vec![])]
+    #[case::message_decl_too_long_three_packets_continued(vec![(0,Some(2),vec![5,6, 0,0,0,11,1,2,3,4,5]), (1,None,vec![6,7,8])], vec![], None, (2,Some(3),vec![9,10,11, 0,0,0,1,4]), vec![], vec![], None, vec![vec![4]])]
     fn test_on_packet(
         #[case] received: Vec<(u64, Option<u16>, Vec<u8>)>,
         #[case] missing: Vec<u64>,
@@ -881,6 +958,7 @@ mod tests {
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 4,
                     max_num_naks_per_packet: 10,
+                    max_message_size: 10,
                 }),
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -900,12 +978,11 @@ mod tests {
                 inner.undispatched_marker = undispatched_marker.map(|(packet, offs)| (PacketId::from_raw(packet), offs));
                 inner.ack_threshold = PacketId::from_raw(2);
             }
-let (sequence_number, offs, payload) = new_packet;receive_stream.on_packet(PacketId::from_raw(sequence_number), offs, &payload).await;
+            let (sequence_number, offs, payload) = new_packet;receive_stream.on_packet(PacketId::from_raw(sequence_number), offs, &payload).await;
 
             message_dispatcher.assert_messages(SocketAddr::from(([1,2,3,4], 9)), 25, expected_messages).await;
 
             let inner = receive_stream.inner.read().await;
-            //TODO expected_received
             assert_eq!(inner.receive_buffer.iter().map(|(packet, (offs, _))| (packet.to_raw(), *offs)).collect::<Vec<_>>(), expected_received);
             assert_eq!(inner.missing_packet_buffer.keys().cloned().collect::<Vec<_>>(), expected_missing.iter().map(|&packet| PacketId::from_raw(packet)).collect::<Vec<_>>());
             assert_eq!(inner.undispatched_marker, expected_undispatched_marker.map(|(packet, offs)| (PacketId::from_raw(packet), offs)));
@@ -950,6 +1027,7 @@ let (sequence_number, offs, payload) = new_packet;receive_stream.on_packet(Packe
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 32,
                 max_num_naks_per_packet: 2,
+                max_message_size: 10,
             }),
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -986,6 +1064,7 @@ let (sequence_number, offs, payload) = new_packet;receive_stream.on_packet(Packe
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 32,
                 max_num_naks_per_packet: 2,
+                max_message_size: 10,
             }),
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1016,6 +1095,8 @@ let (sequence_number, offs, payload) = new_packet;receive_stream.on_packet(Packe
     #[case::regular_ack_1(vec![(12, None)], vec![11], 10, vec![12], vec![11], 11, Some((10, 0)), None)]
     #[case::regular_ack_2(vec![(12, None)], vec![11], 9, vec![12], vec![11], 11, None, None)]
     #[case::regular_ack_3(vec![(12, None)], vec![11], 8, vec![12], vec![11], 11, None, None)]
+    #[case::offs_at_end(vec![(2,Some(3))], vec![], 2, vec![], vec![], 3, None, None)]
+    #[case::offs_after_end(vec![(2,Some(4))], vec![], 2, vec![], vec![], 3, None, None)]
     #[case::out_of_window_received(vec![(12, Some(0)), (9, Some(0)), (8, Some(0))], vec![10,11], 8, vec![9, 12], vec![10,11], 10, Some((8, 0)), Some((9, 0)))]
     #[case::out_of_window_missing(vec![(12, None)], vec![8,9,10,11], 8, vec![12], vec![9,10,11], 9, Some((8, 0)), None)]
     #[case::out_of_window_both(vec![(12, None),(7,Some(0))], vec![8,9,10,11], 7, vec![12], vec![9,10,11], 9, Some((7,0)), None)]
@@ -1024,20 +1105,20 @@ let (sequence_number, offs, payload) = new_packet;receive_stream.on_packet(Packe
     #[case::missing_highest_starting(vec![(1, Some(0))], vec![0,2], 0, vec![1], vec![0,2], 0, Some((0,0)), None)]
     #[case::missing_highest_starting(vec![(0, Some(0)), (1, Some(0))], vec![2], 0, vec![0,1], vec![2], 2, None, Some((0,0)))]
     #[case::missing_only_starting_ack(vec![], vec![1,2], 0, vec![], vec![1,2], 1, Some((0,0)), None)]
-    #[case::missing_highest_starting_ack(vec![(1, None)], vec![2], 0, vec![1], vec![2], 2, Some((0,0)), None)]
+    #[case::missing_highest_starting_ack(vec![(1, None)], vec![2], 0, vec![], vec![2], 2, Some((0,0)), None)]
     #[case::missing_only_regular(vec![], vec![10,11,12], 10, vec![], vec![10,11,12], 10, Some((10,0)), None)]
     #[case::missing_highest_regular(vec![(11, Some(0))], vec![10,12], 10, vec![11], vec![10,12], 10, Some((10,0)), None)]
     #[case::missing_highest_regular(vec![(10, Some(0)), (11, Some(0))], vec![12], 10, vec![10,11], vec![12], 12, Some((10,0)), Some((10,0)))]
     #[case::missing_only_regular_ack_1(vec![], vec![11,12], 10, vec![], vec![11,12], 11, Some((10,0)), None)]
-    #[case::missing_highest_regular_ack_1(vec![(11, None)], vec![12], 10, vec![11], vec![12], 12, Some((10,0)), None)]
+    #[case::missing_highest_regular_ack_1(vec![(11, None)], vec![12], 10, vec![], vec![12], 12, Some((10,0)), None)]
     #[case::missing_only_regular_ack_2(vec![], vec![11,12], 9, vec![], vec![11,12], 11, Some((10,0)), None)]
     #[case::missing_only_regular_ack_2(vec![], vec![11,12], 9, vec![], vec![11,12], 11, Some((11,0)), None)]
-    #[case::missing_highest_regular_ack_2(vec![(11, None)], vec![12], 9, vec![11], vec![12], 12, Some((10,0)), None)]
-    #[case::missing_highest_regular_ack_2(vec![(11, None)], vec![12], 9, vec![11], vec![12], 12, Some((11,1)), Some((11,1)))]
+    #[case::missing_highest_regular_ack_2(vec![(11, None)], vec![12], 9, vec![], vec![12], 12, Some((10,0)), None)]
+    #[case::missing_highest_regular_ack_2(vec![(11, None)], vec![12], 9, vec![], vec![12], 12, Some((11,1)), None)]
     #[case::missing_only_regular_ack_3(vec![], vec![11,12], 8, vec![], vec![11,12], 11, Some((10,0)), None)]
     #[case::missing_only_regular_ack_3(vec![], vec![11,12], 8, vec![], vec![11,12], 11, Some((11,0)), None)]
-    #[case::missing_highest_regular_ack_3(vec![(11, None)], vec![12], 8, vec![11], vec![12], 12, Some((10,0)), None)]
-    #[case::missing_highest_regular_ack_3(vec![(11, None)], vec![12], 8, vec![11], vec![12], 12, Some((11,1)), Some((11,1)))]
+    #[case::missing_highest_regular_ack_3(vec![(11, None)], vec![12], 8, vec![], vec![12], 12, Some((10,0)), None)]
+    #[case::missing_highest_regular_ack_3(vec![(11, None)], vec![12], 8, vec![], vec![12], 12, Some((11,1)), None)]
     #[case::missing_only_out_of_window_received(vec![], vec![8,9,10,11,12], 8, vec![], vec![9,10,11,12], 9, Some((8,0)), None)]
     #[case::missing_only_out_of_window_received(vec![], vec![8,9,10,11,12], 8, vec![], vec![9,10,11,12], 9, Some((9,0)), None)]
     #[case::missing_highest_out_of_window_received(vec![(9, Some(0)), (8, Some(0))], vec![10,11,12], 8, vec![9], vec![10,11,12], 10, Some((8,0)), Some((9,0)))]
@@ -1093,6 +1174,7 @@ let (sequence_number, offs, payload) = new_packet;receive_stream.on_packet(Packe
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 4,
                 max_num_naks_per_packet: 2,
+                max_message_size: 10,
             }),
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),

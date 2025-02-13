@@ -212,3 +212,17 @@ mod send_pipeline;
 mod packet_id;
 mod message_header;
 
+#[cfg(test)]
+mod tests {
+    use tracing::Level;
+
+    #[ctor::ctor]
+    fn init_test_logging() {
+        tracing_subscriber::fmt()
+            .with_test_writer()
+            // .with_max_level(Level::DEBUG)
+            .with_max_level(Level::TRACE)
+            .try_init()
+            .ok();
+    }
+}

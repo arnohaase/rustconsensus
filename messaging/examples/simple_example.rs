@@ -31,6 +31,7 @@ async fn main() -> anyhow::Result<()> {
         sync_interval: Duration::from_secs(1),
         receive_window_size: 1024,
         max_num_naks_per_packet: 128,
+        max_message_size: 1024*1024,
     });
 
     let send_config = Arc::new(SendStreamConfig {

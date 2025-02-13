@@ -4,6 +4,7 @@ edition.workspace = true
 version.workspace = true
 
 [dev-dependencies]
+ctor = "*"
 rstest = "*"
 tokio = { version = "*", features = ["full", "test-util"]}
 tracing-subscriber = "*"
