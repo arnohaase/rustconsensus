@@ -80,15 +80,23 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
     /// This method is called in A when it receives a response from B: This means there was a
     ///  'successful' heartbeat, and B is (more or less) reachable from A.
     pub fn on_heartbeat_response(&mut self, response: &HeartbeatResponseData, from: NodeAddr) {
-        let rtt = self.timestamp_from_nanos(response.timestamp_nanos).elapsed();
-
         // Start with some sanity checks: if too much time has passed since the heartbeat was sent,
         //  we ignore the response: Round trips that take forever and a day are the same as lost
         //  messages from an application perspective.
-        if rtt.is_zero() {
-            warn!("heartbeat from {:?}) arrived before it was sent - this points to manipulations at the network level", from);
-            return;
-        }
+        let now_nanos = self.now_as_nanos();
+        let rtt = Duration::from_nanos(match now_nanos.cmp(&response.timestamp_nanos) {
+            Ordering::Less => {
+                warn!("heartbeat from {:?}) arrived before it was sent - this points to a non-monotonous system clock or manipulations at the network level", from);
+                return;
+
+            }
+            Ordering::Equal => {
+                debug!("heartbeat from {:?}) arrived at the same timestamp it was sent - this looks like an artifact from a test environment, assuming 1ns", from);
+                1
+            },
+            Ordering::Greater => now_nanos - response.timestamp_nanos,
+        });
+
         if rtt > self.config.ignore_heartbeat_response_after {
             warn!("received heartbeat response from {:?} that took longer than the timeout of {:?} - ignoring", from, self.config.ignore_heartbeat_response_after);
             return;

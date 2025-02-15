@@ -138,7 +138,7 @@ mod tests {
         let mut heartbeat = HeartBeat::<FixedTimeoutDecider>::new(myself, config);
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
-        on_heartbeat_message(test_node_addr_from_number(2), HeartbeatMessage::HeartbeatResponse(HeartbeatResponseData { timestamp_nanos: 12345 }), &mut heartbeat, messaging.as_ref()).await;
+        on_heartbeat_message(test_node_addr_from_number(2), HeartbeatMessage::HeartbeatResponse(HeartbeatResponseData { timestamp_nanos: 12 }), &mut heartbeat, messaging.as_ref()).await;
 
         assert_eq!(heartbeat.get_current_reachability_from_here(), [(test_node_addr_from_number(2), true)].into());
 
