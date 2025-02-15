@@ -145,6 +145,7 @@
 //! ```
 //!
 //! TODO timestamp / RTT
+//! TODO notify client of lost packets
 //!
 //! *NAK*
 //!

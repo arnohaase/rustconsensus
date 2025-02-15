@@ -223,28 +223,31 @@ impl ReceiveStreamInner {
                 debug!("missing packet #{} moved out of the receive window - discarding", packet_id);
                 self.missing_packet_buffer.remove(&packet_id);
             }
+        }
 
-            // As an optimization: If the receive window (NB: *not* just the receive buffer!)
-            //  starts with continuation packets, we can safely discard them since they can
-            //  never be dispatched without the start of the message.
-            for packet_id in lower_bound.to(PacketId::MAX) {
-                if let Some((first_msg_offs, buf)) = self.receive_buffer.get(&packet_id) {
-                    if first_msg_offs.is_none() || *first_msg_offs == Some(buf.len() as u16) {
-                        // continuation packet or ends a multi-packet message: drop the packet
-                        self.receive_buffer.remove(&packet_id);
-                    }
-                    else {
-                        // we hit a packet that starts a new message
-                        self.undispatched_marker = Some((packet_id, first_msg_offs.unwrap()));
-                        break;
-                    }
+        // As an optimization: If the receive window (NB: *not* just the receive buffer!)
+        //  starts with continuation packets, we can safely discard them since they can
+        //  never be dispatched without the start of the message.
+        for packet_id in self.low_water_mark().to(PacketId::MAX) {
+            if let Some((first_msg_offs, buf)) = self.receive_buffer.get(&packet_id) {
+                if first_msg_offs.is_none() || *first_msg_offs == Some(buf.len() as u16) {
+                    // continuation packet or ends a multi-packet message: drop the packet
+                    self.receive_buffer.remove(&packet_id);
                 }
                 else {
-                    // We only discard an uninterrupted sequences of received packets.
-                    // NB: we could discard missing packets as well based on the known message size
-                    //      of a discarded initial message, but that may not be worth the complexity
+                    // we hit a packet that starts a new message
+                    let undispatched_packet = self.undispatched_marker.map(|(p,_)| p);
+                    if Some(packet_id) != undispatched_packet {
+                        self.undispatched_marker = Some((packet_id, first_msg_offs.unwrap()));
+                    }
                     break;
                 }
+            }
+            else {
+                // We only discard an uninterrupted sequences of received packets.
+                // NB: we could discard missing packets as well based on the known message size
+                //      of a discarded initial message, but that may not be worth the complexity
+                break;
             }
         }
 
@@ -588,6 +591,8 @@ impl ReceiveStream {
             let tick_counter = inner.missing_packet_tick_counter;
             inner.missing_packet_buffer.insert(packet_id, tick_counter);
         }
+
+        inner.sanitize_after_update();
     }
 
     pub async fn on_packet(&self, sequence_number: PacketId, first_message_offset: Option<u16>, payload: &[u8]) {
@@ -614,12 +619,8 @@ impl ReceiveStream {
         // remove it from the 'missing' set
         inner.missing_packet_buffer.remove(&sequence_number);
 
-        println!("before sanitize: {:?}", inner.receive_buffer);
-
         // clean up internal data structures
         inner.sanitize_after_update();
-
-        println!("after sanitize: {:?}", inner.receive_buffer);
 
         while let Some(buf) = inner.consume_next_message() {
             self.message_dispatcher.on_message(inner.peer_addr, Some(inner.stream_id), &buf).await;
@@ -978,7 +979,8 @@ mod tests {
                 inner.undispatched_marker = undispatched_marker.map(|(packet, offs)| (PacketId::from_raw(packet), offs));
                 inner.ack_threshold = PacketId::from_raw(2);
             }
-            let (sequence_number, offs, payload) = new_packet;receive_stream.on_packet(PacketId::from_raw(sequence_number), offs, &payload).await;
+            let (sequence_number, offs, payload) = new_packet;
+            receive_stream.on_packet(PacketId::from_raw(sequence_number), offs, &payload).await;
 
             message_dispatcher.assert_messages(SocketAddr::from(([1,2,3,4], 9)), 25, expected_messages).await;
 
@@ -989,9 +991,91 @@ mod tests {
         });
     }
 
-    #[tokio::test]
-    async fn test_on_send_sync_message() {
-        todo!()
+    #[rstest]
+    // no changes to the receiver
+    #[case::empty(vec![], vec![], 0, 0, 0, vec![], vec![], 0, None)]
+    #[case::exact_match(vec![(1,Some(0)), (3,Some(0))], vec![2], 2, 4, 2, vec![1,3], vec![2], 2, Some((1,1)))]
+    #[case::sender_has_longer_history_1(vec![(1,Some(0)), (3,Some(0))], vec![2], 2, 4, 1, vec![1,3], vec![2], 2, Some((1,1)))]
+    #[case::sender_has_longer_history_2(vec![(1,Some(0)), (3,Some(0))], vec![2], 2, 4, 0, vec![1,3], vec![2], 2, Some((1,1)))]
+
+    // ack threshold is below sender's low-water mark -> move it up (and clean up)
+    #[case::discard_single_missing(vec![(2,Some(0)), (3,Some(0)), (4,Some(0))], vec![1], 1, 5, 2, vec![2,3,4], vec![], 5, Some((2,0)))]
+    #[case::discard_single_missing_keep_missing(vec![(3,Some(0)), (4,Some(0))], vec![1,2], 1, 5, 2, vec![3,4], vec![2], 2, None)]
+    #[case::discard_double_missing(vec![(3,Some(0)), (4,Some(0))], vec![1,2], 1, 5, 3, vec![3,4], vec![], 5, Some((3,0)))]
+    #[case::discard_until_missing(vec![(1,Some(0)), (3,Some(0)), (4,Some(0))], vec![2], 1, 5, 3, vec![3,4], vec![], 5, Some((3,0)))]
+    #[case::discard_following_none(vec![(1,Some(0)), (3,None), (4,Some(2))], vec![2], 1, 5, 3, vec![4], vec![], 5, Some((4,2)))]
+    #[case::discard_following_end(vec![(1,Some(0)), (3,Some(3)), (4,Some(2))], vec![2], 1, 5, 3, vec![4], vec![], 5, Some((4,2)))]
+
+    // raise high-water mark with 'missing' padding
+    #[case(vec![(1,Some(0)), (2,Some(0))], vec![], 3, 4, 2, vec![1,2], vec![3], 3, Some((1,1)))]
+    #[case(vec![(1,Some(0)), (2,Some(0))], vec![], 3, 5, 1, vec![1,2], vec![3,4], 3, Some((1,1)))]
+    #[case(vec![(1,Some(0))], vec![2], 2, 5, 1, vec![1], vec![2,3,4], 2, Some((1,1)))]
+    #[case(vec![(2,Some(0))], vec![1], 1, 5, 1, vec![2], vec![1,3,4], 1, None)]
+
+    // both - for completeness' sake
+    #[case::discard_and_patch(vec![], vec![1,2], 1, 4, 2, vec![], vec![2,3], 2, None)]
+    fn test_on_send_sync_message(
+        #[case] received: Vec<(u64, Option<u16>)>,
+        #[case] missing: Vec<u64>,
+        #[case] ack_threshold: u64,
+        #[case] sender_high_water_mark: u64,
+        #[case] sender_low_water_mark: u64,
+        #[case] expected_received: Vec<u64>,
+        #[case] expected_missing: Vec<u64>,
+        #[case] expected_ack_threshold: u64,
+        #[case] expected_undispatched_marker: Option<(u64, u16)>,
+    ) {
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let mut send_socket = MockSendSocket::new();
+            send_socket.expect_local_addr()
+                .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
+
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+
+            let receive_stream = ReceiveStream::new(
+                Arc::new(ReceiveStreamConfig {
+                    nak_interval: Duration::from_millis(100),
+                    sync_interval: Duration::from_millis(100),
+                    receive_window_size: 4,
+                    max_num_naks_per_packet: 10,
+                    max_message_size: 10,
+                }),
+                25,
+                SocketAddr::from(([1, 2, 3, 4], 9)),
+                Arc::new(send_pipeline),
+                SocketAddr::from(([1, 2, 3, 4], 8)),
+                Arc::new(MockMessageDispatcher::new()).clone(),
+            );
+
+            {
+                let mut inner = receive_stream.inner.write().await;
+                for (packet_id, offs) in received {
+                    inner.receive_buffer.insert(PacketId::from_raw(packet_id), (offs, vec![1,2,3]));
+                }
+                for packet_id in missing {
+                    inner.missing_packet_buffer.insert(PacketId::from_raw(packet_id), 0);
+                }
+                inner.ack_threshold = PacketId::from_raw(ack_threshold);
+                inner.undispatched_marker = if inner.receive_buffer.contains_key(&inner.low_water_mark()) {
+                    Some((inner.low_water_mark(), 1))
+                }
+                else {
+                    None
+                }
+            }
+
+            receive_stream.on_send_sync_message(ControlMessageSendSync {
+                send_buffer_high_water_mark: PacketId::from_raw(sender_high_water_mark),
+                send_buffer_low_water_mark: PacketId::from_raw(sender_low_water_mark),
+            }).await;
+
+            let inner = receive_stream.inner.read().await;
+            assert_eq!(inner.receive_buffer.keys().map(|k| k.to_raw()).collect::<Vec<_>>(), expected_received);
+            assert_eq!(inner.missing_packet_buffer.keys().map(|k| k.to_raw()).collect::<Vec<_>>(), expected_missing);
+            assert_eq!(inner.ack_threshold.to_raw(), expected_ack_threshold);
+            assert_eq!(inner.undispatched_marker, expected_undispatched_marker.map(|(packet_id, offs)| (PacketId::from_raw(packet_id), offs)));
+        });
     }
 
     #[tokio::test]
@@ -1086,6 +1170,9 @@ mod tests {
 
     #[rstest]
     #[case::empty(vec![], vec![], 0, vec![], vec![], 0, None, None)]
+    #[case::starting_with_offs_start(vec![(1, Some(0)), (2, None)], vec![], 3, vec![1, 2], vec![], 3, Some((1,1)), Some((1,1)))]
+    #[case::starting_with_offs_later(vec![(11, Some(0)), (12, None)], vec![], 13, vec![11, 12], vec![], 13, Some((11,1)), Some((11,1)))]
+
     #[case::starting_1(vec![(1, Some(0)), (2, None)], vec![0], 0, vec![1, 2], vec![0], 0, Some((1, 2)), None)]
     #[case::starting_2(vec![(0, Some(0)), (1, Some(0)), (2, None)], vec![], 0, vec![0, 1, 2], vec![], 3, Some((0, 0)), Some((0,0)))]
     #[case::starting_3(vec![(1, Some(0)), (2, None)], vec![0], 0, vec![1, 2], vec![0], 0, Some((1, 0)), None)]
