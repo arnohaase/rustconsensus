@@ -27,8 +27,6 @@ pub struct ReceiveStreamConfig {
     pub max_message_size: u32,
 }
 
-//TODO unit test
-
 struct ReceiveStreamInner {
     config: Arc<ReceiveStreamConfig>,
 
@@ -110,6 +108,7 @@ impl ReceiveStreamInner {
     }
 
     async fn do_send_init(&self) {
+        debug!("sending INIT");
         let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlInit { stream_id: self.stream_id });
 
         let mut send_buf = BytesMut::with_capacity(1400); //TODO from pool?
@@ -124,11 +123,13 @@ impl ReceiveStreamInner {
         let mut send_buf = BytesMut::with_capacity(1400); //TODO from pool?
         header.ser(&mut send_buf);
 
-        ControlMessageRecvSync {
+        let msg = ControlMessageRecvSync {
             receive_buffer_high_water_mark: self.high_water_mark(),
             receive_buffer_low_water_mark: self.low_water_mark(),
             receive_buffer_ack_threshold: self.ack_threshold,
-        }.ser(&mut send_buf);
+        };
+        trace!("sending RECV_SYNC: {:?}", msg);
+        msg.ser(&mut send_buf);
 
         self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await
     }
@@ -272,8 +273,6 @@ impl ReceiveStreamInner {
             }
         }
 
-        //TODO unit test packet sequence with inconsistent offsets, e.g. end-of-buffer for a packet that should start a message
-
         let low_water_mark = self.low_water_mark();
         match self.undispatched_marker {
             None => {
@@ -320,18 +319,11 @@ impl ReceiveStreamInner {
     }
 
     fn _consume_next_message(&mut self) -> ConsumeResult {
-        //TODO there is a potential optimization here by using impl<Buf> to avoid copying
-        //TODO optimization: call this only if the first missing packet was added, or the buffer was empty
-
-        println!("_consume {:?}", self.receive_buffer);
-
         let low_water_mark = self.low_water_mark();
         trace!("low water mark: {:?}", low_water_mark);
 
         let (next_offs, buf) = if let Some((lwm_offs, lwm_buf)) = self.receive_buffer.get(&low_water_mark) {
             // the low-water mark packet is received, not missing
-
-            println!("next_offs {:?} / buf {:?}", lwm_offs, lwm_buf);
 
             // assert that the lwm packet actually starts a message
             let lwm_offs = lwm_offs.expect("non-starting packets should have been skipped");
@@ -379,16 +371,10 @@ impl ReceiveStreamInner {
         if header.message_len > self.config.max_message_size {
             warn!("packet #{} declares a message length of {} which is longer than the configured maximum of {}", low_water_mark, header.message_len, self.config.max_message_size);
 
-            println!("{:?}", self.receive_buffer);
-
             self.receive_buffer.remove(&low_water_mark);
-            println!("{:?}", self.receive_buffer);
             self.sanitize_after_update();
-            println!("{:?}", self.receive_buffer);
             return ConsumeResult::Retry;
         }
-
-        //TODO check message length against configured maximum message length
 
         match (header.message_len as usize).cmp(&buf.len()) {
             Ordering::Less => {
@@ -417,8 +403,6 @@ impl ReceiveStreamInner {
                     for packet_id in self.low_water_mark().to(PacketId::MAX) {
                         // iterate through follow-up packets of a multi-packet message
 
-                        //TODO check the assembly buffer against configured maximum message size and header.message_len
-
                         let (offs, buf) = self.receive_buffer.get(&packet_id)
                             .expect("we just checked that all parts are present");
 
@@ -433,7 +417,6 @@ impl ReceiveStreamInner {
 
                                 assembly_buffer.extend_from_slice(buf);
                                 self.receive_buffer.remove(&packet_id);
-                                //TODO check the assembly buffer against configured maximum length
                             }
                             Some(offs) => {
                                 if offs as usize > buf.len() {
@@ -465,7 +448,7 @@ impl ReceiveStreamInner {
 
                     // check buffer length against declared message length
                     if assembly_buffer.len() != header.message_len as usize {
-                        warn!("packet #{}: actual message length {} is different from length in messsage header {} - skipping", low_water_mark, header.message_len, assembly_buffer.len());
+                        warn!("packet #{}: actual message length {} is different from length in messsage header {} - this is a sender-side bug. Skipping the message.", low_water_mark, header.message_len, assembly_buffer.len());
                         self.sanitize_after_update();
                         return ConsumeResult::Retry;
                     }
@@ -557,6 +540,8 @@ impl ReceiveStream {
     }
 
     pub async fn on_send_sync_message(&self, message: ControlMessageSendSync) {
+        trace!("handling SEND_RECV message: {:?}", message);
+
         // This was sent in response to a recv_sync message, and no response is required. But
         //  we adjust the receive window based on the new information on the send window.
         //
@@ -567,6 +552,8 @@ impl ReceiveStream {
         // adjust ack threshold: There is no point in asking for packets that we know the server
         //  doesn't have in its send buffer any longer
         if inner.ack_threshold < message.send_buffer_low_water_mark {
+            trace!("ack threshold below sender's low-water mark: discarding missing packets that are not available any more");
+
             inner.undispatched_marker = None;
             inner.ack_threshold = message.send_buffer_low_water_mark;
 
@@ -586,10 +573,15 @@ impl ReceiveStream {
             }
         }
 
+        let mut was_padding_added = false;
         // adjust the high-water mark by adding 'missing' packet ids up to it
         for packet_id in inner.high_water_mark().to(message.send_buffer_high_water_mark) {
+            was_padding_added = true;
             let tick_counter = inner.missing_packet_tick_counter;
             inner.missing_packet_buffer.insert(packet_id, tick_counter);
+        }
+        if was_padding_added {
+            trace!("sender's high-water mark is above local high-water mark: added padding");
         }
 
         inner.sanitize_after_update();
@@ -599,8 +591,6 @@ impl ReceiveStream {
         let mut inner = self.inner.write().await;
 
         trace!("received packet #{:?} with length {} from {:?} on stream {}, first msg offs {:?}", sequence_number.to_raw(), payload.len(), inner.peer_addr, inner.stream_id, first_message_offset);
-
-        //TODO unit test, especially off-by-one corner cases
 
         if sequence_number < inner.ack_threshold {
             debug!("received packet #{} which is below the ack threshold of #{} - ignoring", sequence_number, inner.ack_threshold);
@@ -629,19 +619,25 @@ impl ReceiveStream {
 
     /// Active loop - this function never returns, it runs until it is taken out of dispatch
     async fn do_loop(config: Arc<ReceiveStreamConfig>, inner: Arc<RwLock<ReceiveStreamInner>>) {
+        //TODO test this
+
         let mut nak_interval = interval(config.nak_interval);
         let mut sync_interval = interval(config.sync_interval);
 
         loop {
             select! {
                 _ = nak_interval.tick() => {
+                    //TODO sending NAKs at fixed intervals rather than every N received packets avoids thrashing, but
+                    // it requires big send windows to avoid permanent message loss if a bulk of packets get
+                    // lost rather than the sporadic more or less isolated packet - which may or may not be
+                    // a good trade-off.
+                    // --> this could do with some thinking and failure scenario modeling
                     inner.write().await
-                    .do_send_nak().await;
+                       .do_send_nak().await;
                 }
                 _ = sync_interval.tick() => {
-                    //TODO or every N packets, if that is earlier?
                     inner.write().await
-                    .do_send_recv_sync().await;
+                        .do_send_recv_sync().await;
                 }
             }
         }
@@ -860,11 +856,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_do_loop() {
-        todo!()
-    }
-
     #[rstest]
     #[case::first_packet_simple(vec![], vec![], None, (2, Some(0), vec![0,0,0,3,1,2,3]), vec![], vec![], None, vec![vec![1,2,3]])]
     #[case::first_packet_two(vec![], vec![], None, (2, Some(0), vec![0,0,0,3,1,2,3, 0,0,0,2,5,6]), vec![], vec![], None, vec![vec![1,2,3], vec![5,6]])]
@@ -913,13 +904,13 @@ mod tests {
     #[case::overflow_missing(vec![(8, Some(0), vec![0,0,0,5,1,2,3])], vec![5,6,7], None, (9, Some(0), vec![0,0,0,1,5]), vec![(8,Some(0)),((9,Some(0)))], vec![6,7], None, vec![])]
 
     #[case::offset_after_buf_standalone(vec![], vec![], None, (2,Some(5),vec![1,2,3,4]), vec![], vec![], None, vec![])]
-    #[case::offset_after_buf_continuation(vec![(1,Some(0),vec![0,0,0,5,1,2,3])], vec![], None, (2,Some(5),vec![1,2,3,4]), vec![], vec![], None, vec![])] //TODO there should be some logging at least that the message and packet(s) are discarded
+    #[case::offset_after_buf_continuation(vec![(1,Some(0),vec![0,0,0,5,1,2,3])], vec![], None, (2,Some(5),vec![1,2,3,4]), vec![], vec![], None, vec![])]
     #[case::offset_incomplete_len_standalone(vec![], vec![], None, (2,Some(1),vec![1,2,3,4]), vec![], vec![], None, vec![])]
     #[case::offset_incomplete_len_continuation(vec![(1,Some(0),vec![0,0,0,5,1,2,3])], vec![], None, (2,Some(2),vec![1,2,3,4]), vec![], vec![], None, vec![vec![1,2,3,1,2]])]
     #[case::offset_to_end_standalone(vec![], vec![], None, (2,Some(4),vec![1,2,3,4]), vec![], vec![], None, vec![])]
     #[case::offset_to_end_continuation(vec![(1,Some(0),vec![0,0,0,5,1,2,3])], vec![], None, (2,Some(2), vec![1,2]), vec![], vec![], None, vec![vec![1,2,3,1,2]])]
-    #[case::message_longer_than_declared(vec![(1,Some(0),vec![0,0,0,5,1,2,3])], vec![], None, (2,Some(3), vec![1,2,3]), vec![], vec![], None, vec![])] //TODO there should be some logging
-    #[case::message_shorter_than_declared(vec![(1,Some(0),vec![0,0,0,5,1,2,3])], vec![], None, (2,Some(1), vec![1]), vec![], vec![], None, vec![])] //TODO there should be some logging
+    #[case::message_longer_than_declared(vec![(1,Some(0),vec![0,0,0,5,1,2,3])], vec![], None, (2,Some(3), vec![1,2,3]), vec![], vec![], None, vec![])]
+    #[case::message_shorter_than_declared(vec![(1,Some(0),vec![0,0,0,5,1,2,3])], vec![], None, (2,Some(1), vec![1]), vec![], vec![], None, vec![])]
 
     #[case::message_max_len_simple(vec![], vec![], None, (2,Some(0),vec![0,0,0,10,1,2,3,4,5,6,7,8,9,10,10]), vec![], vec![], None, vec![vec![1,2,3,4,5,6,7,8,9,10]])]
     #[case::message_too_long_simple(vec![], vec![], None, (2,Some(0),vec![0,0,0,11,1,2,3,4,5,6,7,8,9,10,11]), vec![], vec![], None, vec![])]
@@ -1076,16 +1067,6 @@ mod tests {
             assert_eq!(inner.ack_threshold.to_raw(), expected_ack_threshold);
             assert_eq!(inner.undispatched_marker, expected_undispatched_marker.map(|(packet_id, offs)| (PacketId::from_raw(packet_id), offs)));
         });
-    }
-
-    #[tokio::test]
-    async fn test_scheduled_nak() {
-        todo!()
-    }
-
-    #[tokio::test]
-    async fn test_scheduled_sync() {
-        todo!()
     }
 
     #[rstest]
