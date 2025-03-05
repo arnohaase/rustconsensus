@@ -140,7 +140,7 @@
 //! ```ascii
 //! 0: send buffer high water mark (u64 BE) - the packet id after the highest sent
 //!     packet, i.e. the next packet to be sent
-//! *: send buffer low water mark (u64 BE) - the lowest packet id for which a packet
+//! 8: send buffer low water mark (u64 BE) - the lowest packet id for which a packet
 //!     is retained for resending, or the high water mark if none
 //! ```
 //!

@@ -69,7 +69,7 @@ impl SendStreamInner {
 
     fn low_water_mark(&self) -> PacketId {
         self.send_buffer.keys().next()
-            .map(|k| *k + 1)
+            .cloned()
             .unwrap_or(self.work_in_progress_packet_id)
     }
 
@@ -217,6 +217,7 @@ impl SendStream {
         // while there is some part of the message left: copy it into WIP, sending and
         //  re-initializing as necessary
         loop {
+
             debug_assert!(wip_buffer.len() <= self.config.max_packet_len);
 
             let remaining_capacity = self.config.max_packet_len - wip_buffer.len();
@@ -269,5 +270,192 @@ impl SendStream {
                 }));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::*;
+    use tokio::runtime::Builder;
+    use crate::send_pipeline::MockSendSocket;
+
+    #[rstest]
+    fn test_on_init() {
+        todo!()
+    }
+
+    #[rstest]
+    fn test_on_nak() {
+        todo!()
+    }
+
+    #[rstest]
+    fn test_on_recv_sync() {
+        todo!()
+    }
+
+    #[rstest]
+    #[case::simple(vec![1,2,3], vec![], Some(vec![0,0,0,0,0,0,0,0,1,2,3]))]
+
+    //TODO with / without pre-existing wip
+    //TODO start / middle of packet
+    //TODO fits / spills over / spans several
+    //TODO pre-existing timer / new timer
+    //TODO with / without late send delay
+    #[case::todo(vec![1,2,3], vec![], Some(vec![0]))]
+    fn test_send_message(
+        #[case] message: Vec<u8>,
+        #[case] expected_buffer: Vec<(u64, Vec<u8>)>,
+        #[case] expected_wip: Option<Vec<u8>>,
+    ) {
+        let mut send_socket = MockSendSocket::new();
+        send_socket.expect_local_addr()
+            .return_const(SocketAddr::from(([1,2,3,4], 8)));
+        // send_socket.expect_do_send_packet()
+        //     .once()
+        //     .withf(move |addr, buf|
+        //         addr == &SocketAddr::from(([1,2,3,4], 9)) &&
+        //             buf == expected_buf.as_slice()
+        //     )
+        //     .returning(|_, _| ())
+        // ;
+
+        let send_stream = SendStream::new(
+            Arc::new(SendStreamConfig {
+                max_packet_len: 20,
+                late_send_delay: Some(Duration::from_millis(5)),
+                send_window_size: 4,
+            }),
+            4,
+            Arc::new(SendPipeline::new(Arc::new(send_socket))),
+            SocketAddr::from(([1,2,3,4], 8)),
+            None,
+        );
+
+        let rt = Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build().unwrap();
+        rt.block_on(async move {
+            send_stream.send_message(&message).await;
+
+            let inner = send_stream.inner.read().await;
+            let actual_buf = inner.send_buffer.iter()
+                .map(|(id, buf)| (id.to_raw(), buf.to_vec()))
+                .collect::<Vec<_>>();
+            assert_eq!(actual_buf, expected_buffer);
+            assert_eq!(inner.work_in_progress.as_ref().map(|buf| buf.to_vec()), expected_wip);
+
+
+        });
+    }
+
+    #[rstest]
+    fn test_do_send_work_in_progress() {
+        todo!()
+    }
+
+    #[rstest]
+    fn test_init_wip() {
+        todo!()
+    }
+
+    #[rstest]
+    #[case::initial(vec![], 0, 0)]
+    #[case::just_wip(vec![], 5, 5)]
+    #[case::just_wip_2(vec![], 9, 9)]
+    #[case::send_buffer_1(vec![2], 3, 2)]
+    #[case::send_buffer_2(vec![5, 6], 7, 5)]
+    fn test_low_water_mark(#[case] send_buffer: Vec<u64>, #[case] wip_packet_id: u64, #[case] expected_low_water_mark: u64) {
+        let mut inner = SendStreamInner {
+            config: Arc::new(SendStreamConfig {
+                max_packet_len: 0,
+                late_send_delay: None,
+                send_window_size: 4,
+            }),
+            stream_id: 4,
+            send_socket: Arc::new(SendPipeline::new(Arc::new(MockSendSocket::new()))),
+            peer_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
+            self_reply_to_addr: None,
+            send_buffer: Default::default(),
+            work_in_progress_packet_id: PacketId::from_raw(wip_packet_id),
+            work_in_progress: None,
+            work_in_progress_late_send_handle: None,
+        };
+        for packet in send_buffer {
+            inner.send_buffer.insert(PacketId::from_raw(packet), BytesMut::new());
+        }
+
+        assert_eq!(inner.low_water_mark(), PacketId::from_raw(expected_low_water_mark));
+    }
+
+    #[rstest]
+    #[case::same(None)]
+    #[case::v4(Some(SocketAddr::from(([127,0,0,1], 5))))]
+    #[case::v6(Some(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 5))))]
+    fn test_packet_header_len(#[case] reply_to_addr: Option<SocketAddr>) {
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let send_stream = SendStream::new(
+                Arc::new(SendStreamConfig {
+                    max_packet_len: 0,
+                    late_send_delay: None,
+                    send_window_size: 0,
+                }),
+                4,
+                Arc::new(SendPipeline::new(Arc::new(MockSendSocket::default()))),
+                SocketAddr::from(([127, 0, 0, 1], 0)),
+                reply_to_addr,
+            );
+
+            let actual = send_stream.inner.read().await
+                .packet_header_len();
+
+            let expected = PacketHeader::serialized_len_for_stream_header(reply_to_addr);
+            assert_eq!(actual, expected);
+        });
+    }
+
+    #[rstest]
+    #[case::empty(vec![], 0, vec![0, 22, 0,4, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::just_wip(vec![], 6, vec![0, 22, 0,4, 0,0,0,0,0,0,0,6, 0,0,0,0,0,0,0,6])]
+    #[case::buf(vec![3,4], 5, vec![0, 22, 0,4, 0,0,0,0,0,0,0,5, 0,0,0,0,0,0,0,3])]
+    fn test_send_send_sync(#[case] send_buffer: Vec<u64>, #[case] wip_packet_id: u64, #[case] expected_buf: Vec<u8>) {
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let mut send_socket = MockSendSocket::new();
+            send_socket.expect_local_addr()
+                .return_const(SocketAddr::from(([1,2,3,4], 8)));
+            send_socket.expect_do_send_packet()
+                .once()
+                .withf(move |addr, buf|
+                    addr == &SocketAddr::from(([1,2,3,4], 9)) &&
+                        buf == expected_buf.as_slice()
+                )
+                .returning(|_, _| ())
+            ;
+
+            let mut inner = SendStreamInner {
+                config: Arc::new(SendStreamConfig {
+                    max_packet_len: 0,
+                    late_send_delay: None,
+                    send_window_size: 4,
+                }),
+                stream_id: 4,
+                send_socket: Arc::new(SendPipeline::new(Arc::new(send_socket))),
+                peer_addr: SocketAddr::from(([1,2,3,4], 9)),
+                self_reply_to_addr: None,
+                send_buffer: Default::default(),
+                work_in_progress_packet_id: PacketId::from_raw(wip_packet_id),
+                work_in_progress: None,
+                work_in_progress_late_send_handle: None,
+            };
+            for packet in send_buffer {
+                inner.send_buffer.insert(PacketId::from_raw(packet), BytesMut::new());
+            }
+
+            inner.send_send_sync().await;
+        });
     }
 }

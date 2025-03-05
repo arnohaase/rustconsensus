@@ -174,7 +174,6 @@ mod tests {
     use MembershipState::*;
     use crate::test_util::node::test_node_addr_from_number;
     use rstest::rstest;
-    use DowningStrategyDecision::*;
 
     #[rstest]
     #[case::empty(vec![], DownUs)]
