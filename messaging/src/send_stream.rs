@@ -275,6 +275,7 @@ impl SendStream {
 
 #[cfg(test)]
 mod tests {
+    use mockall::predicate::eq;
     use super::*;
     use rstest::*;
     use tokio::runtime::Builder;
@@ -296,7 +297,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::simple(vec![1,2,3], vec![], Some(vec![0,0,0,0,0,0,0,0,1,2,3]))]
+    #[case::simple(vec![1,2,3], vec![], Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
 
     //TODO with / without pre-existing wip
     //TODO start / middle of packet
@@ -306,30 +307,30 @@ mod tests {
     #[case::todo(vec![1,2,3], vec![], Some(vec![0]))]
     fn test_send_message(
         #[case] message: Vec<u8>,
-        #[case] expected_buffer: Vec<(u64, Vec<u8>)>,
+        #[case] expected_buffers: Vec<(u64, Vec<u8>)>,
         #[case] expected_wip: Option<Vec<u8>>,
     ) {
         let mut send_socket = MockSendSocket::new();
         send_socket.expect_local_addr()
             .return_const(SocketAddr::from(([1,2,3,4], 8)));
-        // send_socket.expect_do_send_packet()
-        //     .once()
-        //     .withf(move |addr, buf|
-        //         addr == &SocketAddr::from(([1,2,3,4], 9)) &&
-        //             buf == expected_buf.as_slice()
-        //     )
-        //     .returning(|_, _| ())
-        // ;
+        for (_, expected_buf) in expected_buffers.clone() {
+            send_socket.expect_do_send_packet()
+                .with(
+                    eq(SocketAddr::from(([1,2,3,4], 9))),
+                    eq(expected_buf),
+                )
+            ;
+        }
 
         let send_stream = SendStream::new(
             Arc::new(SendStreamConfig {
-                max_packet_len: 20,
+                max_packet_len: 30,
                 late_send_delay: Some(Duration::from_millis(5)),
                 send_window_size: 4,
             }),
             4,
             Arc::new(SendPipeline::new(Arc::new(send_socket))),
-            SocketAddr::from(([1,2,3,4], 8)),
+            SocketAddr::from(([1,2,3,4], 9)),
             None,
         );
 
@@ -344,10 +345,8 @@ mod tests {
             let actual_buf = inner.send_buffer.iter()
                 .map(|(id, buf)| (id.to_raw(), buf.to_vec()))
                 .collect::<Vec<_>>();
-            assert_eq!(actual_buf, expected_buffer);
+            assert_eq!(actual_buf, expected_buffers);
             assert_eq!(inner.work_in_progress.as_ref().map(|buf| buf.to_vec()), expected_wip);
-
-
         });
     }
 
