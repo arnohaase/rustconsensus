@@ -77,7 +77,7 @@ impl SendStreamInner {
         let mut wip = self.work_in_progress.take()
             .expect("attempting to send uninitialized wip");
 
-        trace!("actually sending packet to {:?} on stream {}", self.peer_addr, self.stream_id);
+        trace!("actually sending packet to {:?} on stream {}: {:?}", self.peer_addr, self.stream_id, wip.as_ref());
 
         self.send_socket.finalize_and_send_packet(self.peer_addr, &mut wip).await;
         //NB: we don't handle a send error but keep the (potentially) unsent packet in our send buffer
@@ -217,7 +217,6 @@ impl SendStream {
         // while there is some part of the message left: copy it into WIP, sending and
         //  re-initializing as necessary
         loop {
-
             debug_assert!(wip_buffer.len() <= self.config.max_packet_len);
 
             let remaining_capacity = self.config.max_packet_len - wip_buffer.len();
@@ -269,6 +268,9 @@ impl SendStream {
                     }
                 }));
             }
+            else {
+                inner.do_send_work_in_progress().await;
+            }
         }
     }
 }
@@ -297,19 +299,51 @@ mod tests {
     }
 
     #[rstest]
-    #[case::simple(vec![1,2,3], vec![], Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
+    #[case::single_late_send_nowait    (Some(5), 30, 0, vec![], 0, None, vec![vec![1,2,3]], vec![], 0, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
+    #[case::single_late_send_wait_short(Some(5), 30, 4, vec![], 0, None, vec![vec![1,2,3]], vec![], 0, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
+    #[case::single_late_send_times_out (Some(5), 30, 6, vec![], 0, None, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
+    #[case::single_no_late_send(None, 30, 0, vec![], 0, None, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
 
+    #[case::single_non_zero_packet_id(Some(5), 30, 0, vec![], 16385, None, vec![vec![1,2,3]], vec![], 16385, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,64,1, 0,0,0,3,1,2,3]))]
+    #[case::two_messages_one_packet_no_late_send(Some(5), 40, 0, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![], 7, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7]))]
+    #[case::two_messages_one_packet_late_send   (Some(5), 40, 4, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
+
+    #[case::one_message_full_enough0(Some(5), 21, 0, vec![], 0, None, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
+    #[case::one_message_full_enough1(Some(5), 22, 0, vec![], 0, None, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
+    #[case::one_message_full_enough2(Some(5), 23, 0, vec![], 0, None, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
+    #[case::one_message_full_enough3(Some(5), 24, 0, vec![], 0, None, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
+    #[case::one_message_message_header_fits(Some(5), 25, 0, vec![], 0, None, vec![vec![1,2,3]], vec![], 0, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
+    #[case::two_messages_one_packet_full_enough0(Some(5), 29, 0, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
+    #[case::two_messages_one_packet_full_enough1(Some(5), 30, 0, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
+    #[case::two_messages_one_packet_full_enough2(Some(5), 31, 0, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
+    #[case::two_messages_one_packet_full_enough3(Some(5), 32, 0, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
+    #[case::two_messages_one_packet_message_header_fits (Some(5), 33, 0, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![], 7, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7]))]
+
+    // #[case::one_message_spans_two_packets    (Some(5), 30, 0, vec![], 0, None, vec![vec![1,2,3]], vec![], Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
+    // one message spans three packets
+    // with / without late send (first is always sent, second is affected)
+    // variant for the above: small first message with late send
+    // variant for the above: multi-packet message with partial spill-over
+
+    //TODO non-zero packet id
     //TODO with / without pre-existing wip
     //TODO start / middle of packet
     //TODO fits / spills over / spans several
-    //TODO pre-existing timer / new timer
-    //TODO with / without late send delay
-    #[case::todo(vec![1,2,3], vec![], Some(vec![0]))]
+    // #[case::todo(Some(5), 30, 0, vec![], 0, None, vec![vec![1,2,3]], vec![], Some(vec![0]))]
     fn test_send_message(
-        #[case] message: Vec<u8>,
+        #[case] late_send_delay: Option<u64>,
+        #[case] max_packet_len: usize,
+        #[case] delay_millis_after_messages: u64,
+        #[case] previous_buffers: Vec<(u64, Vec<u8>)>,
+        #[case] previous_wip_packet_id: u64,
+        #[case] previous_wip_buffer: Option<Vec<u8>>,
+        #[case] messages: Vec<Vec<u8>>,
         #[case] expected_buffers: Vec<(u64, Vec<u8>)>,
+        #[case] expected_wip_packet_id: u64,
         #[case] expected_wip: Option<Vec<u8>>,
     ) {
+        let late_send_delay = late_send_delay.map(Duration::from_millis);
+
         let mut send_socket = MockSendSocket::new();
         send_socket.expect_local_addr()
             .return_const(SocketAddr::from(([1,2,3,4], 8)));
@@ -319,13 +353,14 @@ mod tests {
                     eq(SocketAddr::from(([1,2,3,4], 9))),
                     eq(expected_buf),
                 )
+                .return_const(())
             ;
         }
 
         let send_stream = SendStream::new(
             Arc::new(SendStreamConfig {
-                max_packet_len: 30,
-                late_send_delay: Some(Duration::from_millis(5)),
+                max_packet_len,
+                late_send_delay,
                 send_window_size: 4,
             }),
             4,
@@ -339,13 +374,30 @@ mod tests {
             .start_paused(true)
             .build().unwrap();
         rt.block_on(async move {
-            send_stream.send_message(&message).await;
+            for (packet_id, buffer) in previous_buffers {
+                send_stream.inner.write().await
+                    .send_buffer.insert(PacketId::from_raw(packet_id), BytesMut::from(buffer.as_slice()));
+            }
+            send_stream.inner.write().await
+                .work_in_progress_packet_id = PacketId::from_raw(previous_wip_packet_id);
+            if let Some(buf) = previous_wip_buffer {
+                send_stream.inner.write().await
+                    .work_in_progress = Some(BytesMut::from(buf.as_slice()));
+            }
+
+            for message in messages {
+                time::sleep(Duration::from_millis(2)).await;
+                send_stream.send_message(&message).await;
+            }
+
+            time::sleep(Duration::from_millis(delay_millis_after_messages)).await;
 
             let inner = send_stream.inner.read().await;
-            let actual_buf = inner.send_buffer.iter()
+            let actual_bufs = inner.send_buffer.iter()
                 .map(|(id, buf)| (id.to_raw(), buf.to_vec()))
                 .collect::<Vec<_>>();
-            assert_eq!(actual_buf, expected_buffers);
+            assert_eq!(actual_bufs, expected_buffers);
+            assert_eq!(inner.work_in_progress_packet_id, PacketId::from_raw(expected_wip_packet_id));
             assert_eq!(inner.work_in_progress.as_ref().map(|buf| buf.to_vec()), expected_wip);
         });
     }

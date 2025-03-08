@@ -94,7 +94,7 @@ impl EndPoint {
                 Ok(header) => {
                     header
                 },
-                Err(e) => {
+                Err(_) => {
                     warn!("received packet with unparsable header from {:?}, dropping", from);
                     continue;
                 },
