@@ -299,44 +299,65 @@ mod tests {
     }
 
     #[rstest]
-    #[case::single_late_send_nowait    (Some(5), 30, 0, vec![], 0, None, vec![vec![1,2,3]], vec![], 0, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
-    #[case::single_late_send_wait_short(Some(5), 30, 4, vec![], 0, None, vec![vec![1,2,3]], vec![], 0, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
-    #[case::single_late_send_times_out (Some(5), 30, 6, vec![], 0, None, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
-    #[case::single_no_late_send(None, 30, 0, vec![], 0, None, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
+    #[case::single_late_send_nowait    (Some(5), 30, 0, 0, vec![vec![1,2,3]], vec![], 0, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
+    #[case::single_late_send_wait_short(Some(5), 30, 4, 0, vec![vec![1,2,3]], vec![], 0, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
+    #[case::single_late_send_times_out (Some(5), 30, 6, 0, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
+    #[case::single_no_late_send(None, 30, 0, 0, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
 
-    #[case::single_non_zero_packet_id(Some(5), 30, 0, vec![], 16385, None, vec![vec![1,2,3]], vec![], 16385, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,64,1, 0,0,0,3,1,2,3]))]
-    #[case::two_messages_one_packet_no_late_send(Some(5), 40, 0, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![], 7, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7]))]
-    #[case::two_messages_one_packet_late_send   (Some(5), 40, 4, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
+    #[case::single_non_zero_packet_id(Some(5), 30, 0, 16385, vec![vec![1,2,3]], vec![], 16385, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,64,1, 0,0,0,3,1,2,3]))]
+    #[case::two_messages_one_packet_no_late_send(Some(5), 40, 0, 7, vec![vec![1,2,3], vec![4,5,6,7]], vec![], 7, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7]))]
+    #[case::two_messages_one_packet_late_send   (Some(5), 40, 4, 7, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
 
-    #[case::one_message_full_enough0(Some(5), 21, 0, vec![], 0, None, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
-    #[case::one_message_full_enough1(Some(5), 22, 0, vec![], 0, None, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
-    #[case::one_message_full_enough2(Some(5), 23, 0, vec![], 0, None, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
-    #[case::one_message_full_enough3(Some(5), 24, 0, vec![], 0, None, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
-    #[case::one_message_message_header_fits(Some(5), 25, 0, vec![], 0, None, vec![vec![1,2,3]], vec![], 0, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
-    #[case::two_messages_one_packet_full_enough0(Some(5), 29, 0, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
-    #[case::two_messages_one_packet_full_enough1(Some(5), 30, 0, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
-    #[case::two_messages_one_packet_full_enough2(Some(5), 31, 0, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
-    #[case::two_messages_one_packet_full_enough3(Some(5), 32, 0, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
-    #[case::two_messages_one_packet_message_header_fits (Some(5), 33, 0, vec![], 7, None, vec![vec![1,2,3], vec![4,5,6,7]], vec![], 7, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7]))]
+    #[case::one_message_full_enough0(Some(5), 21, 0, 0, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
+    #[case::one_message_full_enough1(Some(5), 22, 0, 0, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
+    #[case::one_message_full_enough2(Some(5), 23, 0, 0, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
+    #[case::one_message_full_enough3(Some(5), 24, 0, 0, vec![vec![1,2,3]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3])], 1, None)]
+    #[case::one_message_message_header_fits(Some(5), 25, 0, 0, vec![vec![1,2,3]], vec![], 0, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
+    #[case::two_messages_one_packet_full_enough0(Some(5), 29, 0, 7, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
+    #[case::two_messages_one_packet_full_enough1(Some(5), 30, 0, 7, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
+    #[case::two_messages_one_packet_full_enough2(Some(5), 31, 0, 7, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
+    #[case::two_messages_one_packet_full_enough3(Some(5), 32, 0, 7, vec![vec![1,2,3], vec![4,5,6,7]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7])], 8, None)]
+    #[case::two_messages_one_packet_message_header_fits (Some(5), 33, 0, 7, vec![vec![1,2,3], vec![4,5,6,7]], vec![], 7, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3, 0,0,0,4,4,5,6,7]))]
 
-    // #[case::one_message_spans_two_packets    (Some(5), 30, 0, vec![], 0, None, vec![vec![1,2,3]], vec![], Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
-    // one message spans three packets
-    // with / without late send (first is always sent, second is affected)
-    // variant for the above: small first message with late send
-    // variant for the above: multi-packet message with partial spill-over
+    #[case::one_message_spans_two_packets3(None, 18, 0, 7, vec![vec![1,2,3]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3]), (8, vec![0,2,0,4, 0,3, 0,0,0,0,0,0,0,8, 1,2,3])], 9, None)]
+    #[case::one_message_spans_two_packets2(None, 19, 0, 7, vec![vec![1,2,3]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1]), (8, vec![0,2,0,4, 0,2, 0,0,0,0,0,0,0,8, 2,3])], 9, None)]
+    #[case::one_message_spans_two_packets1(None, 20, 0, 7, vec![vec![1,2,3]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2]), (8, vec![0,2,0,4, 0,1, 0,0,0,0,0,0,0,8, 3])], 9, None)]
+    #[case::one_message_spans_two_packets0(None, 21, 0, 7, vec![vec![1,2,3]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3])], 8, None)]
+    #[case::one_message_spans_three_packets(None, 18, 0, 6, vec![vec![1,2,3,4,5]], vec![(6, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,6, 0,0,0,5]), (7, vec![0,2,0,4, 255,255, 0,0,0,0,0,0,0,7, 1,2,3,4]), (8, vec![0,2,0,4, 0,1, 0,0,0,0,0,0,0,8, 5])], 9, None)]
 
-    //TODO non-zero packet id
-    //TODO with / without pre-existing wip
+    #[case::one_message_spans_two_packets3_late_send(Some(3), 18, 0, 7, vec![vec![1,2,3]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3]), (8, vec![0,2,0,4, 0,3, 0,0,0,0,0,0,0,8, 1,2,3])], 9, None)]
+    #[case::one_message_spans_two_packets2_late_send(Some(3), 19, 0, 7, vec![vec![1,2,3]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1]), (8, vec![0,2,0,4, 0,2, 0,0,0,0,0,0,0,8, 2,3])], 9, None)]
+    #[case::one_message_spans_two_packets1_late_send(Some(3), 20, 0, 7, vec![vec![1,2,3]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2])], 8, Some(vec![0,2,0,4, 0,1, 0,0,0,0,0,0,0,8, 3]))]
+    #[case::one_message_spans_two_packets0_late_send(Some(3), 21, 0, 7, vec![vec![1,2,3]], vec![(7, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,7, 0,0,0,3,1,2,3])], 8, None)]
+    #[case::one_message_spans_three_packets_late_send(Some(3), 18, 0, 6, vec![vec![1,2,3,4,5]], vec![(6, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,6, 0,0,0,5]), (7, vec![0,2,0,4, 255,255, 0,0,0,0,0,0,0,7, 1,2,3,4]), (8, vec![0,2,0,4, 0,1, 0,0,0,0,0,0,0,8, 5])], 9, None)]
+
+    #[case::one_message_spans_two_packets_start_middle(Some(3), 21, 0, 6, vec![vec![1,2,3,4,5,6], vec![7,6,5,4]], vec![
+        (6, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,6, 0,0,0,6,1,2,3]),
+        (7, vec![0,2,0,4, 0,3, 0,0,0,0,0,0,0,7, 4,5,6,0,0,0,4]), //NB: This tests handling of a continuation message with only the message header fitting
+        (8, vec![0,2,0,4, 0,4, 0,0,0,0,0,0,0,8, 7,6,5,4]),
+    ], 9, None)]
+    #[case::one_message_spans_two_packets_start_middle_delay(Some(3), 21, 4, 6, vec![vec![1,2,3,4,5,6], vec![7,6]], vec![
+        (6, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,6, 0,0,0,6,1,2,3]),
+        (7, vec![0,2,0,4, 0,3, 0,0,0,0,0,0,0,7, 4,5,6,0,0,0,2]),
+        (8, vec![0,2,0,4, 0,2, 0,0,0,0,0,0,0,8, 7,6]),
+    ], 9, None)]
+    #[case::one_message_spans_three_packets_start_middle(Some(3), 21, 4, 6, vec![vec![1,2,3,4,5,6], vec![7,6,5,4,3,2,1,0]], vec![
+        (6, vec![0,2,0,4, 0,0,     0,0,0,0,0,0,0,6, 0,0,0,6,1,2,3]),
+        (7, vec![0,2,0,4, 0,3,     0,0,0,0,0,0,0,7, 4,5,6,0,0,0,8]),
+        (8, vec![0,2,0,4, 255,255, 0,0,0,0,0,0,0,8, 7,6,5,4,3,2,1]),
+        (9, vec![0,2,0,4, 0,1,     0,0,0,0,0,0,0,9, 0]),
+    ], 10, None)]
+
     //TODO start / middle of packet
     //TODO fits / spills over / spans several
-    // #[case::todo(Some(5), 30, 0, vec![], 0, None, vec![vec![1,2,3]], vec![], Some(vec![0]))]
+    //TODO late-send cancellation
+
+    #[case::todo(Some(5), 30, 0, 0, vec![vec![1,2,3]], vec![], 999999, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
     fn test_send_message(
         #[case] late_send_delay: Option<u64>,
         #[case] max_packet_len: usize,
         #[case] delay_millis_after_messages: u64,
-        #[case] previous_buffers: Vec<(u64, Vec<u8>)>,
         #[case] previous_wip_packet_id: u64,
-        #[case] previous_wip_buffer: Option<Vec<u8>>,
         #[case] messages: Vec<Vec<u8>>,
         #[case] expected_buffers: Vec<(u64, Vec<u8>)>,
         #[case] expected_wip_packet_id: u64,
@@ -374,16 +395,8 @@ mod tests {
             .start_paused(true)
             .build().unwrap();
         rt.block_on(async move {
-            for (packet_id, buffer) in previous_buffers {
-                send_stream.inner.write().await
-                    .send_buffer.insert(PacketId::from_raw(packet_id), BytesMut::from(buffer.as_slice()));
-            }
             send_stream.inner.write().await
                 .work_in_progress_packet_id = PacketId::from_raw(previous_wip_packet_id);
-            if let Some(buf) = previous_wip_buffer {
-                send_stream.inner.write().await
-                    .work_in_progress = Some(BytesMut::from(buf.as_slice()));
-            }
 
             for message in messages {
                 time::sleep(Duration::from_millis(2)).await;
