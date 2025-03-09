@@ -347,6 +347,9 @@ mod tests {
         (8, vec![0,2,0,4, 255,255, 0,0,0,0,0,0,0,8, 7,6,5,4,3,2,1]),
         (9, vec![0,2,0,4, 0,1,     0,0,0,0,0,0,0,9, 0]),
     ], 10, None)]
+
+    #[case::cancel_late_send_no_overspill  (Some(10), 30, 100, 0, vec![vec![1,2,3], vec![4,5,6]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3, 0,0,0,3,4,5,6])], 1, None)]
+    #[case::cancel_late_send_with_overspill(Some(10), 25, 100, 0, vec![vec![1,2,3], vec![4,5,6]], vec![(0, vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3, 0,0,0,3]), (1, vec![0,2,0,4, 0,3, 0,0,0,0,0,0,0,1, 4,5,6])], 2, None)]
     fn test_send_message(
         #[case] late_send_delay: Option<u64>,
         #[case] max_packet_len: usize,
@@ -407,11 +410,6 @@ mod tests {
             assert_eq!(inner.work_in_progress_packet_id, PacketId::from_raw(expected_wip_packet_id));
             assert_eq!(inner.work_in_progress.as_ref().map(|buf| buf.to_vec()), expected_wip);
         });
-    }
-
-    #[test]
-    fn test_send_message_late_cancellation() {
-        todo!()
     }
 
     #[rstest]
