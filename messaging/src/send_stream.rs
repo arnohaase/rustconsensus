@@ -347,12 +347,6 @@ mod tests {
         (8, vec![0,2,0,4, 255,255, 0,0,0,0,0,0,0,8, 7,6,5,4,3,2,1]),
         (9, vec![0,2,0,4, 0,1,     0,0,0,0,0,0,0,9, 0]),
     ], 10, None)]
-
-    //TODO start / middle of packet
-    //TODO fits / spills over / spans several
-    //TODO late-send cancellation
-
-    #[case::todo(Some(5), 30, 0, 0, vec![vec![1,2,3]], vec![], 999999, Some(vec![0,2,0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
     fn test_send_message(
         #[case] late_send_delay: Option<u64>,
         #[case] max_packet_len: usize,
@@ -413,6 +407,11 @@ mod tests {
             assert_eq!(inner.work_in_progress_packet_id, PacketId::from_raw(expected_wip_packet_id));
             assert_eq!(inner.work_in_progress.as_ref().map(|buf| buf.to_vec()), expected_wip);
         });
+    }
+
+    #[test]
+    fn test_send_message_late_cancellation() {
+        todo!()
     }
 
     #[rstest]
