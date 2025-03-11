@@ -282,8 +282,55 @@ mod tests {
     use crate::send_pipeline::MockSendSocket;
 
     #[rstest]
-    fn test_on_init() {
-        todo!()
+    #[case::empty(vec![], 5, None, vec![0,22,0,8, 0,0,0,0,0,0,0,5, 0,0,0,0,0,0,0,5])]
+    #[case::clear_send_buffer(vec![3,4,5], 6, None, vec![0,22,0,8, 0,0,0,0,0,0,0,6, 0,0,0,0,0,0,0,6])]
+    #[case::clear_wip(vec![], 7, Some(vec![1,2,3]), vec![0,22,0,8, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
+    #[case::clear_both(vec![5,6,7], 8, Some(vec![1,2,3]), vec![0,22,0,8, 0,0,0,0,0,0,0,8, 0,0,0,0,0,0,0,8])]
+    fn test_on_init(#[case] initial_send_buffer: Vec<u8>, #[case] wip_packet_id: u64, #[case] initial_wip_packet: Option<Vec<u8>>, #[case] expected_message: Vec<u8>, ) {
+        let mut send_socket = MockSendSocket::new();
+        send_socket.expect_local_addr()
+            .return_const(SocketAddr::from(([1,2,3,4], 8)));
+        send_socket.expect_do_send_packet()
+            .with(
+                eq(SocketAddr::from(([1,2,3,4], 9))),
+                eq(BytesMut::from(expected_message.as_slice())),
+            )
+            .return_const(())
+        ;
+
+        let send_stream = SendStream::new(
+            Arc::new(SendStreamConfig {
+                max_packet_len: 30,
+                late_send_delay: None,
+                send_window_size: 4,
+            }),
+            8,
+            Arc::new(SendPipeline::new(Arc::new(send_socket))),
+            SocketAddr::from(([1,2,3,4], 9)),
+            None,
+        );
+
+        let rt = Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build().unwrap();
+        rt.block_on(async move {
+            for packet_id in initial_send_buffer {
+                send_stream.inner.write().await
+                    .send_buffer.insert(PacketId::from_raw(packet_id as u64), BytesMut::from(vec![packet_id].as_slice()));
+                send_stream.inner.write().await
+                    .work_in_progress_packet_id = PacketId::from_raw(packet_id as u64 + 1);
+            }
+            send_stream.inner.write().await
+                .work_in_progress = initial_wip_packet.map(|buf| BytesMut::from(buf.as_slice()));
+            send_stream.inner.write().await
+                .work_in_progress_packet_id = PacketId::from_raw(wip_packet_id);
+
+            send_stream.on_init_message().await;
+
+            assert!(send_stream.inner.read().await.send_buffer.is_empty());
+            assert!(send_stream.inner.read().await.work_in_progress.is_none());
+        });
     }
 
     #[rstest]
