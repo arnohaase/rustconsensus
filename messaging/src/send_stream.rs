@@ -37,8 +37,6 @@ impl SendStreamInner {
         PacketHeader::serialized_len_for_stream_header(self.self_reply_to_addr)
     }
 
-    //TODO unit test
-
     fn init_wip(&mut self, first_message_offset: Option<u16>) -> &mut BytesMut {
         assert!(self.work_in_progress.is_none());
 
@@ -289,13 +287,126 @@ mod tests {
     }
 
     #[rstest]
-    fn test_on_nak() {
-        todo!()
+    #[case::empty(vec![1,2,3], vec![], vec![])]
+    #[case::all_1(vec![5], vec![5], vec![5])]
+    #[case::all_2(vec![5,6], vec![5,6], vec![5,6])]
+    #[case::select_1(vec![5,6,7], vec![6], vec![6])]
+    #[case::select_2(vec![5,6,7], vec![5,7], vec![5,7])]
+    #[case::some_out_of_range(vec![5,6,7], vec![4,5], vec![5])] //TODO should this trigger a 'status' response to re-sync window boundaries?
+    #[case::all_out_of_range(vec![5,6,7], vec![3,4], vec![])]
+    #[case::some_above_range(vec![5,6,7], vec![5,8], vec![5])]
+    #[case::all_above_range(vec![5,6,7], vec![8,9], vec![])]
+    fn test_on_nak(#[case] send_buffer_ids: Vec<u8>, #[case] packet_id_resend_set: Vec<u64>, #[case] expected: Vec<u8>) {
+        let packet_id_resend_set = packet_id_resend_set
+            .into_iter()
+            .map(PacketId::from_raw)
+            .collect();
+
+        let msg = ControlMessageNak {
+            packet_id_resend_set
+        };
+
+        let mut send_socket = MockSendSocket::new();
+        send_socket.expect_local_addr()
+            .return_const(SocketAddr::from(([1,2,3,4], 8)));
+        for packet_id in expected {
+            send_socket.expect_do_send_packet()
+                .with(
+                    eq(SocketAddr::from(([1,2,3,4], 9))),
+                    eq(BytesMut::from(vec![packet_id].as_slice())),
+                )
+                .return_const(())
+            ;
+        }
+
+        let send_stream = SendStream::new(
+            Arc::new(SendStreamConfig {
+                max_packet_len: 30,
+                late_send_delay: None,
+                send_window_size: 32,
+            }),
+            4,
+            Arc::new(SendPipeline::new(Arc::new(send_socket))),
+            SocketAddr::from(([1,2,3,4], 9)),
+            None,
+        );
+
+        let rt = Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build().unwrap();
+        rt.block_on(async move {
+            for packet_id in send_buffer_ids {
+                send_stream.inner.write().await
+                    .send_buffer.insert(PacketId::from_raw(packet_id as u64), BytesMut::from(vec![packet_id].as_slice()));
+            }
+
+            send_stream.on_nak_message(msg).await;
+        });
     }
 
     #[rstest]
-    fn test_on_recv_sync() {
-        todo!()
+    #[case::empty(vec![], 3, 1, 2, vec![], vec![0,22,0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::filled(vec![4,5,6], 7, 4, 4, vec![4,5,6], vec![0,22,0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
+    #[case::filled_too_low_1(vec![4,5,6], 7, 4, 3, vec![4,5,6], vec![0,22,0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
+    #[case::filled_too_low_2(vec![4,5,6], 7, 4, 1, vec![4,5,6], vec![0,22,0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
+    #[case::ack_truncate(vec![4,5,6], 7, 4, 5, vec![5,6], vec![0,22,0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
+    #[case::ack_truncate_all(vec![4,5,6], 7, 4, 7, vec![], vec![0,22,0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
+    #[case::ack_truncate_all_too_high_1(vec![4,5,6], 7, 4, 8, vec![], vec![0,22,0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
+    #[case::ack_truncate_all_too_high_2(vec![4,5,6], 7, 4, 888, vec![], vec![0,22,0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
+    #[case::ignore_high_low_1(vec![4,5,6], 3, 9, 5, vec![5,6], vec![0,22,0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
+    #[case::ignore_high_low_2(vec![4,5,6], 5, 5, 5, vec![5,6], vec![0,22,0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
+    fn test_on_recv_sync(#[case] initial_send_buffer_ids: Vec<u8>, #[case] msg_high_water_mark: u64, #[case] msg_low_water_mark: u64, #[case] msg_ack_threshold: u64, #[case] expected_send_buffer_ids: Vec<u64>, #[case] expected_response: Vec<u8>) {
+        let msg = ControlMessageRecvSync {
+            receive_buffer_high_water_mark: PacketId::from_raw(msg_high_water_mark),
+            receive_buffer_low_water_mark: PacketId::from_raw(msg_low_water_mark),
+            receive_buffer_ack_threshold: PacketId::from_raw(msg_ack_threshold),
+        };
+
+        let mut send_socket = MockSendSocket::new();
+        send_socket.expect_local_addr()
+            .return_const(SocketAddr::from(([1,2,3,4], 8)));
+        send_socket.expect_do_send_packet()
+            .with(
+                eq(SocketAddr::from(([1,2,3,4], 9))),
+                eq(BytesMut::from(expected_response.as_slice())),
+            )
+            .return_const(())
+        ;
+
+        let send_stream = SendStream::new(
+            Arc::new(SendStreamConfig {
+                max_packet_len: 30,
+                late_send_delay: None,
+                send_window_size: 4,
+            }),
+            7,
+            Arc::new(SendPipeline::new(Arc::new(send_socket))),
+            SocketAddr::from(([1,2,3,4], 9)),
+            None,
+        );
+
+        let expected_send_buffer_ids = expected_send_buffer_ids
+            .into_iter()
+            .map(PacketId::from_raw)
+            .collect::<Vec<_>>();
+
+        let rt = Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build().unwrap();
+        rt.block_on(async move {
+            for packet_id in initial_send_buffer_ids {
+                send_stream.inner.write().await
+                    .send_buffer.insert(PacketId::from_raw(packet_id as u64), BytesMut::from(vec![packet_id].as_slice()));
+                send_stream.inner.write().await
+                    .work_in_progress_packet_id = PacketId::from_raw(packet_id as u64 + 1);
+            }
+
+            send_stream.on_recv_sync_message(msg).await;
+
+            assert_eq!(send_stream.inner.read().await.send_buffer.keys().cloned().collect::<Vec<_>>(), expected_send_buffer_ids)
+        });
     }
 
     #[rstest]
@@ -410,16 +521,6 @@ mod tests {
             assert_eq!(inner.work_in_progress_packet_id, PacketId::from_raw(expected_wip_packet_id));
             assert_eq!(inner.work_in_progress.as_ref().map(|buf| buf.to_vec()), expected_wip);
         });
-    }
-
-    #[rstest]
-    fn test_do_send_work_in_progress() {
-        todo!()
-    }
-
-    #[rstest]
-    fn test_init_wip() {
-        todo!()
     }
 
     #[rstest]
