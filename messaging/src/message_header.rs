@@ -17,7 +17,6 @@ impl MessageHeader {
         }
     }
 
-    //TODO unit test ser / deser
     pub fn ser(&self, buf: &mut BytesMut) {
         buf.put_u32(self.message_len);
     }
