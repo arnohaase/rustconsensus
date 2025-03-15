@@ -381,7 +381,7 @@ impl ReceiveStreamInner {
             Ordering::Less => {
                 // the message is contained in the packet
                 self.undispatched_marker = Some((low_water_mark, next_offs + MessageHeader::SERIALIZED_LEN_U16 + header.message_len as u16)); //TODO overflow
-                ConsumeResult::Message(buf[..header.message_len as usize].to_vec())
+                ConsumeResult::Message(buf[..header.message_len.safe_cast()].to_vec())
             }
             Ordering::Equal => {
                 // this packet terminates the packet
@@ -427,14 +427,14 @@ impl ReceiveStreamInner {
                                     return ConsumeResult::Retry;
                                 }
 
-                                if assembly_buffer.len() + offs as usize > header.message_len as usize {
+                                if assembly_buffer.len() + offs as usize > header.message_len.safe_cast() {
                                     warn!("packet {}: message (started in packet {}) exceeds declared message size of {} - this is a bug on the sender side and may be a DoS attack", low_water_mark, packet_id, header.message_len);
                                     self.receive_buffer.remove(&packet_id);
                                     self.sanitize_after_update();
                                     return ConsumeResult::Retry;
                                 }
 
-                                assembly_buffer.extend_from_slice(&buf[..offs as usize]);
+                                assembly_buffer.extend_from_slice(&buf[..offs.safe_cast()]);
                                 if offs as usize == buf.len() {
                                     self.receive_buffer.remove(&packet_id);
                                     self.undispatched_marker = None;

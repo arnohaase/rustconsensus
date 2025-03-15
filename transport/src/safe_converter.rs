@@ -16,6 +16,12 @@ impl SafeCast<usize> for u32 {
     }
 }
 
+impl SafeCast<usize> for u16 {
+    fn safe_cast(self) -> usize {
+        self as usize
+    }
+}
+
 
 /// For narrowing casts where business logic ensures that the value is in the narrower type's range.
 /// NB: The implementations will panic otherwise
