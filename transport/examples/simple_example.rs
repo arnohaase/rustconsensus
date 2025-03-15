@@ -1,7 +1,7 @@
-use messaging::end_point::EndPoint;
-use messaging::message_dispatcher::MessageDispatcher;
-use messaging::receive_stream::ReceiveStreamConfig;
-use messaging::send_stream::SendStreamConfig;
+use transport::end_point::EndPoint;
+use transport::message_dispatcher::MessageDispatcher;
+use transport::receive_stream::ReceiveStreamConfig;
+use transport::send_stream::SendStreamConfig;
 use rustc_hash::FxHashMap;
 use std::net::SocketAddr;
 use std::str::FromStr;

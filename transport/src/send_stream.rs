@@ -12,6 +12,7 @@ use tokio::time;
 use tracing::{debug, trace};
 use crate::message_header::MessageHeader;
 use crate::packet_id::PacketId;
+use crate::safe_converter::PrecheckedCast;
 
 pub struct SendStreamConfig {
     pub max_packet_len: usize, //TODO calculated from MTU, encryption wrapper, ...
@@ -234,7 +235,7 @@ impl SendStream {
                 None
             }
             else {
-                Some(message.len() as u16) //TODO overflow
+                Some(message.len().prechecked_cast())
             };
             wip_buffer = inner.init_wip(first_message_offset);
         }

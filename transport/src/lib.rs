@@ -13,7 +13,7 @@
 //!   * several disjoint connections can go through the same pair of UDP ports - for this, an
 //!      additional identifier is introduced for multiplexing / demultiplexing. This has
 //!      'port numbers' (tunneled through a UDP socket with a single port)
-//!   * explicitly *not* a messaging system with pub/sub, broadcast, really reliable delivery etc.
+//!   * explicitly *not* a transport system with pub/sub, broadcast, really reliable delivery etc.
 //!      --> different trade-offs
 //! * The abstraction is sending / receiving *messages* (i.e. defined-length chunks of data as
 //!   opposed to streams of bytes etc.)
@@ -212,6 +212,7 @@ pub mod message_dispatcher;
 mod send_pipeline;
 mod packet_id;
 mod message_header;
+pub mod safe_converter;
 
 #[cfg(test)]
 mod tests {

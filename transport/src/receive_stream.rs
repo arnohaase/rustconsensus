@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{debug, trace, warn};
+use crate::safe_converter::SafeCast;
 
 pub struct ReceiveStreamConfig {
     pub nak_interval: Duration, // configure to roughly 2x RTT
@@ -263,7 +264,7 @@ impl ReceiveStreamInner {
                     self.receive_buffer.remove(&low_water_mark);
                 }
                 Some((Some(offs), buf)) => {
-                    if buf.len() <= *offs as usize {
+                    if buf.len() <= *offs as usize { //TODO overflow
                         self.receive_buffer.remove(&low_water_mark);
                     }
                     else {
@@ -379,13 +380,13 @@ impl ReceiveStreamInner {
         match (header.message_len as usize).cmp(&buf.len()) {
             Ordering::Less => {
                 // the message is contained in the packet
-                self.undispatched_marker = Some((low_water_mark, next_offs + MessageHeader::SERIALIZED_LEN_U16 + header.message_len as u16));
+                self.undispatched_marker = Some((low_water_mark, next_offs + MessageHeader::SERIALIZED_LEN_U16 + header.message_len as u16)); //TODO overflow
                 ConsumeResult::Message(buf[..header.message_len as usize].to_vec())
             }
             Ordering::Equal => {
                 // this packet terminates the packet
 
-                let result_buf = buf[..header.message_len as usize].to_vec(); //TODO overflow
+                let result_buf = buf[..header.message_len.safe_cast()].to_vec();
 
                 self.undispatched_marker = None;
                 self.receive_buffer.remove(&low_water_mark);
@@ -395,7 +396,7 @@ impl ReceiveStreamInner {
             Ordering::Greater => {
                 // start of a multi-packet message
                 if self.is_complete_multipacket_message_received() {
-                    let mut assembly_buffer = Vec::with_capacity(header.message_len as usize);
+                    let mut assembly_buffer = Vec::with_capacity(header.message_len.safe_cast());
 
                     assembly_buffer.extend_from_slice(buf);
                     self.receive_buffer.remove(&low_water_mark);
@@ -408,7 +409,7 @@ impl ReceiveStreamInner {
 
                         match *offs {
                             None => {
-                                if assembly_buffer.len() + buf.len() > header.message_len as usize {
+                                if assembly_buffer.len() + buf.len() > header.message_len.safe_cast() {
                                     warn!("packet {}: message (started in packet {}) exceeds declared message length of {} - this is a bug on the sender side and may be a DoS attack", low_water_mark, packet_id, header.message_len);
                                     self.receive_buffer.remove(&packet_id);
                                     self.sanitize_after_update();

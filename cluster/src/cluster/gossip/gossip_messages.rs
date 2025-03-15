@@ -11,7 +11,10 @@ use num_enum::TryFromPrimitive;
 use tokio::sync::mpsc;
 use tracing::error;
 
+use transport::safe_converter::*;
+
 use crate::cluster::cluster_state::{MembershipState, NodeReachability, NodeState};
+use crate::messaging;
 use crate::messaging::envelope::Envelope;
 use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::node_addr::NodeAddr;
@@ -343,7 +346,7 @@ impl NodeAddrPoolSerializer {
 
     pub fn finalize(self, buf: &mut BytesMut) {
         // overwrite the placeholder with the actual offset of the resolution table
-        let offs_resolution_table = (buf.len() - self.offs_for_offs) as u32; //TODO overflow
+        let offs_resolution_table = (buf.len() - self.offs_for_offs).prechecked_cast();
         (&mut buf[self.offs_for_offs..]).put_u32(offs_resolution_table);
 
         // write the resolution table
@@ -361,7 +364,7 @@ struct NodeAddrPoolDeserializer {
 impl NodeAddrPoolDeserializer {
     pub fn new(buf: &mut impl Buf) -> anyhow::Result<NodeAddrPoolDeserializer> {
         let initial = buf.remaining();
-        let offs_resolution_table = buf.try_get_u32()? as usize; //TODO overflow?
+        let offs_resolution_table = buf.try_get_u32()?.safe_cast();
         let len_of_offset = initial - buf.remaining();
 
         let offs_resolution_table = offs_resolution_table.checked_sub(len_of_offset)
@@ -448,7 +451,7 @@ impl <'a> StringPoolSerializer<'a> {
 
     pub fn finalize(self, buf: &mut BytesMut) {
         // overwrite the placeholder with the actual offset of the resolution table
-        let offs_resolution_table = (buf.len() - self.offs_for_offs) as u32; //TODO overflow
+        let offs_resolution_table = (buf.len() - self.offs_for_offs).prechecked_cast();
         (&mut buf[self.offs_for_offs..]).put_u32(offs_resolution_table);
 
         // write the resolution table
@@ -466,7 +469,7 @@ struct StringPoolDeserializer {
 impl StringPoolDeserializer {
     pub fn new(buf: &mut impl Buf) -> anyhow::Result<StringPoolDeserializer> {
         let initial = buf.remaining();
-        let offs_resolution_table = buf.try_get_u32()? as usize; //TODO overflow?
+        let offs_resolution_table = buf.try_get_u32()?.safe_cast();
         let len_of_offset = initial - buf.remaining();
 
         let offs_resolution_table = offs_resolution_table.checked_sub(len_of_offset)

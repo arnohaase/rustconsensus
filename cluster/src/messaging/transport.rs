@@ -16,7 +16,7 @@ pub trait Transport : Sync + Send {
 //TODO optional encryption wrapper for transport
 
 /// This trait decouples the implementation of message transport (different strategies) from the
-///  handling of a message once it is received (always the same, part of the messaging library core).
+///  handling of a message once it is received (always the same, part of the transport library core).
 ///
 /// It is passed around as an `Arc<dyn ...>` to minimize dependencies of [Transport] implementations.
 #[async_trait::async_trait]

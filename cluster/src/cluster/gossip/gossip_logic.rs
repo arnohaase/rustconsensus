@@ -9,6 +9,7 @@ use rustc_hash::FxHasher;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 use tracing::{debug, trace};
+use transport::safe_converter::SafeCast;
 use super::gossip_messages::*;
 
 use crate::cluster::cluster_config::ClusterConfig;
@@ -292,7 +293,7 @@ fn gossip_detailed_digest_with_given_nonce(cluster_state: &ClusterState, nonce: 
     let mut nodes: BTreeMap<NodeAddr, u64> = Default::default();
 
     for s in cluster_state.node_states() {
-        let mut hasher = FxHasher::with_seed(nonce as usize); //TODO we assume at least 32-bit architecture - how to ensure it once and for all?
+        let mut hasher = FxHasher::with_seed(nonce.safe_cast());
 
         // no need to add the node address to the hash (it's the key in the returned map of
         //  hashes), or the roles (they're supposed to be immutable anyway)

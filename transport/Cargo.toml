@@ -1,5 +1,5 @@
 [package]
-name = "messaging"
+name = "transport"
 edition.workspace = true
 version.workspace = true
 

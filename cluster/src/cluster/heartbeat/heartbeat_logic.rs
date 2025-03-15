@@ -105,8 +105,17 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
         self.registry.on_heartbeat_response(from, rtt);
     }
 
-    fn now_as_nanos(&self) -> u64 {
-        self.reference_time.elapsed().as_nanos() as u64  //TODO overflow
+    fn now_as_nanos(&mut self) -> u64 {
+        match self.reference_time.elapsed().as_nanos()
+            .try_into()
+        {
+            Ok(nanos) => nanos,
+            Err(_) => {
+                warn!("The clock appears to have made a huge jump ahead - using new baseline for timing. This may cause weirdness until this bubbles through the application");
+                self.reference_time = Instant::now();
+                0
+            }
+        }
     }
     fn timestamp_from_nanos(&self, nanos: u64) -> Instant {
         self.reference_time + Duration::from_nanos(nanos)

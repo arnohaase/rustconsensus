@@ -47,8 +47,8 @@ impl <M: Messaging> Cluster<M> {
         //TODO make discovery strategy and downing strategy part of the cluster's config - that should include seed nodes
 
         select! {
-            //TODO start messaging receive loop only after the cluster is started
-            r = self.messaging.recv() => r, //TODO spawn messaging? or at least message handling?
+            //TODO start transport receive loop only after the cluster is started
+            r = self.messaging.recv() => r, //TODO spawn transport? or at least message handling?
             r = self._run(discovery_strategy, downing_strategy) => r,
         }
     }

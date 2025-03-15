@@ -16,6 +16,8 @@ tokio = { version = "*", features = ["full", "test-util"]}
 tracing-subscriber = "*"
 
 [dependencies]
+transport = { path = "../transport" }
+
 #TODO version numbers
 anyhow = "*"
 async-trait = "*"

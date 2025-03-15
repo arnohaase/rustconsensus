@@ -1,5 +1,6 @@
 use bytes::{Buf, BufMut, BytesMut};
 use bytes_varint::try_get_fixed::TryGetFixedSupport;
+use crate::safe_converter::PrecheckedCast;
 
 //TODO human readable Debug
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -13,7 +14,7 @@ impl MessageHeader {
 
     pub(crate) fn for_message(message: &[u8]) -> MessageHeader {
         MessageHeader {
-            message_len: message.len() as u32, //TODO overflow
+            message_len: message.len().prechecked_cast(),
         }
     }
 
