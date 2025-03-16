@@ -9,7 +9,7 @@ use rustc_hash::FxHasher;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 use tracing::{debug, trace};
-use transport::safe_converter::SafeCast;
+use transport::safe_converter::{PrecheckedCast, SafeCast};
 use super::gossip_messages::*;
 
 use crate::cluster::cluster_config::ClusterConfig;
@@ -107,7 +107,8 @@ impl <R: Random> Gossip<R> {
                 sha256.update(&[s.membership_state.into()]);
 
                 for role in &s.roles {
-                    sha256.update((role.len() as u64).to_le_bytes());
+                    let len: u64 = role.len().prechecked_cast();
+                    sha256.update(len.to_le_bytes());
                     sha256.update(role.as_bytes());
                 }
 

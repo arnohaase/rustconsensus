@@ -280,6 +280,7 @@ mod tests {
     use super::*;
     use rstest::*;
     use tokio::runtime::Builder;
+    use crate::safe_converter::SafeCast;
     use crate::send_pipeline::MockSendSocket;
 
     #[rstest]
@@ -318,9 +319,9 @@ mod tests {
         rt.block_on(async move {
             for packet_id in initial_send_buffer {
                 send_stream.inner.write().await
-                    .send_buffer.insert(PacketId::from_raw(packet_id as u64), BytesMut::from(vec![packet_id].as_slice()));
+                    .send_buffer.insert(PacketId::from_raw(packet_id.safe_cast()), BytesMut::from(vec![packet_id].as_slice()));
                 send_stream.inner.write().await
-                    .work_in_progress_packet_id = PacketId::from_raw(packet_id as u64 + 1);
+                    .work_in_progress_packet_id = PacketId::from_raw(packet_id.safe_cast() + 1);
             }
             send_stream.inner.write().await
                 .work_in_progress = initial_wip_packet.map(|buf| BytesMut::from(buf.as_slice()));
@@ -386,7 +387,7 @@ mod tests {
         rt.block_on(async move {
             for packet_id in send_buffer_ids {
                 send_stream.inner.write().await
-                    .send_buffer.insert(PacketId::from_raw(packet_id as u64), BytesMut::from(vec![packet_id].as_slice()));
+                    .send_buffer.insert(PacketId::from_raw(packet_id.safe_cast()), BytesMut::from(vec![packet_id].as_slice()));
             }
 
             send_stream.on_nak_message(msg).await;
@@ -446,9 +447,9 @@ mod tests {
         rt.block_on(async move {
             for packet_id in initial_send_buffer_ids {
                 send_stream.inner.write().await
-                    .send_buffer.insert(PacketId::from_raw(packet_id as u64), BytesMut::from(vec![packet_id].as_slice()));
+                    .send_buffer.insert(PacketId::from_raw(packet_id.safe_cast()), BytesMut::from(vec![packet_id].as_slice()));
                 send_stream.inner.write().await
-                    .work_in_progress_packet_id = PacketId::from_raw(packet_id as u64 + 1);
+                    .work_in_progress_packet_id = PacketId::from_raw(packet_id.safe_cast() + 1);
             }
 
             send_stream.on_recv_sync_message(msg).await;

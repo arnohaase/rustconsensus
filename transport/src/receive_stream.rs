@@ -16,7 +16,7 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{debug, trace, warn};
-use crate::safe_converter::SafeCast;
+use crate::safe_converter::{PrecheckedCast, SafeCast};
 
 pub struct ReceiveStreamConfig {
     pub nak_interval: Duration, // configure to roughly 2x RTT
@@ -209,7 +209,7 @@ impl ReceiveStreamInner {
         let high_water_mark = self.high_water_mark();
 
         // discard packets that are now outside the maximum receive window
-        if let Some(lower_bound) = high_water_mark - self.config.receive_window_size as u64 {
+        if let Some(lower_bound) = high_water_mark - self.config.receive_window_size.safe_cast() {
             while let Some((&packet_id, _)) = self.receive_buffer.first_key_value() {
                 if packet_id >= lower_bound {
                     break;
@@ -232,7 +232,7 @@ impl ReceiveStreamInner {
         //  never be dispatched without the start of the message.
         for packet_id in self.low_water_mark().to(PacketId::MAX) {
             if let Some((first_msg_offs, buf)) = self.receive_buffer.get(&packet_id) {
-                if first_msg_offs.is_none() || *first_msg_offs == Some(buf.len() as u16) {
+                if first_msg_offs.is_none() || *first_msg_offs == Some(buf.len().prechecked_cast()) {
                     // continuation packet or ends a multi-packet message: drop the packet
                     self.receive_buffer.remove(&packet_id);
                 }
@@ -264,7 +264,7 @@ impl ReceiveStreamInner {
                     self.receive_buffer.remove(&low_water_mark);
                 }
                 Some((Some(offs), buf)) => {
-                    if buf.len() <= *offs as usize { //TODO overflow
+                    if buf.len() <= (*offs).safe_cast() {
                         self.receive_buffer.remove(&low_water_mark);
                     }
                     else {
@@ -328,7 +328,7 @@ impl ReceiveStreamInner {
 
             // assert that the lwm packet actually starts a message
             let lwm_offs = lwm_offs.expect("non-starting packets should have been skipped");
-            assert!(lwm_offs < lwm_buf.len() as u16, "message-ending packets should have been skipped");
+            assert!(lwm_offs.safe_cast() < lwm_buf.len(), "message-ending packets should have been skipped");
 
             match self.undispatched_marker {
                 None => {
@@ -349,14 +349,14 @@ impl ReceiveStreamInner {
             return ConsumeResult::None;
         };
 
-        if next_offs as usize >= buf.len() {
+        if next_offs.safe_cast() >= buf.len() {
             warn!("packet #{} as low water mark with first message offset {} pointing after the end of the packet {} - skipping", low_water_mark, next_offs, buf.len());
             self.receive_buffer.remove(&low_water_mark);
             self.sanitize_after_update();
             return ConsumeResult::Retry;
         }
 
-        let mut buf = &buf[next_offs as usize..];
+        let mut buf = &buf[next_offs.safe_cast()..];
         let header = match MessageHeader::deser(&mut buf) {
             Ok(header) => header,
             Err(_) => {
@@ -377,10 +377,10 @@ impl ReceiveStreamInner {
             return ConsumeResult::Retry;
         }
 
-        match (header.message_len as usize).cmp(&buf.len()) {
+        match <u32 as SafeCast<usize>>::safe_cast(header.message_len).cmp(&buf.len()) {
             Ordering::Less => {
                 // the message is contained in the packet
-                self.undispatched_marker = Some((low_water_mark, next_offs + MessageHeader::SERIALIZED_LEN_U16 + header.message_len as u16)); //TODO overflow
+                self.undispatched_marker = Some((low_water_mark, next_offs + MessageHeader::SERIALIZED_LEN_U16 + header.message_len.prechecked_cast()));
                 ConsumeResult::Message(buf[..header.message_len.safe_cast()].to_vec())
             }
             Ordering::Equal => {
@@ -420,14 +420,14 @@ impl ReceiveStreamInner {
                                 self.receive_buffer.remove(&packet_id);
                             }
                             Some(offs) => {
-                                if offs as usize > buf.len() {
+                                if offs.safe_cast() > buf.len() {
                                     warn!("packet #{} has first message offset {} pointing after the end of the packet {} - skipping", packet_id, next_offs, buf.len());
                                     self.receive_buffer.remove(&packet_id);
                                     self.sanitize_after_update();
                                     return ConsumeResult::Retry;
                                 }
 
-                                if assembly_buffer.len() + offs as usize > header.message_len.safe_cast() {
+                                if assembly_buffer.len() + offs.safe_cast() > header.message_len.safe_cast() {
                                     warn!("packet {}: message (started in packet {}) exceeds declared message size of {} - this is a bug on the sender side and may be a DoS attack", low_water_mark, packet_id, header.message_len);
                                     self.receive_buffer.remove(&packet_id);
                                     self.sanitize_after_update();
@@ -435,7 +435,7 @@ impl ReceiveStreamInner {
                                 }
 
                                 assembly_buffer.extend_from_slice(&buf[..offs.safe_cast()]);
-                                if offs as usize == buf.len() {
+                                if offs.safe_cast() == buf.len() {
                                     self.receive_buffer.remove(&packet_id);
                                     self.undispatched_marker = None;
                                 }
@@ -448,7 +448,7 @@ impl ReceiveStreamInner {
                     }
 
                     // check buffer length against declared message length
-                    if assembly_buffer.len() != header.message_len as usize {
+                    if assembly_buffer.len() != header.message_len.safe_cast() {
                         warn!("packet #{}: actual message length {} is different from length in messsage header {} - this is a sender-side bug. Skipping the message.", low_water_mark, header.message_len, assembly_buffer.len());
                         self.sanitize_after_update();
                         return ConsumeResult::Retry;

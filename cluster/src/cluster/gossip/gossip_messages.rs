@@ -364,7 +364,7 @@ struct NodeAddrPoolDeserializer {
 impl NodeAddrPoolDeserializer {
     pub fn new(buf: &mut impl Buf) -> anyhow::Result<NodeAddrPoolDeserializer> {
         let initial = buf.remaining();
-        let offs_resolution_table = buf.try_get_u32()?.safe_cast();
+        let offs_resolution_table: usize = buf.try_get_u32()?.safe_cast();
         let len_of_offset = initial - buf.remaining();
 
         let offs_resolution_table = offs_resolution_table.checked_sub(len_of_offset)
@@ -469,7 +469,7 @@ struct StringPoolDeserializer {
 impl StringPoolDeserializer {
     pub fn new(buf: &mut impl Buf) -> anyhow::Result<StringPoolDeserializer> {
         let initial = buf.remaining();
-        let offs_resolution_table = buf.try_get_u32()?.safe_cast();
+        let offs_resolution_table: usize = buf.try_get_u32()?.safe_cast();
         let len_of_offset = initial - buf.remaining();
 
         let offs_resolution_table = offs_resolution_table.checked_sub(len_of_offset)

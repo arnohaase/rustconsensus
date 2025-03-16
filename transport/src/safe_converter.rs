@@ -3,9 +3,9 @@ pub trait SafeCast<T> {
     fn safe_cast(self) -> T;
 }
 
-impl SafeCast<u32> for u64 {
-    fn safe_cast(self) -> u32 {
-        self as u32
+impl SafeCast<u64> for u32 {
+    fn safe_cast(self) -> u64 {
+        self as u64
     }
 }
 
@@ -22,11 +22,22 @@ impl SafeCast<usize> for u16 {
     }
 }
 
+impl SafeCast<u64> for u8 {
+    fn safe_cast(self) -> u64 {
+        self as u64
+    }
+}
+
 
 /// For narrowing casts where business logic ensures that the value is in the narrower type's range.
 /// NB: The implementations will panic otherwise
 pub trait PrecheckedCast<T> {
     fn prechecked_cast(self) -> T;
+}
+impl PrecheckedCast<u64> for usize {
+    fn prechecked_cast(self) -> u64 {
+        self.try_into().expect("this is a bug: application logic should have ensured the value range")
+    }
 }
 impl PrecheckedCast<u32> for usize {
     fn prechecked_cast(self) -> u32 {
@@ -34,6 +45,12 @@ impl PrecheckedCast<u32> for usize {
     }
 }
 impl PrecheckedCast<u16> for usize {
+    fn prechecked_cast(self) -> u16 {
+        self.try_into().expect("this is a bug: application logic should have ensured the value range")
+    }
+}
+
+impl PrecheckedCast<u16> for u32 {
     fn prechecked_cast(self) -> u16 {
         self.try_into().expect("this is a bug: application logic should have ensured the value range")
     }

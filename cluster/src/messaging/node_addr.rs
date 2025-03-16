@@ -96,7 +96,9 @@ impl From<SocketAddr> for NodeAddr {
         //TODO overarching clock concept
         let unique = SystemTime::now().duration_since(UNIX_EPOCH)
             .expect("system time is before UNIX epoch") //TODO
-            .as_secs() as u32;
+            .as_secs()
+            .try_into()
+            .expect("seconds since epoch bigger than u32::MAX");
 
         NodeAddr {
             unique,
