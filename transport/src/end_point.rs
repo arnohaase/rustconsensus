@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -5,7 +6,7 @@ use std::time::SystemTime;
 use rustc_hash::FxHashMap;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::sync::Mutex;
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::packet_header::{PacketHeader, PacketKind};
@@ -89,6 +90,7 @@ impl EndPoint {
     pub async fn recv_loop(&self)  {
         info!("starting receive loop");
 
+        let mut generations_per_peer: FxHashMap<SocketAddr, u64> = FxHashMap::default();
         let mut buf = [0u8; 1500]; //TODO configurable size
         loop {
             let (num_read, from) = match self.receive_socket.recv_from(&mut buf).await {
@@ -119,16 +121,51 @@ impl EndPoint {
             let peer_addr = packet_header.reply_to_address
                 .unwrap_or(from);
 
+            if !self.update_generation_for_peer(&mut generations_per_peer, peer_addr, packet_header.generation) {
+                continue;
+            }
+
             match packet_header.packet_kind {
                 PacketKind::RegularSequenced { stream_id, first_message_offset, packet_sequence_number} => {
-                    self.get_receive_stream(peer_addr, stream_id).await
+                    self.get_receive_stream(packet_header.generation, peer_addr, stream_id).await
                         .on_packet(packet_sequence_number, first_message_offset, parse_buf).await
                 },
                 PacketKind::OutOfSequence => self.message_dispatcher.on_message(peer_addr, None, parse_buf).await,
                 PacketKind::ControlInit { stream_id } => Self::handle_init_message(self.get_send_stream(peer_addr, stream_id).await).await,
                 PacketKind::ControlRecvSync { stream_id } => Self::handle_recv_sync(parse_buf, self.get_send_stream(peer_addr, stream_id).await).await,
-                PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(peer_addr, stream_id).await).await,
+                PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(packet_header.generation, peer_addr, stream_id).await).await,
                 PacketKind::ControlNak { stream_id } => Self::handle_nak(parse_buf, self.get_send_stream(peer_addr, stream_id).await).await,
+            }
+        }
+    }
+
+    #[must_use]
+    fn update_generation_for_peer(&self, generations_per_peer: &mut FxHashMap<SocketAddr, u64>, peer_addr: SocketAddr, peer_generation: u64) -> bool {
+        match generations_per_peer.entry(peer_addr) {
+            Entry::Vacant(e) => {
+                e.insert(peer_generation);
+                true
+            }
+            Entry::Occupied(mut e) => {
+                match e.get().cmp(&peer_generation) {
+                    Ordering::Equal => true, /// unchanged generation: nothing to be done
+                    Ordering::Less => {
+                        info!("peer {:?} restarted (@{}), re-initializing local per-peer state", peer_addr, peer_generation);
+                        e.insert(peer_generation);
+                        todo!();
+                        // self.send_streams
+                        //     .lock().await
+                        //     .retain(|(s, _)| s != &peer_addr);
+                        // self.receive_streams
+                        //     .lock().await
+                        //     .retain(|(s, _)| s != &peer_addr);
+                        true
+                    }
+                    Ordering::Greater => {
+                        debug!("peer {:?}: received packet for old generation {} - discarding", peer_addr, peer_generation);
+                        false
+                    }
+                }
             }
         }
     }
@@ -154,7 +191,7 @@ impl EndPoint {
         }
     }
 
-    async fn get_receive_stream(&self, addr: SocketAddr, stream_id: u16) -> Arc<ReceiveStream> {
+    async fn get_receive_stream(&self, peer_generation: u64, addr: SocketAddr, stream_id: u16) -> Arc<ReceiveStream> {
         match self.receive_streams
             .lock().await
             .entry((addr, stream_id))
@@ -163,7 +200,7 @@ impl EndPoint {
             Entry::Vacant(e) => {
                 let mut recv_strm = ReceiveStream::new(
                     self.get_receive_config(stream_id),
-                    self.generation,
+                    peer_generation,
                     stream_id,
                     addr,
                     self.get_send_socket(addr),
