@@ -12,9 +12,9 @@ use tracing::{info, span, Instrument, Level};
 
 fn init_logging() {
     tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
+        // .with_max_level(Level::INFO)
         // .with_max_level(Level::DEBUG)
-        // .with_max_level(Level::TRACE)
+        .with_max_level(Level::TRACE)
         .with_thread_ids(true)
         .try_init()
         .ok();
