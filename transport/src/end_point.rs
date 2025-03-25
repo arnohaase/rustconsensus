@@ -90,7 +90,6 @@ impl EndPoint {
 
         let mut generations_per_peer: FxHashMap<SocketAddr, u64> = FxHashMap::default();
         let mut receive_streams: FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>> = FxHashMap::default();
-        let mut send_streams: FxHashMap<(SocketAddr, u16), Arc<SendStream>> = FxHashMap::default();
 
         let mut buf = [0u8; 1500]; //TODO configurable size
         loop {
@@ -128,13 +127,13 @@ impl EndPoint {
 
             match packet_header.packet_kind {
                 PacketKind::RegularSequenced { stream_id, first_message_offset, packet_sequence_number} => {
-                    self.get_receive_stream(&mut receive_streams, packet_header.generation, peer_addr, stream_id).await
+                    self.get_receive_stream(&mut receive_streams, packet_header.generation, peer_addr, stream_id)
                         .on_packet(packet_sequence_number, first_message_offset, parse_buf).await
                 },
                 PacketKind::OutOfSequence => self.message_dispatcher.on_message(peer_addr, None, parse_buf).await,
                 PacketKind::ControlInit { stream_id } => Self::handle_init_message(self.get_send_stream(peer_addr, stream_id).await).await,
                 PacketKind::ControlRecvSync { stream_id } => Self::handle_recv_sync(parse_buf, self.get_send_stream(peer_addr, stream_id).await).await,
-                PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(&mut receive_streams, packet_header.generation, peer_addr, stream_id).await).await,
+                PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(&mut receive_streams, packet_header.generation, peer_addr, stream_id)).await,
                 PacketKind::ControlNak { stream_id } => Self::handle_nak(parse_buf, self.get_send_stream(peer_addr, stream_id).await).await,
             }
         }
@@ -159,12 +158,13 @@ impl EndPoint {
                     Ordering::Less => {
                         info!("peer {:?} restarted (@{}), re-initializing local per-peer state", peer_addr, peer_generation);
                         e.insert(peer_generation);
-                        todo!();
                         // self.send_streams
                         //     .lock().await
                         //     .retain(|(s, _)| s != &peer_addr);
                         receive_streams
                             .retain(|(s, _), _| s != &peer_addr);
+
+                        todo!();
                         true
                     }
                     Ordering::Greater => {
@@ -197,7 +197,7 @@ impl EndPoint {
         }
     }
 
-    async fn get_receive_stream(&self, receive_streams: &mut FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>>, peer_generation: u64, addr: SocketAddr, stream_id: u16) -> Arc<ReceiveStream> {
+    fn get_receive_stream(&self, receive_streams: &mut FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>>, peer_generation: u64, addr: SocketAddr, stream_id: u16) -> Arc<ReceiveStream> {
         match receive_streams
             .entry((addr, stream_id))
         {
