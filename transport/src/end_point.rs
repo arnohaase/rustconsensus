@@ -1,6 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::SystemTime;
 use rustc_hash::FxHashMap;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::sync::Mutex;
@@ -53,7 +54,7 @@ impl EndPoint {
         };
 
         Ok(EndPoint {
-            generation: Self::generation_from_timestamp(),
+            generation: Self::generation_from_timestamp()?,
             receive_socket,
             send_socket_v4: Arc::new(SendPipeline::new(Arc::new(send_socket_v4))),
             send_socket_v6: Arc::new(SendPipeline::new(Arc::new(send_socket_v6))),
@@ -67,8 +68,15 @@ impl EndPoint {
         })
     }
 
-    fn generation_from_timestamp() -> u64 {
-        todo!()
+    fn generation_from_timestamp() -> anyhow::Result<u64> {
+        let raw = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)?
+            .as_millis();
+
+        if raw > 0xffff_ffff_ffff {
+            anyhow::bail!("system clock is in the future");
+        }
+        Ok(raw as u64)
     }
 
     //TODO send without stream
