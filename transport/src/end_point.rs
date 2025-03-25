@@ -154,7 +154,7 @@ impl EndPoint {
             }
             Entry::Occupied(mut e) => {
                 match e.get().cmp(&peer_generation) {
-                    Ordering::Equal => true, /// unchanged generation: nothing to be done
+                    Ordering::Equal => true, // unchanged generation: nothing to be done
                     Ordering::Less => {
                         info!("peer {:?} restarted (@{}), re-initializing local per-peer state", peer_addr, peer_generation);
                         e.insert(peer_generation);
@@ -203,6 +203,7 @@ impl EndPoint {
         {
             Entry::Occupied(e) => e.get().clone(),
             Entry::Vacant(e) => {
+                debug!("initializing receive stream {} for {:?}", stream_id, addr);
                 let mut recv_strm = ReceiveStream::new(
                     self.get_receive_config(stream_id),
                     peer_generation,
@@ -233,6 +234,7 @@ impl EndPoint {
         {
             Entry::Occupied(e) => e.get().clone(),
             Entry::Vacant(e) => {
+                debug!("initializing send stream {} for {:?}", stream_id, addr);
                 e.insert(Arc::new(SendStream::new(
                     self.get_send_config(stream_id),
                     self.generation,
