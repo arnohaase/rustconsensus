@@ -20,4 +20,3 @@ mockall = "*"
 rustc-hash = "*"
 tokio = { version = "*", features = ["full"] } # TODO
 tracing = "*"
-log = "0.4.25"

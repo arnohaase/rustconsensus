@@ -7,6 +7,7 @@ use rustc_hash::FxHashMap;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, trace, warn};
+use crate::AtomicMap::AtomicMap;
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::packet_header::{PacketHeader, PacketKind};
@@ -27,7 +28,7 @@ pub struct EndPoint {
     receive_socket: Arc<UdpSocket>,
     send_socket_v4: Arc<SendPipeline>,
     send_socket_v6: Arc<SendPipeline>,
-    send_streams: Mutex<FxHashMap<(SocketAddr, u16), Arc<SendStream>>>,
+    send_streams: AtomicMap<(SocketAddr, u16), Arc<SendStream>>,
     message_dispatcher: Arc<dyn MessageDispatcher>,
     default_receive_config: Arc<ReceiveStreamConfig>,
     specific_receive_configs: FxHashMap<u16, Arc<ReceiveStreamConfig>>,
@@ -228,23 +229,24 @@ impl EndPoint {
     }
 
     async fn get_send_stream(&self, addr: SocketAddr, stream_id: u16) -> Arc<SendStream> {
-        match self.send_streams
-            .lock().await
-            .entry((addr, stream_id))
-        {
-            Entry::Occupied(e) => e.get().clone(),
-            Entry::Vacant(e) => {
-                debug!("initializing send stream {} for {:?}", stream_id, addr);
-                e.insert(Arc::new(SendStream::new(
-                    self.get_send_config(stream_id),
-                    self.generation,
-                    stream_id,
-                    self.get_send_socket(addr),
-                    addr,
-                    self.get_reply_to_addr(addr),
-                ))).clone()
-            }
-        }
+        if let Some(stream) = self.send_streams.load().get(&(addr, stream_id)) {
+            return stream.clone();
+        };
+
+        debug!("initializing send stream {} for {:?}", stream_id, addr);
+        self.send_streams.update(|map| {
+            map.insert((addr, stream_id), Arc::new(SendStream::new(
+                self.get_send_config(stream_id),
+                self.generation,
+                stream_id,
+                self.get_send_socket(addr),
+                addr,
+                self.get_reply_to_addr(addr),
+            )));
+        });
+        self.send_streams.load().get(&(addr, stream_id))
+            .cloned()
+            .expect("send stream should be in the map after we inserted it")
     }
 
     async fn handle_init_message(send_stream: Arc<SendStream>) {

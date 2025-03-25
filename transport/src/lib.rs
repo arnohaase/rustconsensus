@@ -215,6 +215,7 @@ mod send_pipeline;
 mod packet_id;
 mod message_header;
 pub mod safe_converter;
+mod AtomicMap;
 
 #[cfg(test)]
 mod tests {
