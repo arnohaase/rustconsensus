@@ -21,6 +21,7 @@ use crate::send_stream::{SendStream, SendStreamConfig};
 ///  UdpSocket, dispatching incoming packets to their corresponding channels, and has an API for
 ///  application code to send messages.
 pub struct EndPoint {
+    generation: u64,
     receive_socket: Arc<UdpSocket>,
     send_socket_v4: Arc<SendPipeline>,
     send_socket_v6: Arc<SendPipeline>,
@@ -52,6 +53,7 @@ impl EndPoint {
         };
 
         Ok(EndPoint {
+            generation: Self::generation_from_timestamp(),
             receive_socket,
             send_socket_v4: Arc::new(SendPipeline::new(Arc::new(send_socket_v4))),
             send_socket_v6: Arc::new(SendPipeline::new(Arc::new(send_socket_v6))),
@@ -63,6 +65,10 @@ impl EndPoint {
             default_send_config,
             specific_send_configs,
         })
+    }
+
+    fn generation_from_timestamp() -> u64 {
+        todo!()
     }
 
     //TODO send without stream
@@ -149,6 +155,7 @@ impl EndPoint {
             Entry::Vacant(e) => {
                 let mut recv_strm = ReceiveStream::new(
                     self.get_receive_config(stream_id),
+                    self.generation,
                     stream_id,
                     addr,
                     self.get_send_socket(addr),
@@ -178,6 +185,7 @@ impl EndPoint {
             Entry::Vacant(e) => {
                 e.insert(Arc::new(SendStream::new(
                     self.get_send_config(stream_id),
+                    self.generation,
                     stream_id,
                     self.get_send_socket(addr),
                     addr,

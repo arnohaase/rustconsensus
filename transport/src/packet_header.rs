@@ -29,6 +29,7 @@ pub struct PacketHeader {
     pub protocol_version: u8,
     pub reply_to_address: Option<SocketAddr>,
     pub packet_kind: PacketKind,
+    pub generation: u64,
 }
 impl Debug for PacketHeader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -36,7 +37,7 @@ impl Debug for PacketHeader {
             .map(|addr| format!("[{}]", addr))
             .unwrap_or("".to_string());
 
-        write!(f, "PCKT{{V{}{}:{:?}}}", 1, reply_to, self.packet_kind)
+        write!(f, "PCKT{{V{}{}:{:?}@{}}}", 1, reply_to, self.packet_kind, self.generation)
     }
 }
 
@@ -47,11 +48,12 @@ impl PacketHeader {
     const OFFSET_START_CHECKSUM: usize = 1;
     const OFFSET_AFTER_CHECKSUM: usize = Self::OFFSET_START_CHECKSUM + size_of::<u64>();
 
-    pub fn new(reply_to_address: Option<SocketAddr>, packet_kind: PacketKind) -> PacketHeader {
+    pub fn new(reply_to_address: Option<SocketAddr>, packet_kind: PacketKind, generation: u64) -> PacketHeader {
         PacketHeader {
             protocol_version: Self::PROTOCOL_VERSION_1,
             reply_to_address,
             packet_kind,
+            generation,
         }
     }
 
@@ -64,6 +66,7 @@ impl PacketHeader {
 
         size_of::<u8>()          // protocol version
             + size_of::<u8>()    // flags
+            + 6                  // generation as u48
             + reply_to_len
             + size_of::<u16>()   // stream id
             + size_of::<u16>()   // first message offset
@@ -93,6 +96,10 @@ impl PacketHeader {
             PacketKind::ControlNak { .. } => Flags::KIND_NAK,
         };
         buf.put_u8((flags_ip | flags_kind).bits());
+
+        // write generation as u48
+        buf.put_u16((self.generation >> 32) as u16);
+        buf.put_u32(self.generation as u32);
 
         match self.reply_to_address {
             Some(SocketAddr::V4(addr)) => {
@@ -131,6 +138,8 @@ impl PacketHeader {
         }
 
         let flags = Flags::from_bits_truncate(buf.try_get_u8()?);
+        // read generation as u48
+        let generation = ((buf.try_get_u16()? as u64) << 32) + buf.try_get_u32()? as u64;
 
         let reply_to_address: Option<SocketAddr> = match flags & Flags::MASK_IP {
             Flags::IPV4 => Some(SocketAddrV4::new(buf.try_get_u32()?.into(), buf.try_get_u16()?).into()),
@@ -163,6 +172,7 @@ impl PacketHeader {
         };
 
         Ok(PacketHeader {
+            generation,
             protocol_version,
             reply_to_address,
             packet_kind,
@@ -211,28 +221,30 @@ mod tests {
     use std::str::FromStr;
 
     #[rstest]
-    #[case::no_addr(PacketHeader::new(None, ControlInit{ stream_id: 1 }), "PCKT{V1:INIT(1)}")]
-    #[case::v4_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), OutOfSequence), "PCKT{V1[1.2.3.4:888]:OOS}")]
-    #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlNak { stream_id: 9}), "PCKT{V1[[1111:2222::3333:4444]:888]:NAK(9)}")]
+    #[case::no_addr(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 3), "PCKT{V1:INIT(1)@3}")]
+    #[case::v4_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), OutOfSequence, 4), "PCKT{V1[1.2.3.4:888]:OOS@4}")]
+    #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlNak { stream_id: 9}, 5), "PCKT{V1[[1111:2222::3333:4444]:888]:NAK(9)@5}")]
     fn test_packet_header_debug(#[case] header: PacketHeader, #[case] expected: &str) {
         assert_eq!(format!("{:?}", header), expected);
     }
 
     #[rstest]
-    #[case::no_addr(PacketHeader::new(None, ControlInit{ stream_id: 1 }))]
-    #[case::v4_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), OutOfSequence))]
-    #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlNak { stream_id: 9}))]
-    #[case::seq_start(PacketHeader::new(None, RegularSequenced { stream_id: 0, first_message_offset: Some(999), packet_sequence_number: PacketId::from_raw(8)}))]
-    #[case::seq_continued(PacketHeader::new(None, RegularSequenced { stream_id: 4, first_message_offset: None, packet_sequence_number: PacketId::from_raw(6)}))]
-    #[case::oos(PacketHeader::new(None, OutOfSequence))]
-    #[case::init_0(PacketHeader::new(None, ControlInit { stream_id: 0 }))]
-    #[case::init_1(PacketHeader::new(None, ControlInit { stream_id: 1 }))]
-    #[case::recv_sync_0(PacketHeader::new(None, ControlRecvSync { stream_id: 0 }))]
-    #[case::recv_sync_3(PacketHeader::new(None, ControlRecvSync { stream_id: 3 }))]
-    #[case::send_sync_0(PacketHeader::new(None, ControlSendSync { stream_id: 0 }))]
-    #[case::send_sync_3(PacketHeader::new(None, ControlSendSync { stream_id: 2 }))]
-    #[case::nak_0(PacketHeader::new(None, ControlNak { stream_id: 0 }))]
-    #[case::nak_5(PacketHeader::new(None, ControlNak { stream_id: 5 }))]
+    #[case::no_addr(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 3))]
+    #[case::v4_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), OutOfSequence, 4))]
+    #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlNak { stream_id: 9}, 5))]
+    #[case::seq_start(PacketHeader::new(None, RegularSequenced { stream_id: 0, first_message_offset: Some(999), packet_sequence_number: PacketId::from_raw(8)}, 6))]
+    #[case::seq_continued(PacketHeader::new(None, RegularSequenced { stream_id: 4, first_message_offset: None, packet_sequence_number: PacketId::from_raw(6)}, 7))]
+    #[case::oos(PacketHeader::new(None, OutOfSequence, 8))]
+    #[case::init_0(PacketHeader::new(None, ControlInit { stream_id: 0 }, 9))]
+    #[case::init_1(PacketHeader::new(None, ControlInit { stream_id: 1 }, 10))]
+    #[case::recv_sync_0(PacketHeader::new(None, ControlRecvSync { stream_id: 0 }, 11))]
+    #[case::recv_sync_3(PacketHeader::new(None, ControlRecvSync { stream_id: 3 }, 12))]
+    #[case::send_sync_0(PacketHeader::new(None, ControlSendSync { stream_id: 0 }, 13))]
+    #[case::send_sync_3(PacketHeader::new(None, ControlSendSync { stream_id: 2 }, 14))]
+    #[case::nak_0(PacketHeader::new(None, ControlNak { stream_id: 0 }, 15))]
+    #[case::nak_5(PacketHeader::new(None, ControlNak { stream_id: 5 }, 16))]
+    #[case::big_generation(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 0xffff_ffff))]
+    #[case::huge_generation(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 0xffff_ffff_ffff))]
     fn test_packet_header_ser(#[case] header: PacketHeader) {
         let mut buf = BytesMut::new();
         header.ser(&mut buf);
@@ -243,15 +255,15 @@ mod tests {
     }
 
     #[rstest]
-    #[case::no_addr_none(PacketHeader::new(None, RegularSequenced{ stream_id: 1, first_message_offset: None, packet_sequence_number: PacketId::from_raw(1) }))]
-    #[case::no_addr_0(PacketHeader::new(None, RegularSequenced{ stream_id: 1, first_message_offset: Some(0), packet_sequence_number: PacketId::from_raw(u64::MAX) }))]
-    #[case::no_addr_8000(PacketHeader::new(None, RegularSequenced{ stream_id: 1, first_message_offset: Some(8000), packet_sequence_number: PacketId::from_raw(u64::MAX) }))]
-    #[case::v4_addr_none(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: None, packet_sequence_number: PacketId::from_raw(1) }))]
-    #[case::v4_addr_0(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(0), packet_sequence_number: PacketId::from_raw(u64::MAX) }))]
-    #[case::v4_addr_8000(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(8000), packet_sequence_number: PacketId::from_raw(u64::MAX) }))]
-    #[case::v6_addr_none(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: None, packet_sequence_number: PacketId::from_raw(1) }))]
-    #[case::v6_addr_0(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(0), packet_sequence_number: PacketId::from_raw(u64::MAX) }))]
-    #[case::v6_addr_8000(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(8000), packet_sequence_number: PacketId::from_raw(u64::MAX) }))]
+    #[case::no_addr_none(PacketHeader::new(None, RegularSequenced{ stream_id: 1, first_message_offset: None, packet_sequence_number: PacketId::from_raw(1) }, 0))]
+    #[case::no_addr_0(PacketHeader::new(None, RegularSequenced{ stream_id: 1, first_message_offset: Some(0), packet_sequence_number: PacketId::from_raw(u64::MAX) }, 0xffff_ffff_ffff))]
+    #[case::no_addr_8000(PacketHeader::new(None, RegularSequenced{ stream_id: 1, first_message_offset: Some(8000), packet_sequence_number: PacketId::from_raw(u64::MAX) }, 3))]
+    #[case::v4_addr_none(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: None, packet_sequence_number: PacketId::from_raw(1) }, 3))]
+    #[case::v4_addr_0(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(0), packet_sequence_number: PacketId::from_raw(u64::MAX) }, 3))]
+    #[case::v4_addr_8000(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(8000), packet_sequence_number: PacketId::from_raw(u64::MAX) }, 3))]
+    #[case::v6_addr_none(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: None, packet_sequence_number: PacketId::from_raw(1) }, 3))]
+    #[case::v6_addr_0(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(0), packet_sequence_number: PacketId::from_raw(u64::MAX) }, 3))]
+    #[case::v6_addr_8000(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(8000), packet_sequence_number: PacketId::from_raw(u64::MAX) }, 3))]
     fn test_packet_header_serialized_len_for_stream_header(#[case] header: PacketHeader) {
         let mut buf = BytesMut::new();
         header.ser(&mut buf);

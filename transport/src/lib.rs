@@ -50,7 +50,6 @@
 //!
 //! ## Header
 //!
-//! TODO packet id as u64 to make it guaranteed unique per stream
 //! TODO sender 'unique part' to  detect and handle server restart
 //!
 //! Packet header (inside a UDP packet) - all numbers in network byte order (BE):
@@ -69,7 +68,10 @@
 //!       * 100 RECV_SYNC
 //!       * 101 SEND_SYNC
 //!     * 5-7: unused, should be 0
-//! 2:  reply-to address (4+2 bytes if IP V4, 16+2 bytes if IP V6, 0 bytes if 'identical to UDP sender')
+//! 2:  generation (u48) - millis since epoch at starting time of the process. The idea is that
+//!      after a restart, the `generation` will be different and larger, allowing peers to detect
+//!      the restart and re-sync window positions without the need for a concept of 'connection'
+//! 8:  reply-to address (4+2 bytes if IP V4, 16+2 bytes if IP V6, 0 bytes if 'identical to UDP sender')
 //! *:  stream id (u16): the id of the multiplexed stream that this frame belongs
 //!      or refers to. Not present for frame kind '001'.
 //!      NB: Each stream has its own send and receive buffers, incurring per-stream overhead
