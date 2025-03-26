@@ -90,7 +90,6 @@ impl SendStreamInner {
             self.work_in_progress_late_send_handle = None;
         }
 
-        //TODO check for off-by-one
         if let Some(out_of_window) = self.work_in_progress_packet_id - self.config.send_window_size {
             if let Some(dropped_buf) = self.send_buffer.remove(&out_of_window) {
                 //TODO return buf to pool

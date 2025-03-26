@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, span, Instrument, Level};
+use transport::config::RudpConfig;
 
 fn init_logging() {
     tracing_subscriber::fmt()
@@ -47,6 +48,10 @@ async fn main() -> anyhow::Result<()> {
     let a = Arc::new(EndPoint::new(
         addr_a,
         msg_dispatcher.clone(),
+        RudpConfig {
+            payload_size_inside_udp: 1472,
+            buffer_pool_size: 10,
+        },
         receive_config.clone(),
         FxHashMap::default(),
         send_config.clone(),
@@ -57,6 +62,10 @@ async fn main() -> anyhow::Result<()> {
     let b = Arc::new(EndPoint::new(
         addr_b,
         msg_dispatcher.clone(),
+        RudpConfig {
+            payload_size_inside_udp: 1472,
+            buffer_pool_size: 10,
+        },
         receive_config.clone(),
         FxHashMap::default(),
         send_config,

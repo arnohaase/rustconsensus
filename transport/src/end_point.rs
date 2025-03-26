@@ -5,9 +5,10 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use rustc_hash::FxHashMap;
 use tokio::net::{ToSocketAddrs, UdpSocket};
-use tokio::sync::Mutex;
 use tracing::{debug, error, info, trace, warn};
-use crate::AtomicMap::AtomicMap;
+use crate::atomic_map::AtomicMap;
+use crate::buffer_pool::BufferPool;
+use crate::config::RudpConfig;
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::packet_header::{PacketHeader, PacketKind};
@@ -34,16 +35,21 @@ pub struct EndPoint {
     specific_receive_configs: FxHashMap<u16, Arc<ReceiveStreamConfig>>,
     default_send_config: Arc<SendStreamConfig>,
     specific_send_configs: FxHashMap<u16, Arc<SendStreamConfig>>,
+    config: Arc<RudpConfig>,
+    buffer_pool: Arc<BufferPool>,
 }
 impl EndPoint {
     pub async fn new(
         addrs: impl ToSocketAddrs,
         message_dispatcher: Arc<dyn MessageDispatcher>,
+        config: RudpConfig,
         default_receive_config: Arc<ReceiveStreamConfig>,
         specific_receive_configs: FxHashMap<u16, Arc<ReceiveStreamConfig>>,
         default_send_config: Arc<SendStreamConfig>,
         specific_send_configs: FxHashMap<u16, Arc<SendStreamConfig>>,
     ) -> anyhow::Result<EndPoint> {
+        config.validate()?;
+
         //TODO "don't fragment" flag
         let receive_socket = Arc::new(UdpSocket::bind(addrs).await?);
         info!("bound receive socket to {:?}", receive_socket.local_addr()?);
@@ -54,6 +60,7 @@ impl EndPoint {
             (receive_socket.clone(), Arc::new(UdpSocket::bind("[::]:0").await?))
         };
 
+        let buffer_pool = Arc::new(BufferPool::new(config.payload_size_inside_udp, config.buffer_pool_size));
         Ok(EndPoint {
             generation: Self::generation_from_timestamp()?,
             receive_socket,
@@ -65,6 +72,8 @@ impl EndPoint {
             specific_receive_configs,
             default_send_config,
             specific_send_configs,
+            config: Arc::new(config),
+            buffer_pool,
         })
     }
 
@@ -92,7 +101,7 @@ impl EndPoint {
         let mut generations_per_peer: FxHashMap<SocketAddr, u64> = FxHashMap::default();
         let mut receive_streams: FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>> = FxHashMap::default();
 
-        let mut buf = [0u8; 1500]; //TODO configurable size
+        let mut buf = self.buffer_pool.get_from_pool();
         loop {
             let (num_read, from) = match self.receive_socket.recv_from(&mut buf).await {
                 Ok(x) => {
@@ -159,13 +168,12 @@ impl EndPoint {
                     Ordering::Less => {
                         info!("peer {:?} restarted (@{}), re-initializing local per-peer state", peer_addr, peer_generation);
                         e.insert(peer_generation);
-                        // self.send_streams
-                        //     .lock().await
-                        //     .retain(|(s, _)| s != &peer_addr);
+                        self.send_streams
+                            .update(|map| {
+                                map.retain(|(s, _), _| s != &peer_addr);
+                            });
                         receive_streams
                             .retain(|(s, _), _| s != &peer_addr);
-
-                        todo!();
                         true
                     }
                     Ordering::Greater => {
@@ -234,19 +242,19 @@ impl EndPoint {
         };
 
         debug!("initializing send stream {} for {:?}", stream_id, addr);
+        let stream = Arc::new(SendStream::new(
+            self.get_send_config(stream_id),
+            self.generation,
+            stream_id,
+            self.get_send_socket(addr),
+            addr,
+            self.get_reply_to_addr(addr),
+        ));
+
         self.send_streams.update(|map| {
-            map.insert((addr, stream_id), Arc::new(SendStream::new(
-                self.get_send_config(stream_id),
-                self.generation,
-                stream_id,
-                self.get_send_socket(addr),
-                addr,
-                self.get_reply_to_addr(addr),
-            )));
+            map.insert((addr, stream_id), stream.clone());
         });
-        self.send_streams.load().get(&(addr, stream_id))
-            .cloned()
-            .expect("send stream should be in the map after we inserted it")
+        stream
     }
 
     async fn handle_init_message(send_stream: Arc<SendStream>) {
