@@ -1,8 +1,11 @@
+use crate::buffer_pool::BufferPool;
+use crate::config::ReceiveStreamConfig;
 use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::message_header::MessageHeader;
 use crate::packet_header::{PacketHeader, PacketKind};
 use crate::packet_id::PacketId;
+use crate::safe_converter::{PrecheckedCast, SafeCast};
 use crate::send_pipeline::SendPipeline;
 use bytes::BufMut;
 use bytes_varint::VarIntSupportMut;
@@ -10,24 +13,12 @@ use std::cmp::{max, min, Ordering};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::select;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{debug, trace, warn};
-use crate::buffer_pool::BufferPool;
-use crate::safe_converter::{PrecheckedCast, SafeCast};
 
-pub struct ReceiveStreamConfig {
-    pub nak_interval: Duration, // configure to roughly 2x RTT
-    pub sync_interval: Duration, // configure on the order of seconds
-
-    pub receive_window_size: u32,
-    pub max_num_naks_per_packet: usize, //TODO limit so it fits into a single packet
-
-    pub max_message_size: u32,
-}
 
 struct ReceiveStreamInner {
     config: Arc<ReceiveStreamConfig>,
@@ -667,12 +658,13 @@ enum ConsumeResult {
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
-    use mockall::Sequence;
     use super::*;
     use crate::message_dispatcher::MockMessageDispatcher;
     use crate::send_pipeline::MockSendSocket;
+    use async_trait::async_trait;
+    use mockall::Sequence;
     use rstest::rstest;
+    use std::time::Duration;
     use tokio::runtime::Builder;
     use tokio::sync::Mutex;
 

@@ -1,3 +1,4 @@
+use std::time::Duration;
 use anyhow::bail;
 
 pub struct RudpConfig {
@@ -37,4 +38,22 @@ impl RudpConfig {
 
         Ok(())
     }
+}
+
+pub struct ReceiveStreamConfig {
+    pub nak_interval: Duration, // configure to roughly 2x RTT
+    pub sync_interval: Duration, // configure on the order of seconds
+
+    pub receive_window_size: u32,
+    pub max_num_naks_per_packet: usize, //TODO limit so it fits into a single packet
+
+    //TODO send this as part of the INIT message to verify agreement (+ max payload size)
+    pub max_message_size: u32,
+}
+
+pub struct SendStreamConfig {
+    pub max_payload_len: usize, //TODO calculated from MTU, encryption wrapper, ...
+    pub late_send_delay: Option<Duration>,
+    pub send_window_size: u32, //TODO ensure that this is <= u32::MAX / 4 (or maybe a far smaller upper bound???)
+    // pub max_message_len: usize,
 }

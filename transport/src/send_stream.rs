@@ -6,20 +6,15 @@ use std::cmp::min;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time;
 use tracing::{debug, trace};
 use crate::buffer_pool::BufferPool;
+use crate::config::SendStreamConfig;
 use crate::message_header::MessageHeader;
 use crate::packet_id::PacketId;
-use crate::safe_converter::PrecheckedCast;
+use crate::safe_converter::{PrecheckedCast, SafeCast};
 
-pub struct SendStreamConfig {
-    pub max_packet_len: usize, //TODO calculated from MTU, encryption wrapper, ...
-    pub late_send_delay: Option<Duration>,
-    pub send_window_size: u64, //TODO ensure that this is <= u32::MAX / 4 (or maybe a far smaller upper bound???)
-}
 
 struct SendStreamInner {
     config: Arc<SendStreamConfig>,
@@ -95,7 +90,7 @@ impl SendStreamInner {
             self.work_in_progress_late_send_handle = None;
         }
 
-        if let Some(out_of_window) = self.work_in_progress_packet_id - self.config.send_window_size {
+        if let Some(out_of_window) = self.work_in_progress_packet_id - self.config.send_window_size.safe_cast() {
             if let Some(dropped_buf) = self.send_buffer.remove(&out_of_window) {
                 debug!("unacknowledged packet moved out of the send window for stream {} with {:?}", self.stream_id, self.peer_addr);
                 self.buffer_pool.return_to_pool(dropped_buf);
@@ -212,7 +207,7 @@ impl SendStream {
 
         let mut wip_buffer = if let Some(wip) = &mut inner.work_in_progress {
             // if the message header does not fit in wip, send and re-init wip
-            if wip.len() + MessageHeader::SERIALIZED_LEN <= self.config.max_packet_len {
+            if wip.len() + MessageHeader::SERIALIZED_LEN <= self.config.max_payload_len {
                 wip
             }
             else {
@@ -232,9 +227,9 @@ impl SendStream {
         // while there is some part of the message left: copy it into WIP, sending and
         //  re-initializing as necessary
         loop {
-            debug_assert!(wip_buffer.len() <= self.config.max_packet_len);
+            debug_assert!(wip_buffer.len() <= self.config.max_payload_len);
 
-            let remaining_capacity = self.config.max_packet_len - wip_buffer.len();
+            let remaining_capacity = self.config.max_payload_len - wip_buffer.len();
             let slice_len = min(remaining_capacity, message.len());
             wip_buffer.put_slice(&message[..slice_len]);
             message = &message[slice_len..];
@@ -247,7 +242,7 @@ impl SendStream {
 
             inner.do_send_work_in_progress().await;
 
-            let first_message_offset = if message.len() + inner.packet_header_len() > self.config.max_packet_len {
+            let first_message_offset = if message.len() + inner.packet_header_len() > self.config.max_payload_len {
                 None
             }
             else {
@@ -256,7 +251,7 @@ impl SendStream {
             wip_buffer = inner.init_wip(first_message_offset);
         }
 
-        if wip_buffer.len() + MessageHeader::SERIALIZED_LEN > self.config.max_packet_len {
+        if wip_buffer.len() + MessageHeader::SERIALIZED_LEN > self.config.max_payload_len {
             // there is no room for another message header in the buffer, so we send it
             inner.do_send_work_in_progress().await
         }
@@ -292,6 +287,7 @@ impl SendStream {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
     use mockall::predicate::eq;
     use super::*;
     use rstest::*;
@@ -318,7 +314,7 @@ mod tests {
 
         let send_stream = SendStream::new(
             Arc::new(SendStreamConfig {
-                max_packet_len: 30,
+                max_payload_len: 30,
                 late_send_delay: None,
                 send_window_size: 4,
             }),
@@ -396,7 +392,7 @@ mod tests {
 
         let send_stream = SendStream::new(
             Arc::new(SendStreamConfig {
-                max_packet_len: 30,
+                max_payload_len: 30,
                 late_send_delay: None,
                 send_window_size: 32,
             }),
@@ -453,7 +449,7 @@ mod tests {
 
         let send_stream = SendStream::new(
             Arc::new(SendStreamConfig {
-                max_packet_len: 30,
+                max_payload_len: 30,
                 late_send_delay: None,
                 send_window_size: 4,
             }),
@@ -574,7 +570,7 @@ mod tests {
 
         let send_stream = SendStream::new(
             Arc::new(SendStreamConfig {
-                max_packet_len,
+                max_payload_len: max_packet_len,
                 late_send_delay,
                 send_window_size: 4,
             }),
@@ -620,7 +616,7 @@ mod tests {
     fn test_low_water_mark(#[case] send_buffer: Vec<u64>, #[case] wip_packet_id: u64, #[case] expected_low_water_mark: u64) {
         let mut inner = SendStreamInner {
             config: Arc::new(SendStreamConfig {
-                max_packet_len: 0,
+                max_payload_len: 0,
                 late_send_delay: None,
                 send_window_size: 4,
             }),
@@ -651,7 +647,7 @@ mod tests {
         rt.block_on(async {
             let send_stream = SendStream::new(
                 Arc::new(SendStreamConfig {
-                    max_packet_len: 0,
+                    max_payload_len: 0,
                     late_send_delay: None,
                     send_window_size: 0,
                 }),
@@ -692,7 +688,7 @@ mod tests {
 
             let mut inner = SendStreamInner {
                 config: Arc::new(SendStreamConfig {
-                    max_packet_len: 0,
+                    max_payload_len: 0,
                     late_send_delay: None,
                     send_window_size: 4,
                 }),

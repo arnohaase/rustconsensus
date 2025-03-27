@@ -1,7 +1,5 @@
 use transport::end_point::EndPoint;
 use transport::message_dispatcher::MessageDispatcher;
-use transport::receive_stream::ReceiveStreamConfig;
-use transport::send_stream::SendStreamConfig;
 use rustc_hash::FxHashMap;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -9,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, span, Instrument, Level};
-use transport::config::RudpConfig;
+use transport::config::{ReceiveStreamConfig, RudpConfig, SendStreamConfig};
 
 fn init_logging() {
     tracing_subscriber::fmt()
@@ -36,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let send_config = Arc::new(SendStreamConfig {
-        max_packet_len: 1400,
+        max_payload_len: 1400,
         late_send_delay: Some(Duration::from_micros(10)),
         send_window_size: 1024,
     });

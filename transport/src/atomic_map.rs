@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn test_create_drop() {
-        let map = AtomicMap::<u32, u32>::new();
+        let _ = AtomicMap::<u32, u32>::new();
     }
 
     #[test]
@@ -78,20 +78,20 @@ mod tests {
     }
 
     // #[test]
-    fn test_update_no_leak() {
-        let map = AtomicMap::<u64, u64>::new();
-
-        for i in 0..100_000_000 {
-            map.update(|m| {
-                m.insert(1, i);
-            });
-        }
-    }
+    // fn test_update_no_leak() {
+    //     let map = AtomicMap::<u64, u64>::new();
+    //
+    //     for i in 0..100_000_000 {
+    //         map.update(|m| {
+    //             m.insert(1, i);
+    //         });
+    //     }
+    // }
 
     // #[test]
-    fn test_drop_no_leak() {
-        for i in 0..100_000_000 {
-            AtomicMap::<u64, u64>::new();
-        }
-    }
+    // fn test_drop_no_leak() {
+    //     for _ in 0..100_000_000 {
+    //         AtomicMap::<u64, u64>::new();
+    //     }
+    // }
 }
