@@ -4,7 +4,7 @@ use crate::message_header::MessageHeader;
 use crate::packet_header::{PacketHeader, PacketKind};
 use crate::packet_id::PacketId;
 use crate::send_pipeline::SendPipeline;
-use bytes::{BufMut, BytesMut};
+use bytes::BufMut;
 use bytes_varint::VarIntSupportMut;
 use std::cmp::{max, min, Ordering};
 use std::collections::BTreeMap;
@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{debug, trace, warn};
+use crate::buffer_pool::BufferPool;
 use crate::safe_converter::{PrecheckedCast, SafeCast};
 
 pub struct ReceiveStreamConfig {
@@ -30,6 +31,7 @@ pub struct ReceiveStreamConfig {
 
 struct ReceiveStreamInner {
     config: Arc<ReceiveStreamConfig>,
+    buffer_pool: Arc<BufferPool>,
 
     generation: u64,
     stream_id: u16,
@@ -79,6 +81,7 @@ struct ReceiveStreamInner {
 impl ReceiveStreamInner {
     fn new(
         config: Arc<ReceiveStreamConfig>,
+        buffer_pool: Arc<BufferPool>,
         generation: u64,
         stream_id: u16,
         peer_addr: SocketAddr,
@@ -98,6 +101,7 @@ impl ReceiveStreamInner {
 
         ReceiveStreamInner {
             config,
+            buffer_pool,
             generation,
             stream_id,
             send_pipeline,
@@ -115,16 +119,17 @@ impl ReceiveStreamInner {
         debug!("sending INIT");
         let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlInit { stream_id: self.stream_id }, self.generation);
 
-        let mut send_buf = BytesMut::with_capacity(1400); //TODO from pool?
+        let mut send_buf = self.buffer_pool.get_from_pool();
         header.ser(&mut send_buf);
 
-        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await
+        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
+        self.buffer_pool.return_to_pool(send_buf);
     }
 
     async fn do_send_recv_sync(&self) {
         let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlRecvSync { stream_id: self.stream_id }, self.generation);
 
-        let mut send_buf = BytesMut::with_capacity(1400); //TODO from pool?
+        let mut send_buf = self.buffer_pool.get_from_pool();
         header.ser(&mut send_buf);
 
         let msg = ControlMessageRecvSync {
@@ -135,7 +140,8 @@ impl ReceiveStreamInner {
         trace!("sending RECV_SYNC: {:?}", msg);
         msg.ser(&mut send_buf);
 
-        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await
+        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
+        self.buffer_pool.return_to_pool(send_buf);
     }
 
     /// Send a NAK for the earliest N missing packets - the assumption is that if more packets are
@@ -163,7 +169,7 @@ impl ReceiveStreamInner {
 
         let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlNak { stream_id: self.stream_id }, self.generation);
 
-        let mut send_buf = BytesMut::with_capacity(1400); //TODO from pool?
+        let mut send_buf = self.buffer_pool.get_from_pool();
         header.ser(&mut send_buf);
 
         send_buf.put_usize_varint(nak_packets.len());
@@ -172,6 +178,7 @@ impl ReceiveStreamInner {
         }
 
         self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
+        self.buffer_pool.return_to_pool(send_buf);
     }
 
     /// This is the id *after* the highest packet that was received or is missing
@@ -504,6 +511,7 @@ impl Drop for ReceiveStream {
 impl ReceiveStream {
     pub fn new(
         config: Arc<ReceiveStreamConfig>,
+        buffer_pool: Arc<BufferPool>,
         generation: u64,
         stream_id: u16,
         peer_addr: SocketAddr,
@@ -513,6 +521,7 @@ impl ReceiveStream {
     ) -> ReceiveStream {
         let inner: Arc<RwLock<ReceiveStreamInner>> = Arc::new(RwLock::new(ReceiveStreamInner::new(
             config.clone(),
+            buffer_pool,
             generation,
             stream_id,
             peer_addr,
@@ -698,6 +707,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
+                Arc::new(BufferPool::new(1000, 1)),
                 3,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -742,6 +752,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
+                Arc::new(BufferPool::new(1000, 1)),
                 4,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -821,6 +832,7 @@ mod tests {
                     max_num_naks_per_packet: 2,
                     max_message_size: 10,
                 }),
+                Arc::new(BufferPool::new(1000, 1)),
                 11,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -961,6 +973,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
+                Arc::new(BufferPool::new(1000, 1)),
                 3,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1042,6 +1055,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
+                Arc::new(BufferPool::new(1000, 1)),
                 3,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1105,6 +1119,7 @@ mod tests {
                 max_num_naks_per_packet: 2,
                 max_message_size: 10,
             }),
+            Arc::new(BufferPool::new(1000, 1)),
             3,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1143,6 +1158,7 @@ mod tests {
                 max_num_naks_per_packet: 2,
                 max_message_size: 10,
             }),
+            Arc::new(BufferPool::new(1000, 1)),
             3,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1257,6 +1273,7 @@ mod tests {
                 max_num_naks_per_packet: 2,
                 max_message_size: 10,
             }),
+            Arc::new(BufferPool::new(1000, 1)),
             3,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),

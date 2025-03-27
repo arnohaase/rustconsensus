@@ -215,6 +215,7 @@ impl EndPoint {
                 debug!("initializing receive stream {} for {:?}", stream_id, addr);
                 let mut recv_strm = ReceiveStream::new(
                     self.get_receive_config(stream_id),
+                    self.buffer_pool.clone(),
                     peer_generation,
                     stream_id,
                     addr,
