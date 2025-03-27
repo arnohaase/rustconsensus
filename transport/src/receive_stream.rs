@@ -1,5 +1,5 @@
 use crate::buffer_pool::BufferPool;
-use crate::config::ReceiveStreamConfig;
+use crate::config::EffectiveReceiveStreamConfig;
 use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::message_header::MessageHeader;
@@ -21,7 +21,7 @@ use tracing::{debug, trace, warn};
 
 
 struct ReceiveStreamInner {
-    config: Arc<ReceiveStreamConfig>,
+    config: Arc<EffectiveReceiveStreamConfig>,
     buffer_pool: Arc<BufferPool>,
 
     generation: u64,
@@ -71,7 +71,7 @@ struct ReceiveStreamInner {
 }
 impl ReceiveStreamInner {
     fn new(
-        config: Arc<ReceiveStreamConfig>,
+        config: Arc<EffectiveReceiveStreamConfig>,
         buffer_pool: Arc<BufferPool>,
         generation: u64,
         stream_id: u16,
@@ -485,7 +485,7 @@ impl ReceiveStreamInner {
 }
 
 pub struct ReceiveStream {
-    config: Arc<ReceiveStreamConfig>,
+    config: Arc<EffectiveReceiveStreamConfig>,
     inner: Arc<RwLock<ReceiveStreamInner>>,
     active_handle: Option<JoinHandle<()>>,
     message_dispatcher: Arc<dyn MessageDispatcher>,
@@ -501,7 +501,7 @@ impl Drop for ReceiveStream {
 
 impl ReceiveStream {
     pub fn new(
-        config: Arc<ReceiveStreamConfig>,
+        config: Arc<EffectiveReceiveStreamConfig>,
         buffer_pool: Arc<BufferPool>,
         generation: u64,
         stream_id: u16,
@@ -624,7 +624,7 @@ impl ReceiveStream {
     }
 
     /// Active loop - this function never returns, it runs until it is taken out of dispatch
-    async fn do_loop(config: Arc<ReceiveStreamConfig>, inner: Arc<RwLock<ReceiveStreamInner>>) {
+    async fn do_loop(config: Arc<EffectiveReceiveStreamConfig>, inner: Arc<RwLock<ReceiveStreamInner>>) {
         //TODO test this
 
         let mut nak_interval = interval(config.nak_interval);
@@ -692,7 +692,7 @@ mod tests {
             let message_dispatcher = MockMessageDispatcher::new();
 
             let receive_stream = ReceiveStream::new(
-                Arc::new(ReceiveStreamConfig {
+                Arc::new(EffectiveReceiveStreamConfig {
                     nak_interval: Duration::from_millis(100),
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 32,
@@ -737,7 +737,7 @@ mod tests {
             let message_dispatcher = MockMessageDispatcher::new();
 
             let receive_stream = ReceiveStream::new(
-                Arc::new(ReceiveStreamConfig {
+                Arc::new(EffectiveReceiveStreamConfig {
                     nak_interval: Duration::from_millis(100),
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 32,
@@ -817,7 +817,7 @@ mod tests {
             let message_dispatcher = MockMessageDispatcher::new();
 
             let receive_stream = ReceiveStream::new(
-                Arc::new(ReceiveStreamConfig {
+                Arc::new(EffectiveReceiveStreamConfig {
                     nak_interval: Duration::from_millis(100),
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 32,
@@ -958,7 +958,7 @@ mod tests {
             let message_dispatcher = Arc::new(CollectingMessageDispatcher::new());
 
             let receive_stream = ReceiveStream::new(
-                Arc::new(ReceiveStreamConfig {
+                Arc::new(EffectiveReceiveStreamConfig {
                     nak_interval: Duration::from_millis(100),
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 4,
@@ -1040,7 +1040,7 @@ mod tests {
             let send_pipeline = SendPipeline::new(Arc::new(send_socket));
 
             let receive_stream = ReceiveStream::new(
-                Arc::new(ReceiveStreamConfig {
+                Arc::new(EffectiveReceiveStreamConfig {
                     nak_interval: Duration::from_millis(100),
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 4,
@@ -1104,7 +1104,7 @@ mod tests {
         let send_pipeline = SendPipeline::new(Arc::new(send_socket));
 
         let mut inner = ReceiveStreamInner::new(
-            Arc::new(ReceiveStreamConfig {
+            Arc::new(EffectiveReceiveStreamConfig {
                 nak_interval: Duration::from_millis(100),
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 32,
@@ -1143,7 +1143,7 @@ mod tests {
         let send_pipeline = SendPipeline::new(Arc::new(send_socket));
 
         let mut inner = ReceiveStreamInner::new(
-            Arc::new(ReceiveStreamConfig {
+            Arc::new(EffectiveReceiveStreamConfig {
                 nak_interval: Duration::from_millis(100),
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 32,
@@ -1258,7 +1258,7 @@ mod tests {
         let send_pipeline = SendPipeline::new(Arc::new(send_socket));
 
         let mut inner = ReceiveStreamInner::new(
-            Arc::new(ReceiveStreamConfig {
+            Arc::new(EffectiveReceiveStreamConfig {
                 nak_interval: Duration::from_millis(100),
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 4,

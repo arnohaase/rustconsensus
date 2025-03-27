@@ -34,6 +34,9 @@ pub struct RudpConfig {
 
     pub default_send_stream_config: SendStreamConfig,
     pub specific_send_stream_configs: FxHashMap<u16, SendStreamConfig>,
+
+    pub default_receive_stream_config: ReceiveStreamConfig,
+    pub specific_receive_stream_configs: FxHashMap<u16, ReceiveStreamConfig>,
 }
 
 impl RudpConfig {
@@ -49,6 +52,13 @@ impl RudpConfig {
                 send_window_size: 1024,
             },
             specific_send_stream_configs: FxHashMap::default(),
+            default_receive_stream_config: ReceiveStreamConfig {
+                nak_interval: Duration::from_millis(4),
+                sync_interval: Duration::from_millis(500),
+                receive_window_size: 16*1024,
+                max_num_naks_per_packet: 150,
+            },
+            specific_receive_stream_configs: FxHashMap::default(),
         }
     }
 
@@ -60,19 +70,41 @@ impl RudpConfig {
         Ok(())
     }
 
+    fn effective_payload_length(&self) -> usize {
+        self.payload_size_inside_udp //TODO reduce this by encryption overhead
+    }
+
     pub fn get_effective_send_stream_config(&self, stream_id: u16) -> EffectiveSendStreamConfig {
         let raw = self.specific_send_stream_configs.get(&stream_id)
             .unwrap_or(&self.default_send_stream_config);
 
         EffectiveSendStreamConfig {
-            max_payload_len: self.payload_size_inside_udp, //TODO reduce this by encryption overhead
+            max_payload_len: self.effective_payload_length(),
             late_send_delay: raw.send_delay,
             send_window_size: raw.send_window_size,
+        }
+    }
+
+    pub fn get_effective_receive_stream_config(&self, stream_id: u16) -> EffectiveReceiveStreamConfig {
+        let raw = self.specific_receive_stream_configs.get(&stream_id)
+            .unwrap_or(&self.default_receive_stream_config);
+
+        EffectiveReceiveStreamConfig {
+            nak_interval: raw.nak_interval,
+            sync_interval: raw.sync_interval,
+            receive_window_size: raw.receive_window_size,
+            max_num_naks_per_packet: raw.max_num_naks_per_packet, //TODO calculate this based on packet size
+            max_message_size: self.max_message_size,
         }
     }
 }
 
 pub struct SendStreamConfig {
+    /// This is the duration that a partially filled packet is held back in case some other message
+    ///  is sent and can be put into the same packet ('late send').
+    ///
+    /// None means that all packets are sent immediately without 'late send', meaning that messages
+    ///  are never combined and sent in a single packet.
     pub send_delay: Option<Duration>,
 
     /// This is the maximum number of *packets* (not bytes) stored on the sender side pending an
@@ -80,8 +112,27 @@ pub struct SendStreamConfig {
     pub send_window_size: u32,
 }
 
+pub struct EffectiveSendStreamConfig {
+    /// This is the number of bytes available for RUDP payload in a network packet. This is smaller
+    ///  than the UDP payload due to RUDP encryption overhead
+    pub max_payload_len: usize,
+    pub late_send_delay: Option<Duration>,
+    pub send_window_size: u32, //TODO ensure that this is <= u32::MAX / 4 (or maybe a far smaller upper bound???)
+    // pub max_message_len: usize,
+}
+
+//TODO measure RTT
+//TODO traffic shaping - regular ACK, delay when send buffer is full
 
 pub struct ReceiveStreamConfig {
+    pub nak_interval: Duration, // configure to roughly 2x RTT
+    pub sync_interval: Duration, // configure on the order of seconds
+
+    pub receive_window_size: u32,
+    pub max_num_naks_per_packet: usize, //TODO limit so it fits into a single packet
+}
+
+pub struct EffectiveReceiveStreamConfig {
     pub nak_interval: Duration, // configure to roughly 2x RTT
     pub sync_interval: Duration, // configure on the order of seconds
 
@@ -92,9 +143,3 @@ pub struct ReceiveStreamConfig {
     pub max_message_size: u32,
 }
 
-pub struct EffectiveSendStreamConfig {
-    pub max_payload_len: usize, //TODO calculated from MTU, encryption wrapper, ...
-    pub late_send_delay: Option<Duration>,
-    pub send_window_size: u32, //TODO ensure that this is <= u32::MAX / 4 (or maybe a far smaller upper bound???)
-    // pub max_message_len: usize,
-}

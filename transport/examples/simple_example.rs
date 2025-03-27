@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, span, Instrument, Level};
-use transport::config::{ReceiveStreamConfig, RudpConfig, SendStreamConfig};
+use transport::config::{EffectiveReceiveStreamConfig, RudpConfig, SendStreamConfig};
 
 fn init_logging() {
     tracing_subscriber::fmt()
@@ -25,14 +25,6 @@ async fn main() -> anyhow::Result<()> {
 
     let msg_dispatcher = Arc::new(SimpleMessageDispatcher {});
 
-    let receive_config = Arc::new(ReceiveStreamConfig {
-        nak_interval: Duration::from_millis(2),
-        sync_interval: Duration::from_secs(1),
-        receive_window_size: 1024,
-        max_num_naks_per_packet: 128,
-        max_message_size: 1024*1024,
-    });
-
     let addr_a: SocketAddr = SocketAddr::from_str("127.0.0.1:9100")?;
     let addr_b: SocketAddr = SocketAddr::from_str("127.0.0.1:9101")?;
 
@@ -41,8 +33,6 @@ async fn main() -> anyhow::Result<()> {
         addr_a,
         msg_dispatcher.clone(),
         RudpConfig::default_ipv4(),
-        receive_config.clone(),
-        FxHashMap::default(),
     ).instrument(span).await?);
 
     let span = span!(Level::INFO, "node b");
@@ -50,8 +40,6 @@ async fn main() -> anyhow::Result<()> {
         addr_b,
         msg_dispatcher.clone(),
         RudpConfig::default_ipv4(),
-        receive_config.clone(),
-        FxHashMap::default(),
     ).instrument(span).await?);
 
     let cloned_a = a.clone();

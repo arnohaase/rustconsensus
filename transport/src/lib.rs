@@ -84,8 +84,8 @@
 //!      Present only for frame kind '000'.
 //!```
 //!
-//! The packet header has variable size, ranging from 2 bytes for a control message with UDP
-//!  reply-to address to 32 bytes for a sequenced packet with IP V6 reply-to address.
+//! The packet header has variable size, ranging from 8 bytes for a control message with UDP
+//!  reply-to address to 38 bytes for a sequenced packet with IP V6 reply-to address.
 //!
 //! Message header (message may be split across multiple packets)
 //!

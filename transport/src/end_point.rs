@@ -1,6 +1,6 @@
 use crate::atomic_map::AtomicMap;
 use crate::buffer_pool::BufferPool;
-use crate::config::{ReceiveStreamConfig, RudpConfig};
+use crate::config::RudpConfig;
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::packet_header::{PacketHeader, PacketKind};
@@ -29,8 +29,6 @@ pub struct EndPoint {
     send_socket_v6: Arc<SendPipeline>,
     send_streams: AtomicMap<(SocketAddr, u16), Arc<SendStream>>,
     message_dispatcher: Arc<dyn MessageDispatcher>,
-    default_receive_config: Arc<ReceiveStreamConfig>,
-    specific_receive_configs: FxHashMap<u16, Arc<ReceiveStreamConfig>>,
     config: Arc<RudpConfig>,
     buffer_pool: Arc<BufferPool>,
 }
@@ -39,8 +37,6 @@ impl EndPoint {
         addrs: impl ToSocketAddrs,
         message_dispatcher: Arc<dyn MessageDispatcher>,
         config: RudpConfig,
-        default_receive_config: Arc<ReceiveStreamConfig>,
-        specific_receive_configs: FxHashMap<u16, Arc<ReceiveStreamConfig>>,
     ) -> anyhow::Result<EndPoint> {
         config.validate()?;
 
@@ -62,8 +58,6 @@ impl EndPoint {
             send_socket_v6: Arc::new(SendPipeline::new(Arc::new(send_socket_v6))),
             send_streams: Default::default(),
             message_dispatcher,
-            default_receive_config,
-            specific_receive_configs,
             config: Arc::new(config),
             buffer_pool,
         })
@@ -177,12 +171,6 @@ impl EndPoint {
         }
     }
 
-    fn get_receive_config(&self, stream_id: u16) -> Arc<ReceiveStreamConfig> {
-        self.specific_receive_configs.get(&stream_id)
-            .cloned()
-            .unwrap_or(self.default_receive_config.clone())
-    }
-
     fn get_send_socket(&self, peer_addr: SocketAddr) -> Arc<SendPipeline> {
         if peer_addr.is_ipv4() {
             self.send_socket_v4.clone()
@@ -200,7 +188,7 @@ impl EndPoint {
             Entry::Vacant(e) => {
                 debug!("initializing receive stream {} for {:?}", stream_id, addr);
                 let mut recv_strm = ReceiveStream::new(
-                    self.get_receive_config(stream_id),
+                    Arc::new(self.config.get_effective_receive_stream_config(stream_id)),
                     self.buffer_pool.clone(),
                     peer_generation,
                     stream_id,
