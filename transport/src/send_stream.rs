@@ -10,6 +10,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time;
 use tracing::{debug, trace};
+use crate::buffer_pool::BufferPool;
 use crate::message_header::MessageHeader;
 use crate::packet_id::PacketId;
 use crate::safe_converter::PrecheckedCast;
@@ -33,6 +34,7 @@ struct SendStreamInner {
     work_in_progress_packet_id: PacketId,
     work_in_progress: Option<BytesMut>,
     work_in_progress_late_send_handle: Option<tokio::task::JoinHandle<()>>,
+    buffer_pool: Arc<BufferPool>,
 }
 impl SendStreamInner {
     fn packet_header_len(&self) -> usize {
@@ -42,13 +44,15 @@ impl SendStreamInner {
     fn init_wip(&mut self, first_message_offset: Option<u16>) -> &mut BytesMut {
         assert!(self.work_in_progress.is_none());
 
-        let mut new_buffer = BytesMut::with_capacity(self.config.max_packet_len); //TODO pool
-        PacketHeader::new(self.self_reply_to_addr, PacketKind::RegularSequenced {
-            stream_id: self.stream_id,
-            first_message_offset,
-            packet_sequence_number: self.work_in_progress_packet_id,
-        },
-        self.generation).ser(&mut new_buffer);
+        let mut new_buffer = self.buffer_pool.get_from_pool();
+        PacketHeader::new(
+            self.self_reply_to_addr, PacketKind::RegularSequenced {
+                stream_id: self.stream_id,
+                first_message_offset,
+                packet_sequence_number: self.work_in_progress_packet_id,
+            },
+            self.generation
+        ).ser(&mut new_buffer);
 
         self.work_in_progress = Some(new_buffer);
         self.work_in_progress.as_mut().unwrap()
@@ -57,7 +61,7 @@ impl SendStreamInner {
     async fn send_send_sync(&self) {
         let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlSendSync { stream_id: self.stream_id }, self.generation);
 
-        let mut send_buf = BytesMut::with_capacity(1400); //TODO from pool?
+        let mut send_buf = self.buffer_pool.get_from_pool();
         header.ser(&mut send_buf);
 
         ControlMessageSendSync {
@@ -65,7 +69,8 @@ impl SendStreamInner {
             send_buffer_low_water_mark: self.low_water_mark(),
         }.ser(&mut send_buf);
 
-        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut send_buf).await
+        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
+        self.buffer_pool.return_to_pool(send_buf);
     }
 
     fn low_water_mark(&self) -> PacketId {
@@ -92,8 +97,8 @@ impl SendStreamInner {
 
         if let Some(out_of_window) = self.work_in_progress_packet_id - self.config.send_window_size {
             if let Some(dropped_buf) = self.send_buffer.remove(&out_of_window) {
-                //TODO return buf to pool
                 debug!("unacknowledged packet moved out of the send window for stream {} with {:?}", self.stream_id, self.peer_addr);
+                self.buffer_pool.return_to_pool(dropped_buf);
             }
         }
 
@@ -115,9 +120,11 @@ impl SendStream {
         send_socket: Arc<SendPipeline>,
         peer_addr: SocketAddr,
         reply_to_addr: Option<SocketAddr>,
+        buffer_pool: Arc<BufferPool>,
     ) -> SendStream {
         let inner = SendStreamInner {
             config: config.clone(),
+            buffer_pool,
             generation,
             stream_id,
             send_socket,
@@ -144,8 +151,12 @@ impl SendStream {
         debug!("received INIT message from {:?} for stream {}", inner.peer_addr, inner.stream_id);
 
         // discard all previously sent packets
-        inner.work_in_progress = None;
-        inner.send_buffer.clear();
+        if let Some(wip) = inner.work_in_progress.take() {
+            inner.buffer_pool.return_to_pool(wip);
+        }
+        while let Some((_, removed)) = inner.send_buffer.pop_last() {
+            inner.buffer_pool.return_to_pool(removed);
+        }
 
         // reply with a SEND_SYNC so the client can adjust its receive window
         inner.send_send_sync().await;
@@ -161,7 +172,9 @@ impl SendStream {
         loop {
             if let Some(&key) = inner.send_buffer.keys().next() {
                 if key < message.receive_buffer_ack_threshold {
-                    inner.send_buffer.remove(&key);
+                    if let Some(removed) = inner.send_buffer.remove(&key) {
+                        inner.buffer_pool.return_to_pool(removed);
+                    }
                     continue;
                 }
             }
@@ -314,6 +327,7 @@ mod tests {
             Arc::new(SendPipeline::new(Arc::new(send_socket))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
+            Arc::new(BufferPool::new(30, 10)),
         );
 
         let rt = Builder::new_current_thread()
@@ -322,13 +336,21 @@ mod tests {
             .build().unwrap();
         rt.block_on(async move {
             for packet_id in initial_send_buffer {
+                let mut bm = BytesMut::with_capacity(30);
+                bm.put_slice(vec![packet_id].as_slice());
+
                 send_stream.inner.write().await
-                    .send_buffer.insert(PacketId::from_raw(packet_id.safe_cast()), BytesMut::from(vec![packet_id].as_slice()));
+                    .send_buffer.insert(PacketId::from_raw(packet_id.safe_cast()), bm);
                 send_stream.inner.write().await
                     .work_in_progress_packet_id = PacketId::from_raw(packet_id.safe_cast() + 1);
             }
             send_stream.inner.write().await
-                .work_in_progress = initial_wip_packet.map(|buf| BytesMut::from(buf.as_slice()));
+                .work_in_progress = initial_wip_packet.map(
+                |buf| {
+                    let mut bm = BytesMut::with_capacity(30);
+                    bm.put_slice(buf.as_slice());
+                    bm
+                });
             send_stream.inner.write().await
                 .work_in_progress_packet_id = PacketId::from_raw(wip_packet_id);
 
@@ -383,6 +405,7 @@ mod tests {
             Arc::new(SendPipeline::new(Arc::new(send_socket))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
+            Arc::new(BufferPool::new(30, 10)),
         );
 
         let rt = Builder::new_current_thread()
@@ -439,6 +462,7 @@ mod tests {
             Arc::new(SendPipeline::new(Arc::new(send_socket))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
+            Arc::new(BufferPool::new(30, 10)),
         );
 
         let expected_send_buffer_ids = expected_send_buffer_ids
@@ -452,8 +476,15 @@ mod tests {
             .build().unwrap();
         rt.block_on(async move {
             for packet_id in initial_send_buffer_ids {
+                let mut buf = BytesMut::with_capacity(30);
+                buf.put_u8(packet_id);
+
+                let buf2 = BytesMut::from(vec![packet_id].as_slice());
+
+                assert_eq!(buf, buf2);
+
                 send_stream.inner.write().await
-                    .send_buffer.insert(PacketId::from_raw(packet_id.safe_cast()), BytesMut::from(vec![packet_id].as_slice()));
+                    .send_buffer.insert(PacketId::from_raw(packet_id.safe_cast()), buf);
                 send_stream.inner.write().await
                     .work_in_progress_packet_id = PacketId::from_raw(packet_id.safe_cast() + 1);
             }
@@ -552,6 +583,7 @@ mod tests {
             Arc::new(SendPipeline::new(Arc::new(send_socket))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
+            Arc::new(BufferPool::new(max_packet_len, 10)),
         );
 
         let rt = Builder::new_current_thread()
@@ -592,6 +624,7 @@ mod tests {
                 late_send_delay: None,
                 send_window_size: 4,
             }),
+            buffer_pool: Arc::new(BufferPool::new(0, 10)),
             generation: 3,
             stream_id: 4,
             send_socket: Arc::new(SendPipeline::new(Arc::new(MockSendSocket::new()))),
@@ -627,6 +660,7 @@ mod tests {
                 Arc::new(SendPipeline::new(Arc::new(MockSendSocket::default()))),
                 SocketAddr::from(([127, 0, 0, 1], 0)),
                 reply_to_addr,
+                Arc::new(BufferPool::new(0, 10)),
             );
 
             let actual = send_stream.inner.read().await
@@ -662,6 +696,7 @@ mod tests {
                     late_send_delay: None,
                     send_window_size: 4,
                 }),
+                buffer_pool: Arc::new(BufferPool::new(100, 10)),
                 generation: 3,
                 stream_id: 4,
                 send_socket: Arc::new(SendPipeline::new(Arc::new(send_socket))),

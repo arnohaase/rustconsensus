@@ -18,12 +18,15 @@ pub struct RudpConfig {
     /// Choosing this value too big causes packets to be dropped, which may be partial if only some
     ///  of the routes support smaller frames. Choosing it too small wastes bandwidth.
     pub payload_size_inside_udp: usize,
+    //TODO integrate with SendStreamConfig::max_packet_len
 
     /// This is the number of buffers that will be pooled at a given time - buffers in excess of this
     ///  number are discarded when they are returned.
     /// TODO default value
     /// TODO keep track / limit buffers 'in flight'?
     pub buffer_pool_size: usize,
+
+    //TODO integrate with SendStreamConfig and ReceiveStreamConfig
 }
 
 impl RudpConfig {

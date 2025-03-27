@@ -28,7 +28,13 @@ impl BufferPool {
         BytesMut::with_capacity(self.buf_size)
     }
 
-    pub fn return_to_pool(&self, buffer: BytesMut) {
+    pub fn return_to_pool(&self, mut buffer: BytesMut) {
+        assert_eq!(buffer.capacity(), self.buf_size,
+                   "returned buffer does not have the regular capacity of {} bytes, maybe a packet exceeding configured packet size was sent"
+                   , self.buf_size);
+
+        buffer.clear();
+
         let mut buffers = self.buffers.lock().unwrap();
         if buffers.capacity() > buffers.len() {
             trace!("returning buffer to pool");
@@ -40,3 +46,20 @@ impl BufferPool {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use bytes::BufMut;
+    use super::*;
+
+    #[test]
+    fn test_clear() {
+        let mut pool = BufferPool::new(10, 10);
+
+        let mut buf = BytesMut::with_capacity(10);
+        buf.put_u8(1);
+
+        pool.return_to_pool(buf);
+
+        assert!(pool.get_from_pool().is_empty());
+    }
+}

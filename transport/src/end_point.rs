@@ -249,6 +249,7 @@ impl EndPoint {
             self.get_send_socket(addr),
             addr,
             self.get_reply_to_addr(addr),
+            self.buffer_pool.clone(),
         ));
 
         self.send_streams.update(|map| {
