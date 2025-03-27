@@ -10,14 +10,14 @@ use tokio::sync::RwLock;
 use tokio::time;
 use tracing::{debug, trace};
 use crate::buffer_pool::BufferPool;
-use crate::config::SendStreamConfig;
+use crate::config::EffectiveSendStreamConfig;
 use crate::message_header::MessageHeader;
 use crate::packet_id::PacketId;
 use crate::safe_converter::{PrecheckedCast, SafeCast};
 
 
 struct SendStreamInner {
-    config: Arc<SendStreamConfig>,
+    config: Arc<EffectiveSendStreamConfig>,
     generation: u64,
     stream_id: u16,
     send_socket: Arc<SendPipeline>,
@@ -103,13 +103,13 @@ impl SendStreamInner {
 
 
 pub struct SendStream {
-    config: Arc<SendStreamConfig>,
+    config: Arc<EffectiveSendStreamConfig>,
     inner: Arc<RwLock<SendStreamInner>>,
 }
 
 impl SendStream {
     pub fn new(
-        config: Arc<SendStreamConfig>,
+        config: Arc<EffectiveSendStreamConfig>,
         generation: u64,
         stream_id: u16,
         send_socket: Arc<SendPipeline>,
@@ -313,7 +313,7 @@ mod tests {
         ;
 
         let send_stream = SendStream::new(
-            Arc::new(SendStreamConfig {
+            Arc::new(EffectiveSendStreamConfig {
                 max_payload_len: 30,
                 late_send_delay: None,
                 send_window_size: 4,
@@ -391,7 +391,7 @@ mod tests {
         }
 
         let send_stream = SendStream::new(
-            Arc::new(SendStreamConfig {
+            Arc::new(EffectiveSendStreamConfig {
                 max_payload_len: 30,
                 late_send_delay: None,
                 send_window_size: 32,
@@ -448,7 +448,7 @@ mod tests {
         ;
 
         let send_stream = SendStream::new(
-            Arc::new(SendStreamConfig {
+            Arc::new(EffectiveSendStreamConfig {
                 max_payload_len: 30,
                 late_send_delay: None,
                 send_window_size: 4,
@@ -569,7 +569,7 @@ mod tests {
         }
 
         let send_stream = SendStream::new(
-            Arc::new(SendStreamConfig {
+            Arc::new(EffectiveSendStreamConfig {
                 max_payload_len: max_packet_len,
                 late_send_delay,
                 send_window_size: 4,
@@ -615,7 +615,7 @@ mod tests {
     #[case::send_buffer_2(vec![5, 6], 7, 5)]
     fn test_low_water_mark(#[case] send_buffer: Vec<u64>, #[case] wip_packet_id: u64, #[case] expected_low_water_mark: u64) {
         let mut inner = SendStreamInner {
-            config: Arc::new(SendStreamConfig {
+            config: Arc::new(EffectiveSendStreamConfig {
                 max_payload_len: 0,
                 late_send_delay: None,
                 send_window_size: 4,
@@ -646,7 +646,7 @@ mod tests {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let send_stream = SendStream::new(
-                Arc::new(SendStreamConfig {
+                Arc::new(EffectiveSendStreamConfig {
                     max_payload_len: 0,
                     late_send_delay: None,
                     send_window_size: 0,
@@ -687,7 +687,7 @@ mod tests {
             ;
 
             let mut inner = SendStreamInner {
-                config: Arc::new(SendStreamConfig {
+                config: Arc::new(EffectiveSendStreamConfig {
                     max_payload_len: 0,
                     late_send_delay: None,
                     send_window_size: 4,

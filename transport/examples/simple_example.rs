@@ -33,12 +33,6 @@ async fn main() -> anyhow::Result<()> {
         max_message_size: 1024*1024,
     });
 
-    let send_config = Arc::new(SendStreamConfig {
-        max_payload_len: 1400,
-        late_send_delay: Some(Duration::from_micros(10)),
-        send_window_size: 1024,
-    });
-
     let addr_a: SocketAddr = SocketAddr::from_str("127.0.0.1:9100")?;
     let addr_b: SocketAddr = SocketAddr::from_str("127.0.0.1:9101")?;
 
@@ -46,13 +40,8 @@ async fn main() -> anyhow::Result<()> {
     let a = Arc::new(EndPoint::new(
         addr_a,
         msg_dispatcher.clone(),
-        RudpConfig {
-            payload_size_inside_udp: 1472,
-            buffer_pool_size: 10,
-        },
+        RudpConfig::default_ipv4(),
         receive_config.clone(),
-        FxHashMap::default(),
-        send_config.clone(),
         FxHashMap::default(),
     ).instrument(span).await?);
 
@@ -60,13 +49,8 @@ async fn main() -> anyhow::Result<()> {
     let b = Arc::new(EndPoint::new(
         addr_b,
         msg_dispatcher.clone(),
-        RudpConfig {
-            payload_size_inside_udp: 1472,
-            buffer_pool_size: 10,
-        },
+        RudpConfig::default_ipv4(),
         receive_config.clone(),
-        FxHashMap::default(),
-        send_config,
         FxHashMap::default(),
     ).instrument(span).await?);
 

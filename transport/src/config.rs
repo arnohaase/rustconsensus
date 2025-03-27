@@ -1,5 +1,6 @@
 use std::time::Duration;
 use anyhow::bail;
+use rustc_hash::FxHashMap;
 
 pub struct RudpConfig {
     /// This is the payload size inside UDP packets that RUDP assumes. Since RUDP enforces
@@ -28,9 +29,29 @@ pub struct RudpConfig {
     pub buffer_pool_size: usize,
 
     //TODO integrate with SendStreamConfig and ReceiveStreamConfig
+
+    pub max_message_size: u32,
+
+    pub default_send_stream_config: SendStreamConfig,
+    pub specific_send_stream_configs: FxHashMap<u16, SendStreamConfig>,
 }
 
 impl RudpConfig {
+
+    ///TODO documentation - ipv4 with end-to-end full Ethernet MTU - without optional headers
+    pub fn default_ipv4() -> RudpConfig {
+        RudpConfig {
+            payload_size_inside_udp: 1472,
+            buffer_pool_size: 4096,
+            max_message_size: 16*1024*1024,
+            default_send_stream_config: SendStreamConfig {
+                send_delay: Some(Duration::from_millis(1)),
+                send_window_size: 1024,
+            },
+            specific_send_stream_configs: FxHashMap::default(),
+        }
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.payload_size_inside_udp < 100 {
             bail!("Payload size is too small");
@@ -38,7 +59,27 @@ impl RudpConfig {
 
         Ok(())
     }
+
+    pub fn get_effective_send_stream_config(&self, stream_id: u16) -> EffectiveSendStreamConfig {
+        let raw = self.specific_send_stream_configs.get(&stream_id)
+            .unwrap_or(&self.default_send_stream_config);
+
+        EffectiveSendStreamConfig {
+            max_payload_len: self.payload_size_inside_udp, //TODO reduce this by encryption overhead
+            late_send_delay: raw.send_delay,
+            send_window_size: raw.send_window_size,
+        }
+    }
 }
+
+pub struct SendStreamConfig {
+    pub send_delay: Option<Duration>,
+
+    /// This is the maximum number of *packets* (not bytes) stored on the sender side pending an
+    ///  ack message
+    pub send_window_size: u32,
+}
+
 
 pub struct ReceiveStreamConfig {
     pub nak_interval: Duration, // configure to roughly 2x RTT
@@ -51,7 +92,7 @@ pub struct ReceiveStreamConfig {
     pub max_message_size: u32,
 }
 
-pub struct SendStreamConfig {
+pub struct EffectiveSendStreamConfig {
     pub max_payload_len: usize, //TODO calculated from MTU, encryption wrapper, ...
     pub late_send_delay: Option<Duration>,
     pub send_window_size: u32, //TODO ensure that this is <= u32::MAX / 4 (or maybe a far smaller upper bound???)

@@ -1,6 +1,6 @@
 use crate::atomic_map::AtomicMap;
 use crate::buffer_pool::BufferPool;
-use crate::config::{ReceiveStreamConfig, RudpConfig, SendStreamConfig};
+use crate::config::{ReceiveStreamConfig, RudpConfig};
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::packet_header::{PacketHeader, PacketKind};
@@ -31,8 +31,6 @@ pub struct EndPoint {
     message_dispatcher: Arc<dyn MessageDispatcher>,
     default_receive_config: Arc<ReceiveStreamConfig>,
     specific_receive_configs: FxHashMap<u16, Arc<ReceiveStreamConfig>>,
-    default_send_config: Arc<SendStreamConfig>,
-    specific_send_configs: FxHashMap<u16, Arc<SendStreamConfig>>,
     config: Arc<RudpConfig>,
     buffer_pool: Arc<BufferPool>,
 }
@@ -43,8 +41,6 @@ impl EndPoint {
         config: RudpConfig,
         default_receive_config: Arc<ReceiveStreamConfig>,
         specific_receive_configs: FxHashMap<u16, Arc<ReceiveStreamConfig>>,
-        default_send_config: Arc<SendStreamConfig>,
-        specific_send_configs: FxHashMap<u16, Arc<SendStreamConfig>>,
     ) -> anyhow::Result<EndPoint> {
         config.validate()?;
 
@@ -68,8 +64,6 @@ impl EndPoint {
             message_dispatcher,
             default_receive_config,
             specific_receive_configs,
-            default_send_config,
-            specific_send_configs,
             config: Arc::new(config),
             buffer_pool,
         })
@@ -189,12 +183,6 @@ impl EndPoint {
             .unwrap_or(self.default_receive_config.clone())
     }
 
-    fn get_send_config(&self, stream_id: u16) -> Arc<SendStreamConfig> {
-        self.specific_send_configs.get(&stream_id)
-            .cloned()
-            .unwrap_or(self.default_send_config.clone())
-    }
-
     fn get_send_socket(&self, peer_addr: SocketAddr) -> Arc<SendPipeline> {
         if peer_addr.is_ipv4() {
             self.send_socket_v4.clone()
@@ -242,7 +230,7 @@ impl EndPoint {
 
         debug!("initializing send stream {} for {:?}", stream_id, addr);
         let stream = Arc::new(SendStream::new(
-            self.get_send_config(stream_id),
+            Arc::new(self.config.get_effective_send_stream_config(stream_id)),
             self.generation,
             stream_id,
             self.get_send_socket(addr),
