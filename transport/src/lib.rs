@@ -149,6 +149,11 @@
 //! TODO timestamp / RTT
 //! TODO notify client of lost packets
 //!
+//! TODO serialize message acceptance
+//! TODO congestion control: AIMD; slow start or not?
+//! TODO shared congestion window per peer
+//! TODO Receiver's advertised window: upper bound for the send buffer / congestion window
+//!
 //! *NAK*
 //!
 //! TODO merge NAK with RECV_SYNC?
