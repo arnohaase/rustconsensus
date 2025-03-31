@@ -6,7 +6,6 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use bytes::{Buf, BufMut, BytesMut};
 use bytes_varint::{VarIntSupport, VarIntSupportMut};
-use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use num_enum::TryFromPrimitive;
 use tokio::sync::mpsc;
 use tracing::error;
