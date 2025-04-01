@@ -1,5 +1,4 @@
 use bytes::{Buf, BufMut, BytesMut};
-use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use crate::safe_converter::PrecheckedCast;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

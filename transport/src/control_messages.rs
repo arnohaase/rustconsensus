@@ -1,7 +1,6 @@
 use std::fmt::{Debug, Formatter};
 use bytes::{Buf, BufMut, BytesMut};
 use crate::packet_id::PacketId;
-use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use bytes_varint::{VarIntSupport, VarIntSupportMut};
 
 #[derive(Clone, Eq, PartialEq)]

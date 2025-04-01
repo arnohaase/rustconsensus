@@ -1,7 +1,6 @@
 use crate::packet_id::PacketId;
 use bitflags::bitflags;
 use bytes::{Buf, BufMut, BytesMut};
-use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use std::fmt::Debug;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 
@@ -64,8 +63,7 @@ impl PacketHeader {
             Some(SocketAddr::V6(_)) => 16 + 2,
         };
 
-        size_of::<u8>()          // protocol version
-            + size_of::<u8>()    // flags
+        size_of::<u8>()          // flags
             + 6                  // generation as u48
             + reply_to_len
             + size_of::<u16>()   // stream id
@@ -74,8 +72,6 @@ impl PacketHeader {
     }
 
     pub fn ser(&self, buf: &mut BytesMut) {
-        buf.put_u8(self.protocol_version);
-
         let flags_ip = match self.reply_to_address {
             None => Flags::IP_SAME,
             Some(addr) => {
@@ -131,8 +127,7 @@ impl PacketHeader {
         }
     }
 
-    pub fn deser(buf: &mut impl Buf) -> anyhow::Result<PacketHeader> {
-        let protocol_version = buf.try_get_u8()?;
+    pub fn deser(buf: &mut impl Buf, protocol_version: u8) -> anyhow::Result<PacketHeader> {
         if protocol_version != Self::PROTOCOL_VERSION_1 {
             return Err(anyhow::anyhow!("Unsupported protocol version {}", protocol_version));
         }
@@ -249,7 +244,7 @@ mod tests {
         let mut buf = BytesMut::new();
         header.ser(&mut buf);
         let mut b: &[u8] = &mut buf;
-        let deser = PacketHeader::deser(&mut b).unwrap();
+        let deser = PacketHeader::deser(&mut b, PacketHeader::PROTOCOL_VERSION_1).unwrap();
         assert!(b.is_empty());
         assert_eq!(header, deser);
     }

@@ -102,7 +102,7 @@ impl EndPoint {
             trace!("received packet from {:?}", from); //TODO instrument with unique ID per packet
 
             let parse_buf = &mut &buf[..num_read];
-            let packet_header = match PacketHeader::deser(parse_buf) {
+            let packet_header = match PacketHeader::deser(parse_buf, PacketHeader::PROTOCOL_VERSION_1) {
                 Ok(header) => {
                     header
                 },
