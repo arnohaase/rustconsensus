@@ -8,7 +8,7 @@ use ordered_float::OrderedFloat;
 use rustc_hash::FxHasher;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 use transport::safe_converter::{PrecheckedCast, SafeCast};
 use super::gossip_messages::*;
 
@@ -383,8 +383,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case(7, vec![(1, 12337464493871681589), (2, 6689209898252340538)])]
-    #[case(9, vec![(1, 2509790823383955335), (2, 2735948127633228801)])]
+    #[case(7, vec![(1, 14834476511986453866), (2, 3834319792830107287)])]
+    #[case(9, vec![(1, 13052660106896728520), (2, 9079983505140678729)])]
     fn test_gossip_detailed_digest(#[case] nonce: u32, #[case] nodes: Vec<(u16, u64)>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async move {
@@ -427,8 +427,8 @@ mod tests {
         assert_eq!(digest, GossipDetailedDigestData {
             nonce: 7,
             nodes: [
-                (test_node_addr_from_number(1), 12337464493871681589),
-                (test_node_addr_from_number(2), 6689209898252340538),
+                (test_node_addr_from_number(1), 14834476511986453866),
+                (test_node_addr_from_number(2), 3834319792830107287),
             ].into(),
         });
     }
@@ -565,7 +565,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,], Some(vec![(1, 12337464493871681589), (2, 6689209898252340538)]))]
+    #[case([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,], Some(vec![(1, 14834476511986453866), (2, 3834319792830107287)]))]
     #[case([56, 159, 183, 220, 160, 198, 187, 159, 36, 169, 181, 155, 139, 38, 154, 149, 93, 23, 150, 94, 28, 235, 227, 61, 177, 116, 119, 82, 220, 156, 26, 13], None)]
     fn test_on_summary_digest(#[case] digest: [u8;32], #[case] expected: Option<Vec<(u16,u64)>>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
@@ -600,11 +600,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::stable(vec![(1,12416313083010759684), (2,12416313083010759684)], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], vec![], vec![])]
-    #[case::local_only(vec![(1,12416313083010759684)], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], vec![node_state!(2[]:Up->[]@[1,2])], vec![])]
-    #[case::remote_only(vec![(1,12416313083010759684), (2,12416313083010759684)], vec![node_state!(1[]:Up->[]@[1,2])], vec![], vec![2])]
-    #[case::different(vec![(1,12416313083010759684), (2,123)], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], vec![node_state!(2[]:Up->[]@[1,2])], vec![])]
-    #[case::mix(vec![(1,12416313083010759684), (2,12416313083010759684), (3,123)], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(3[]:Up->[]@[1,2]), node_state!(4[]:Up->[]@[1,2])], vec![node_state!(3[]:Up->[]@[1,2]), node_state!(4[]:Up->[]@[1,2])], vec![2])]
+    #[case::stable(vec![(1,1434042143177900331), (2,1434042143177900331)], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], vec![], vec![])]
+    #[case::local_only(vec![(1,1434042143177900331)], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], vec![node_state!(2[]:Up->[]@[1,2])], vec![])]
+    #[case::remote_only(vec![(1,1434042143177900331), (2,12416313083010759684)], vec![node_state!(1[]:Up->[]@[1,2])], vec![], vec![2])]
+    #[case::different(vec![(1,1434042143177900331), (2,123)], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], vec![node_state!(2[]:Up->[]@[1,2])], vec![])]
+    #[case::mix(vec![(1,1434042143177900331), (2,1434042143177900331), (3,123)], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(3[]:Up->[]@[1,2]), node_state!(4[]:Up->[]@[1,2])], vec![node_state!(3[]:Up->[]@[1,2]), node_state!(4[]:Up->[]@[1,2])], vec![2])]
     fn test_on_detailed_digest(
         #[case] nodes_in_gossip: Vec<(u16, u64)>,
         #[case] local_nodes: Vec<NodeState>,
