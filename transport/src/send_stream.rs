@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time;
 use tracing::{debug, trace};
-use crate::buffer_pool::BufferPool;
+use crate::buffers::buffer_pool::SendBufferPool;
 use crate::config::EffectiveSendStreamConfig;
 use crate::message_header::MessageHeader;
 use crate::packet_id::PacketId;
@@ -29,7 +29,7 @@ struct SendStreamInner {
     work_in_progress_packet_id: PacketId,
     work_in_progress: Option<BytesMut>,
     work_in_progress_late_send_handle: Option<tokio::task::JoinHandle<()>>,
-    buffer_pool: Arc<BufferPool>,
+    buffer_pool: Arc<SendBufferPool>,
 }
 impl SendStreamInner {
     fn packet_header_len(&self) -> usize {
@@ -115,7 +115,7 @@ impl SendStream {
         send_socket: Arc<SendPipeline>,
         peer_addr: SocketAddr,
         reply_to_addr: Option<SocketAddr>,
-        buffer_pool: Arc<BufferPool>,
+        buffer_pool: Arc<SendBufferPool>,
     ) -> SendStream {
         let inner = SendStreamInner {
             config: config.clone(),
@@ -323,7 +323,7 @@ mod tests {
             Arc::new(SendPipeline::new(Arc::new(send_socket))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(BufferPool::new(30, 10)),
+            Arc::new(SendBufferPool::new(30, 10)),
         );
 
         let rt = Builder::new_current_thread()
@@ -401,7 +401,7 @@ mod tests {
             Arc::new(SendPipeline::new(Arc::new(send_socket))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(BufferPool::new(30, 10)),
+            Arc::new(SendBufferPool::new(30, 10)),
         );
 
         let rt = Builder::new_current_thread()
@@ -458,7 +458,7 @@ mod tests {
             Arc::new(SendPipeline::new(Arc::new(send_socket))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(BufferPool::new(30, 10)),
+            Arc::new(SendBufferPool::new(30, 10)),
         );
 
         let expected_send_buffer_ids = expected_send_buffer_ids
@@ -579,7 +579,7 @@ mod tests {
             Arc::new(SendPipeline::new(Arc::new(send_socket))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(BufferPool::new(max_payload_len, 10)),
+            Arc::new(SendBufferPool::new(max_payload_len, 10)),
         );
 
         let rt = Builder::new_current_thread()
@@ -620,7 +620,7 @@ mod tests {
                 late_send_delay: None,
                 send_window_size: 4,
             }),
-            buffer_pool: Arc::new(BufferPool::new(0, 10)),
+            buffer_pool: Arc::new(SendBufferPool::new(0, 10)),
             generation: 3,
             stream_id: 4,
             send_socket: Arc::new(SendPipeline::new(Arc::new(MockSendSocket::new()))),
@@ -656,7 +656,7 @@ mod tests {
                 Arc::new(SendPipeline::new(Arc::new(MockSendSocket::default()))),
                 SocketAddr::from(([127, 0, 0, 1], 0)),
                 reply_to_addr,
-                Arc::new(BufferPool::new(0, 10)),
+                Arc::new(SendBufferPool::new(0, 10)),
             );
 
             let actual = send_stream.inner.read().await
@@ -692,7 +692,7 @@ mod tests {
                     late_send_delay: None,
                     send_window_size: 4,
                 }),
-                buffer_pool: Arc::new(BufferPool::new(100, 10)),
+                buffer_pool: Arc::new(SendBufferPool::new(100, 10)),
                 generation: 3,
                 stream_id: 4,
                 send_socket: Arc::new(SendPipeline::new(Arc::new(send_socket))),

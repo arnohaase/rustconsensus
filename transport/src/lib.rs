@@ -231,9 +231,9 @@ mod send_pipeline;
 mod packet_id;
 mod message_header;
 pub mod safe_converter;
-mod atomic_map;
-mod buffer_pool;
 pub mod config;
+mod encryption;
+pub mod buffers;
 
 #[cfg(test)]
 mod tests {

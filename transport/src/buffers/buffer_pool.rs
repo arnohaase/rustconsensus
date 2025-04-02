@@ -1,21 +1,32 @@
-use bytes::BytesMut;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use bytes::{BufMut, BytesMut};
+use std::sync::{Arc, Mutex};
 use tracing::{debug, trace};
+use crate::encryption::RudpEncryption;
+use crate::packet_header::PacketHeader;
 
-pub struct BufferPool {
+pub struct SendBufferPool {
     buf_size: usize,
     buffers: Mutex<Vec<BytesMut>>,
+    encryption: Arc<dyn RudpEncryption>,
 }
 
-impl BufferPool {
-    pub fn new(buf_size: usize, max_pool_size: usize) -> Self {
-        BufferPool {
+impl SendBufferPool {
+    pub fn new(buf_size: usize, max_pool_size: usize, encryption: Arc<dyn RudpEncryption>) -> Self {
+        SendBufferPool {
             buf_size,
             buffers: Mutex::new(Vec::with_capacity(max_pool_size)),
+            encryption
         }
     }
 
     pub fn get_from_pool(&self) -> BytesMut {
+        let mut result = self._get_from_pool();
+        self.encryption.init_buffer(&mut result);
+        result
+    }
+
+    fn _get_from_pool(&self) -> BytesMut {
         {
             let mut buffers = self.buffers.lock().unwrap();
             if let Some(buffer) = buffers.pop() {
@@ -53,7 +64,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let mut pool = BufferPool::new(10, 10);
+        let mut pool = SendBufferPool::new(10, 10);
 
         let mut buf = BytesMut::with_capacity(10);
         buf.put_u8(1);

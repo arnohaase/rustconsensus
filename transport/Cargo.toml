@@ -10,6 +10,7 @@ tokio = { version = "*", features = ["full", "test-util"]}
 tracing-subscriber = "*"
 
 [dependencies]
+aead = { version = "*", features = ["bytes"] }
 aes-gcm = "*"
 anyhow = "*"
 async-trait = "*"

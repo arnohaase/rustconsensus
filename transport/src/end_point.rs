@@ -1,5 +1,5 @@
-use crate::atomic_map::AtomicMap;
-use crate::buffer_pool::BufferPool;
+use crate::buffers::atomic_map::AtomicMap;
+use crate::buffers::buffer_pool::SendBufferPool;
 use crate::config::RudpConfig;
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
@@ -30,7 +30,7 @@ pub struct EndPoint {
     send_streams: AtomicMap<(SocketAddr, u16), Arc<SendStream>>,
     message_dispatcher: Arc<dyn MessageDispatcher>,
     config: Arc<RudpConfig>,
-    buffer_pool: Arc<BufferPool>,
+    buffer_pool: Arc<SendBufferPool>,
 }
 impl EndPoint {
     pub async fn new(
@@ -50,12 +50,12 @@ impl EndPoint {
             (receive_socket.clone(), Arc::new(UdpSocket::bind("[::]:0").await?))
         };
 
-        let buffer_pool = Arc::new(BufferPool::new(config.payload_size_inside_udp, config.buffer_pool_size));
+        let buffer_pool = Arc::new(SendBufferPool::new(config.payload_size_inside_udp, config.buffer_pool_size, todo!()));
         Ok(EndPoint {
             generation: Self::generation_from_timestamp()?,
             receive_socket,
-            send_socket_v4: Arc::new(SendPipeline::new(Arc::new(send_socket_v4))),
-            send_socket_v6: Arc::new(SendPipeline::new(Arc::new(send_socket_v6))),
+            send_socket_v4: Arc::new(SendPipeline::new(Arc::new(send_socket_v4), todo!())),
+            send_socket_v6: Arc::new(SendPipeline::new(Arc::new(send_socket_v6), todo!())),
             send_streams: Default::default(),
             message_dispatcher,
             config: Arc::new(config),
@@ -218,7 +218,7 @@ impl EndPoint {
 
         debug!("initializing send stream {} for {:?}", stream_id, addr);
         let stream = Arc::new(SendStream::new(
-            Arc::new(self.config.get_effective_send_stream_config(stream_id)),
+            Arc::new(self.config.get_effective_send_stream_config(stream_id, todo!())),
             self.generation,
             stream_id,
             self.get_send_socket(addr),

@@ -1,4 +1,4 @@
-use crate::buffer_pool::BufferPool;
+use crate::buffers::buffer_pool::SendBufferPool;
 use crate::config::EffectiveReceiveStreamConfig;
 use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
@@ -22,7 +22,7 @@ use tracing::{debug, trace, warn};
 
 struct ReceiveStreamInner {
     config: Arc<EffectiveReceiveStreamConfig>,
-    buffer_pool: Arc<BufferPool>,
+    buffer_pool: Arc<SendBufferPool>,
 
     generation: u64,
     stream_id: u16,
@@ -72,7 +72,7 @@ struct ReceiveStreamInner {
 impl ReceiveStreamInner {
     fn new(
         config: Arc<EffectiveReceiveStreamConfig>,
-        buffer_pool: Arc<BufferPool>,
+        buffer_pool: Arc<SendBufferPool>,
         generation: u64,
         stream_id: u16,
         peer_addr: SocketAddr,
@@ -502,7 +502,7 @@ impl Drop for ReceiveStream {
 impl ReceiveStream {
     pub fn new(
         config: Arc<EffectiveReceiveStreamConfig>,
-        buffer_pool: Arc<BufferPool>,
+        buffer_pool: Arc<SendBufferPool>,
         generation: u64,
         stream_id: u16,
         peer_addr: SocketAddr,
@@ -699,7 +699,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
-                Arc::new(BufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1)),
                 3,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -744,7 +744,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
-                Arc::new(BufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1)),
                 4,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -824,7 +824,7 @@ mod tests {
                     max_num_naks_per_packet: 2,
                     max_message_size: 10,
                 }),
-                Arc::new(BufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1)),
                 11,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -965,7 +965,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
-                Arc::new(BufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1)),
                 3,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1047,7 +1047,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
-                Arc::new(BufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1)),
                 3,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1111,7 +1111,7 @@ mod tests {
                 max_num_naks_per_packet: 2,
                 max_message_size: 10,
             }),
-            Arc::new(BufferPool::new(1000, 1)),
+            Arc::new(SendBufferPool::new(1000, 1)),
             3,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1150,7 +1150,7 @@ mod tests {
                 max_num_naks_per_packet: 2,
                 max_message_size: 10,
             }),
-            Arc::new(BufferPool::new(1000, 1)),
+            Arc::new(SendBufferPool::new(1000, 1)),
             3,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1265,7 +1265,7 @@ mod tests {
                 max_num_naks_per_packet: 2,
                 max_message_size: 10,
             }),
-            Arc::new(BufferPool::new(1000, 1)),
+            Arc::new(SendBufferPool::new(1000, 1)),
             3,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),

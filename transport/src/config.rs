@@ -1,6 +1,8 @@
+use std::sync::Arc;
 use std::time::Duration;
 use anyhow::bail;
 use rustc_hash::FxHashMap;
+use crate::encryption::RudpEncryption;
 
 pub struct RudpConfig {
     /// This is the payload size inside UDP packets that RUDP assumes. Since RUDP enforces
@@ -70,16 +72,16 @@ impl RudpConfig {
         Ok(())
     }
 
-    fn effective_payload_length(&self) -> usize {
-        self.payload_size_inside_udp //TODO reduce this by encryption overhead
+    fn effective_payload_length(&self, encryption: &dyn RudpEncryption) -> usize {
+        self.payload_size_inside_udp - encryption.encryption_overhead()
     }
 
-    pub fn get_effective_send_stream_config(&self, stream_id: u16) -> EffectiveSendStreamConfig {
+    pub fn get_effective_send_stream_config(&self, stream_id: u16, encryption: &dyn RudpEncryption) -> EffectiveSendStreamConfig {
         let raw = self.specific_send_stream_configs.get(&stream_id)
             .unwrap_or(&self.default_send_stream_config);
 
         EffectiveSendStreamConfig {
-            max_payload_len: self.effective_payload_length(),
+            max_payload_len: self.effective_payload_length(encryption),
             late_send_delay: raw.send_delay,
             send_window_size: raw.send_window_size,
         }

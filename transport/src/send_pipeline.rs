@@ -2,9 +2,12 @@ use async_trait::async_trait;
 #[cfg(test)] use mockall::automock;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use aes_gcm::Aes256Gcm;
+use bytes::BytesMut;
 use tokio::net::UdpSocket;
 use tracing::{error, trace};
-
+use crate::buffers::buffer_pool::SendBufferPool;
+use crate::encryption::RudpEncryption;
 
 /// This is an abstraction for sending a buffer on a UDP socket, introduced to facilitate mocking
 ///  the I/O part away for testing
@@ -36,11 +39,12 @@ impl SendSocket for Arc<UdpSocket> {
 #[derive(Clone)]
 pub struct SendPipeline {
     socket: Arc<dyn SendSocket>,
+    encryption: Arc<dyn RudpEncryption>,
 }
 
 impl SendPipeline {
-    pub fn new(socket: Arc<dyn SendSocket>) -> SendPipeline {
-        SendPipeline { socket }
+    pub fn new(socket: Arc<dyn SendSocket>, encryption: Arc<dyn RudpEncryption>) -> SendPipeline {
+        SendPipeline { socket, encryption, }
     }
 
     pub fn local_addr(&self) -> SocketAddr {
@@ -48,7 +52,7 @@ impl SendPipeline {
     }
 
     pub async fn finalize_and_send_packet(&self, to: SocketAddr, packet_buf: &mut [u8]) {
-        //TODO encrypt
+        //todo self.encryption.encrypt_buffer(&mut packet_buf);
         self.socket.do_send_packet(to, packet_buf).await;
     }
 
