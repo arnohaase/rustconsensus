@@ -15,8 +15,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{debug, error, info, trace, warn};
-
-
+use crate::encryption::{NoEncryption, RudpEncryption};
 //TODO unit test
 
 /// EndPoint is the place where all other parts of the protocol come together: It listens on a
@@ -31,6 +30,7 @@ pub struct EndPoint {
     message_dispatcher: Arc<dyn MessageDispatcher>,
     config: Arc<RudpConfig>,
     buffer_pool: Arc<SendBufferPool>,
+    encryption: Arc<dyn RudpEncryption>,
 }
 impl EndPoint {
     pub async fn new(
@@ -50,16 +50,19 @@ impl EndPoint {
             (receive_socket.clone(), Arc::new(UdpSocket::bind("[::]:0").await?))
         };
 
-        let buffer_pool = Arc::new(SendBufferPool::new(config.payload_size_inside_udp, config.buffer_pool_size, todo!()));
+        let encryption = Arc::new(NoEncryption{}); //TODO!!!
+
+        let buffer_pool = Arc::new(SendBufferPool::new(config.payload_size_inside_udp, config.buffer_pool_size, encryption.clone()));
         Ok(EndPoint {
             generation: Self::generation_from_timestamp()?,
             receive_socket,
-            send_socket_v4: Arc::new(SendPipeline::new(Arc::new(send_socket_v4), todo!())),
-            send_socket_v6: Arc::new(SendPipeline::new(Arc::new(send_socket_v6), todo!())),
+            send_socket_v4: Arc::new(SendPipeline::new(Arc::new(send_socket_v4), encryption.clone())),
+            send_socket_v6: Arc::new(SendPipeline::new(Arc::new(send_socket_v6), encryption.clone())),
             send_streams: Default::default(),
             message_dispatcher,
             config: Arc::new(config),
             buffer_pool,
+            encryption,
         })
     }
 
@@ -218,7 +221,7 @@ impl EndPoint {
 
         debug!("initializing send stream {} for {:?}", stream_id, addr);
         let stream = Arc::new(SendStream::new(
-            Arc::new(self.config.get_effective_send_stream_config(stream_id, todo!())),
+            Arc::new(self.config.get_effective_send_stream_config(stream_id, self.encryption.as_ref())),
             self.generation,
             stream_id,
             self.get_send_socket(addr),

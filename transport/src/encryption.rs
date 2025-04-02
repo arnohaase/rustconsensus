@@ -18,11 +18,11 @@ pub trait RudpEncryption: Send + Sync {
 pub struct NoEncryption;
 impl RudpEncryption for NoEncryption {
     fn encryption_overhead(&self) -> usize {
-        0
+        1 // protocol version
     }
 
-    fn init_buffer(&self, _buffer: &mut FixedBuf) {
-        // nothing to be done
+    fn init_buffer(&self, buffer: &mut FixedBuf) {
+        buffer.put_u8(PacketHeader::PROTOCOL_VERSION_1);
     }
 
     fn encrypt_buffer(&self, _plaintext: &[u8], _ciphertext: &mut FixedBuf) {

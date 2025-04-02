@@ -21,6 +21,10 @@ impl SendBufferPool {
         }
     }
 
+    pub fn get_envelope_prefix_len(&self) -> usize {
+        self.encryption.encryption_overhead()
+    }
+
     pub fn get_from_pool(&self) -> FixedBuf {
         let mut result = self._get_from_pool();
         self.encryption.init_buffer(&mut result);
@@ -63,6 +67,7 @@ mod tests {
     use aead::Buffer;
     use bytes::BufMut;
     use crate::encryption::NoEncryption;
+    use crate::message_header::MessageHeader;
     use super::*;
 
     #[test]
@@ -71,9 +76,10 @@ mod tests {
 
         let mut buf = FixedBuf::new(10);
         buf.put_u8(1);
+        buf.put_u8(2);
 
         pool.return_to_pool(buf);
 
-        assert!(pool.get_from_pool().is_empty());
+        assert_eq!(pool.get_from_pool().as_ref(), vec![PacketHeader::PROTOCOL_VERSION_1]);
     }
 }
