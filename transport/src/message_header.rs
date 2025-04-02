@@ -16,7 +16,7 @@ impl MessageHeader {
         }
     }
 
-    pub fn ser(&self, buf: &mut BytesMut) {
+    pub fn ser(&self, buf: &mut impl BufMut) {
         buf.put_u32(self.message_len);
     }
 

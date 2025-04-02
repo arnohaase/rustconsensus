@@ -2,12 +2,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use bytes::{BufMut, BytesMut};
 use std::sync::{Arc, Mutex};
 use tracing::{debug, trace};
+use crate::buffers::fixed_buffer::{FixedBuf, FixedBuffer};
 use crate::encryption::RudpEncryption;
 use crate::packet_header::PacketHeader;
 
 pub struct SendBufferPool {
     buf_size: usize,
-    buffers: Mutex<Vec<BytesMut>>,
+    buffers: Mutex<Vec<FixedBuf>>,
     encryption: Arc<dyn RudpEncryption>,
 }
 
@@ -20,13 +21,13 @@ impl SendBufferPool {
         }
     }
 
-    pub fn get_from_pool(&self) -> BytesMut {
+    pub fn get_from_pool(&self) -> FixedBuf {
         let mut result = self._get_from_pool();
         self.encryption.init_buffer(&mut result);
         result
     }
 
-    fn _get_from_pool(&self) -> BytesMut {
+    fn _get_from_pool(&self) -> FixedBuf {
         {
             let mut buffers = self.buffers.lock().unwrap();
             if let Some(buffer) = buffers.pop() {
@@ -36,10 +37,10 @@ impl SendBufferPool {
         }
 
         debug!("no buffer in pool: creating new buffer");
-        BytesMut::with_capacity(self.buf_size)
+        FixedBuf::new(self.buf_size)
     }
 
-    pub fn return_to_pool(&self, mut buffer: BytesMut) {
+    pub fn return_to_pool(&self, mut buffer: FixedBuf) {
         assert_eq!(buffer.capacity(), self.buf_size,
                    "returned buffer does not have the regular capacity of {} bytes, maybe a packet exceeding configured packet size was sent"
                    , self.buf_size);
@@ -59,14 +60,16 @@ impl SendBufferPool {
 
 #[cfg(test)]
 mod tests {
+    use aead::Buffer;
     use bytes::BufMut;
+    use crate::encryption::NoEncryption;
     use super::*;
 
     #[test]
     fn test_clear() {
-        let mut pool = SendBufferPool::new(10, 10);
+        let mut pool = SendBufferPool::new(10, 10, Arc::new(NoEncryption{}));
 
-        let mut buf = BytesMut::with_capacity(10);
+        let mut buf = FixedBuf::new(10);
         buf.put_u8(1);
 
         pool.return_to_pool(buf);

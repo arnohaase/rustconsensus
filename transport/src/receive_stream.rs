@@ -113,7 +113,7 @@ impl ReceiveStreamInner {
         let mut send_buf = self.buffer_pool.get_from_pool();
         header.ser(&mut send_buf);
 
-        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
+        self.send_pipeline.finalize_and_send_packet(self.peer_addr, send_buf.as_mut()).await;
         self.buffer_pool.return_to_pool(send_buf);
     }
 
@@ -131,7 +131,7 @@ impl ReceiveStreamInner {
         trace!("sending RECV_SYNC: {:?}", msg);
         msg.ser(&mut send_buf);
 
-        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
+        self.send_pipeline.finalize_and_send_packet(self.peer_addr, send_buf.as_mut()).await;
         self.buffer_pool.return_to_pool(send_buf);
     }
 
@@ -168,7 +168,7 @@ impl ReceiveStreamInner {
             send_buf.put_u64(packet_id.to_raw());
         }
 
-        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
+        self.send_pipeline.finalize_and_send_packet(self.peer_addr, send_buf.as_mut()).await;
         self.buffer_pool.return_to_pool(send_buf);
     }
 
@@ -687,7 +687,7 @@ mod tests {
                 .returning(|_, _| ())
             ;
 
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}));
 
             let message_dispatcher = MockMessageDispatcher::new();
 
@@ -699,7 +699,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
-                Arc::new(SendBufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::encryption::NoEncryption {}))),
                 3,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -732,7 +732,7 @@ mod tests {
                 .returning(|_, _| ())
             ;
 
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}));
 
             let message_dispatcher = MockMessageDispatcher::new();
 
@@ -744,7 +744,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
-                Arc::new(SendBufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::encryption::NoEncryption {}))),
                 4,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -812,7 +812,7 @@ mod tests {
                 ;
             }
 
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}));
 
             let message_dispatcher = MockMessageDispatcher::new();
 
@@ -824,7 +824,7 @@ mod tests {
                     max_num_naks_per_packet: 2,
                     max_message_size: 10,
                 }),
-                Arc::new(SendBufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::encryption::NoEncryption {}))),
                 11,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -953,7 +953,7 @@ mod tests {
             send_socket.expect_local_addr()
                 .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
 
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}));
 
             let message_dispatcher = Arc::new(CollectingMessageDispatcher::new());
 
@@ -965,7 +965,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
-                Arc::new(SendBufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::encryption::NoEncryption {}))),
                 3,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1037,7 +1037,7 @@ mod tests {
             send_socket.expect_local_addr()
                 .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
 
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}));
 
             let receive_stream = ReceiveStream::new(
                 Arc::new(EffectiveReceiveStreamConfig {
@@ -1047,7 +1047,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
-                Arc::new(SendBufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::encryption::NoEncryption {}))),
                 3,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1101,7 +1101,7 @@ mod tests {
         let mut send_socket = MockSendSocket::new();
         send_socket.expect_local_addr()
             .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
-        let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+        let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}));
 
         let mut inner = ReceiveStreamInner::new(
             Arc::new(EffectiveReceiveStreamConfig {
@@ -1111,7 +1111,7 @@ mod tests {
                 max_num_naks_per_packet: 2,
                 max_message_size: 10,
             }),
-            Arc::new(SendBufferPool::new(1000, 1)),
+            Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::encryption::NoEncryption {}))),
             3,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1140,7 +1140,7 @@ mod tests {
         let mut send_socket = MockSendSocket::new();
         send_socket.expect_local_addr()
             .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
-        let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+        let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}));
 
         let mut inner = ReceiveStreamInner::new(
             Arc::new(EffectiveReceiveStreamConfig {
@@ -1150,7 +1150,7 @@ mod tests {
                 max_num_naks_per_packet: 2,
                 max_message_size: 10,
             }),
-            Arc::new(SendBufferPool::new(1000, 1)),
+            Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::encryption::NoEncryption {}))),
             3,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1255,7 +1255,7 @@ mod tests {
         let mut send_socket = MockSendSocket::new();
         send_socket.expect_local_addr()
             .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
-        let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+        let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}));
 
         let mut inner = ReceiveStreamInner::new(
             Arc::new(EffectiveReceiveStreamConfig {
@@ -1265,7 +1265,7 @@ mod tests {
                 max_num_naks_per_packet: 2,
                 max_message_size: 10,
             }),
-            Arc::new(SendBufferPool::new(1000, 1)),
+            Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::encryption::NoEncryption {}))),
             3,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),

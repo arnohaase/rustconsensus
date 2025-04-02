@@ -1,7 +1,7 @@
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::packet_header::{PacketHeader, PacketKind};
 use crate::send_pipeline::SendPipeline;
-use bytes::{BufMut, BytesMut};
+use bytes::BufMut;
 use std::cmp::min;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 use tokio::time;
 use tracing::{debug, trace};
 use crate::buffers::buffer_pool::SendBufferPool;
+use crate::buffers::fixed_buffer::FixedBuf;
 use crate::config::EffectiveSendStreamConfig;
 use crate::message_header::MessageHeader;
 use crate::packet_id::PacketId;
@@ -24,10 +25,10 @@ struct SendStreamInner {
     peer_addr: SocketAddr,
     self_reply_to_addr: Option<SocketAddr>,
 
-    send_buffer: BTreeMap<PacketId, BytesMut>,
+    send_buffer: BTreeMap<PacketId, FixedBuf>,
     /// next unsent packet, either already in 'work in progress' or next one to go there
     work_in_progress_packet_id: PacketId,
-    work_in_progress: Option<BytesMut>,
+    work_in_progress: Option<FixedBuf>,
     work_in_progress_late_send_handle: Option<tokio::task::JoinHandle<()>>,
     buffer_pool: Arc<SendBufferPool>,
 }
@@ -36,7 +37,7 @@ impl SendStreamInner {
         PacketHeader::serialized_len_for_stream_header(self.self_reply_to_addr)
     }
 
-    fn init_wip(&mut self, first_message_offset: Option<u16>) -> &mut BytesMut {
+    fn init_wip(&mut self, first_message_offset: Option<u16>) -> &mut FixedBuf {
         assert!(self.work_in_progress.is_none());
 
         let mut new_buffer = self.buffer_pool.get_from_pool();
@@ -64,7 +65,7 @@ impl SendStreamInner {
             send_buffer_low_water_mark: self.low_water_mark(),
         }.ser(&mut send_buf);
 
-        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
+        self.send_socket.finalize_and_send_packet(self.peer_addr, send_buf.as_mut()).await;
         self.buffer_pool.return_to_pool(send_buf);
     }
 
@@ -80,7 +81,7 @@ impl SendStreamInner {
 
         trace!("actually sending packet to {:?} on stream {}: {:?}", self.peer_addr, self.stream_id, wip.as_ref());
 
-        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut wip).await;
+        self.send_socket.finalize_and_send_packet(self.peer_addr, wip.as_mut()).await;
         //NB: we don't handle a send error but keep the (potentially) unsent packet in our send buffer
 
         self.send_buffer.insert(self.work_in_progress_packet_id, wip);
@@ -186,7 +187,7 @@ impl SendStream {
 
         for packet_id in &message.packet_id_resend_set {
             if let Some(packet) = inner.send_buffer.get(packet_id) {
-                inner.send_socket.do_send_packet(inner.peer_addr, packet).await;
+                inner.send_socket.do_send_packet(inner.peer_addr, packet.as_ref()).await;
             }
             else {
                 debug!("NAK requested packet that is no longer in the send buffer");
@@ -307,7 +308,7 @@ mod tests {
         send_socket.expect_do_send_packet()
             .with(
                 eq(SocketAddr::from(([1,2,3,4], 9))),
-                eq(BytesMut::from(expected_message.as_slice())),
+                eq(FixedBuf::from_slice(expected_message.as_slice())),
             )
             .return_const(())
         ;
@@ -320,10 +321,10 @@ mod tests {
             }),
             3,
             8,
-            Arc::new(SendPipeline::new(Arc::new(send_socket))),
+            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(SendBufferPool::new(30, 10)),
+            Arc::new(SendBufferPool::new(30, 10, Arc::new(crate::encryption::NoEncryption {}))),
         );
 
         let rt = Builder::new_current_thread()
@@ -332,7 +333,7 @@ mod tests {
             .build().unwrap();
         rt.block_on(async move {
             for packet_id in initial_send_buffer {
-                let mut bm = BytesMut::with_capacity(30);
+                let mut bm = FixedBuf::new(30);
                 bm.put_slice(vec![packet_id].as_slice());
 
                 send_stream.inner.write().await
@@ -343,7 +344,7 @@ mod tests {
             send_stream.inner.write().await
                 .work_in_progress = initial_wip_packet.map(
                 |buf| {
-                    let mut bm = BytesMut::with_capacity(30);
+                    let mut bm = FixedBuf::new(30);
                     bm.put_slice(buf.as_slice());
                     bm
                 });
@@ -384,7 +385,7 @@ mod tests {
             send_socket.expect_do_send_packet()
                 .with(
                     eq(SocketAddr::from(([1,2,3,4], 9))),
-                    eq(BytesMut::from(vec![packet_id].as_slice())),
+                    eq(FixedBuf::from_slice(vec![packet_id].as_slice())),
                 )
                 .return_const(())
             ;
@@ -398,10 +399,10 @@ mod tests {
             }),
             3,
             4,
-            Arc::new(SendPipeline::new(Arc::new(send_socket))),
+            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(SendBufferPool::new(30, 10)),
+            Arc::new(SendBufferPool::new(30, 10, Arc::new(crate::encryption::NoEncryption {}))),
         );
 
         let rt = Builder::new_current_thread()
@@ -411,7 +412,7 @@ mod tests {
         rt.block_on(async move {
             for packet_id in send_buffer_ids {
                 send_stream.inner.write().await
-                    .send_buffer.insert(PacketId::from_raw(packet_id.safe_cast()), BytesMut::from(vec![packet_id].as_slice()));
+                    .send_buffer.insert(PacketId::from_raw(packet_id.safe_cast()), FixedBuf::from_slice(vec![packet_id].as_slice()));
             }
 
             send_stream.on_nak_message(msg).await;
@@ -442,7 +443,7 @@ mod tests {
         send_socket.expect_do_send_packet()
             .with(
                 eq(SocketAddr::from(([1,2,3,4], 9))),
-                eq(BytesMut::from(expected_response.as_slice())),
+                eq(FixedBuf::from_slice(expected_response.as_slice())),
             )
             .return_const(())
         ;
@@ -455,10 +456,10 @@ mod tests {
             }),
             4,
             7,
-            Arc::new(SendPipeline::new(Arc::new(send_socket))),
+            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(SendBufferPool::new(30, 10)),
+            Arc::new(SendBufferPool::new(30, 10, Arc::new(crate::encryption::NoEncryption {}))),
         );
 
         let expected_send_buffer_ids = expected_send_buffer_ids
@@ -472,10 +473,10 @@ mod tests {
             .build().unwrap();
         rt.block_on(async move {
             for packet_id in initial_send_buffer_ids {
-                let mut buf = BytesMut::with_capacity(30);
+                let mut buf = FixedBuf::new(30);
                 buf.put_u8(packet_id);
 
-                let buf2 = BytesMut::from(vec![packet_id].as_slice());
+                let buf2 = FixedBuf::from_slice(vec![packet_id].as_slice());
 
                 assert_eq!(buf, buf2);
 
@@ -576,10 +577,10 @@ mod tests {
             }),
             5,
             4,
-            Arc::new(SendPipeline::new(Arc::new(send_socket))),
+            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(SendBufferPool::new(max_payload_len, 10)),
+            Arc::new(SendBufferPool::new(max_payload_len, 10, Arc::new(crate::encryption::NoEncryption {}))),
         );
 
         let rt = Builder::new_current_thread()
@@ -599,11 +600,11 @@ mod tests {
 
             let inner = send_stream.inner.read().await;
             let actual_bufs = inner.send_buffer.iter()
-                .map(|(id, buf)| (id.to_raw(), buf.to_vec()))
+                .map(|(id, buf)| (id.to_raw(), buf.as_ref().to_vec()))
                 .collect::<Vec<_>>();
             assert_eq!(actual_bufs, expected_buffers);
             assert_eq!(inner.work_in_progress_packet_id, PacketId::from_raw(expected_wip_packet_id));
-            assert_eq!(inner.work_in_progress.as_ref().map(|buf| buf.to_vec()), expected_wip);
+            assert_eq!(inner.work_in_progress.as_ref().map(|buf| buf.as_ref().to_vec()), expected_wip);
         });
     }
 
@@ -620,10 +621,10 @@ mod tests {
                 late_send_delay: None,
                 send_window_size: 4,
             }),
-            buffer_pool: Arc::new(SendBufferPool::new(0, 10)),
+            buffer_pool: Arc::new(SendBufferPool::new(0, 10, Arc::new(crate::encryption::NoEncryption {}))),
             generation: 3,
             stream_id: 4,
-            send_socket: Arc::new(SendPipeline::new(Arc::new(MockSendSocket::new()))),
+            send_socket: Arc::new(SendPipeline::new(Arc::new(MockSendSocket::new()), Arc::new(crate::encryption::NoEncryption {}))),
             peer_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             self_reply_to_addr: None,
             send_buffer: Default::default(),
@@ -632,7 +633,7 @@ mod tests {
             work_in_progress_late_send_handle: None,
         };
         for packet in send_buffer {
-            inner.send_buffer.insert(PacketId::from_raw(packet), BytesMut::new());
+            inner.send_buffer.insert(PacketId::from_raw(packet), FixedBuf::new(10));
         }
 
         assert_eq!(inner.low_water_mark(), PacketId::from_raw(expected_low_water_mark));
@@ -653,10 +654,10 @@ mod tests {
                 }),
                 3,
                 4,
-                Arc::new(SendPipeline::new(Arc::new(MockSendSocket::default()))),
+                Arc::new(SendPipeline::new(Arc::new(MockSendSocket::default()), Arc::new(crate::encryption::NoEncryption {}))),
                 SocketAddr::from(([127, 0, 0, 1], 0)),
                 reply_to_addr,
-                Arc::new(SendBufferPool::new(0, 10)),
+                Arc::new(SendBufferPool::new(0, 10, Arc::new(crate::encryption::NoEncryption {}))),
             );
 
             let actual = send_stream.inner.read().await
@@ -692,10 +693,10 @@ mod tests {
                     late_send_delay: None,
                     send_window_size: 4,
                 }),
-                buffer_pool: Arc::new(SendBufferPool::new(100, 10)),
+                buffer_pool: Arc::new(SendBufferPool::new(100, 10, Arc::new(crate::encryption::NoEncryption {}))),
                 generation: 3,
                 stream_id: 4,
-                send_socket: Arc::new(SendPipeline::new(Arc::new(send_socket))),
+                send_socket: Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}))),
                 peer_addr: SocketAddr::from(([1,2,3,4], 9)),
                 self_reply_to_addr: None,
                 send_buffer: Default::default(),
@@ -704,7 +705,7 @@ mod tests {
                 work_in_progress_late_send_handle: None,
             };
             for packet in send_buffer {
-                inner.send_buffer.insert(PacketId::from_raw(packet), BytesMut::new());
+                inner.send_buffer.insert(PacketId::from_raw(packet), FixedBuf::new(10));
             }
 
             inner.send_send_sync().await;

@@ -12,7 +12,13 @@
 //!  supporting infrastructure.
 //!
 
+use std::borrow::Borrow;
+use std::fmt::{Debug, Formatter};
 use bytes::buf::UninitSlice;
+use bytes::BufMut;
+
+/// A type alias for the most widely used kind of fixed buffer
+pub type FixedBuf = FixedBuffer<VecFixed>;
 
 
 pub struct VecFixed {
@@ -49,6 +55,7 @@ pub trait FixedBufferInternal {
 
 
 /// This is a fixed-length, pre-allocated buffer that allows partial in-place encryption.
+#[derive(Eq)]
 pub struct FixedBuffer<T: FixedBufferInternal> {
     internal: T,
     /// the offset up to which the buffer contains data
@@ -77,8 +84,41 @@ impl <T: FixedBufferInternal> FixedBuffer<T> {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
     pub fn capacity(&self) -> usize {
         self.internal.raw_buf().len()
+    }
+
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    #[cfg(test)]
+    pub fn from_slice(data: &[u8]) -> FixedBuf {
+        let mut result = FixedBuf::new(data.len());
+        result.put_slice(data);
+        result
+    }
+}
+
+impl<T: FixedBufferInternal> PartialEq for FixedBuffer<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref().eq(other.as_ref())
+    }
+}
+
+impl<T: FixedBufferInternal> Debug for FixedBuffer<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.as_ref().fmt(f)
+    }
+}
+
+impl<T: FixedBufferInternal> Borrow<[u8]> for FixedBuffer<T> {
+    fn borrow(&self) -> &[u8] {
+        self.as_ref()
     }
 }
 

@@ -1,16 +1,17 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use aead::{AeadInPlace, Nonce};
 use aes_gcm::Aes256Gcm;
-use bytes::{BufMut, BytesMut};
+use bytes::BufMut;
+use crate::buffers::fixed_buffer::FixedBuf;
 use crate::packet_header::PacketHeader;
 
 
 pub trait RudpEncryption: Send + Sync {
     fn encryption_overhead(&self) -> usize;
 
-    fn init_buffer(&self, buffer: &mut BytesMut);
+    fn init_buffer(&self, buffer: &mut FixedBuf);
 
-    fn encrypt_buffer(&self, plaintext: &[u8], ciphertext: &mut BytesMut);
+    fn encrypt_buffer(&self, plaintext: &[u8], ciphertext: &mut FixedBuf);
 }
 
 pub struct NoEncryption;
@@ -19,11 +20,11 @@ impl RudpEncryption for NoEncryption {
         0
     }
 
-    fn init_buffer(&self, _buffer: &mut BytesMut) {
+    fn init_buffer(&self, _buffer: &mut FixedBuf) {
         // nothing to be done
     }
 
-    fn encrypt_buffer(&self, _plaintext: &[u8], _ciphertext: &mut BytesMut) {
+    fn encrypt_buffer(&self, _plaintext: &[u8], _ciphertext: &mut FixedBuf) {
         // nothing to be done
     }
 }
@@ -44,13 +45,13 @@ impl RudpEncryption for AesEncryption {
 
 
     /// write the encryption header (with a new, unique nonce) to an empty buffer
-    fn init_buffer(&self, buffer: &mut BytesMut) {
+    fn init_buffer(&self, buffer: &mut FixedBuf) {
         buffer.put_u8(PacketHeader::PROTOCOL_VERSION_1);
         buffer.put_u32(self.nonce_fixed);
         buffer.put_u64(self.nonce_incremented.fetch_add(1, Ordering::AcqRel));
     }
 
-    fn encrypt_buffer(&self, plaintext: &[u8], ciphertext: &mut BytesMut) {
+    fn encrypt_buffer(&self, plaintext: &[u8], ciphertext: &mut FixedBuf) {
         let nonce = {
             let mut nonce_array = [0u8; 12];
             let mut nonce_buf_mut: &mut [u8] = &mut nonce_array;
