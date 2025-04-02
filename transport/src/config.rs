@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use anyhow::bail;
 use rustc_hash::FxHashMap;
-use crate::encryption::RudpEncryption;
+use crate::buffers::encryption::RudpEncryption;
 
 pub struct RudpConfig {
     /// This is the payload size inside UDP packets that RUDP assumes. Since RUDP enforces

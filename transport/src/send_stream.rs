@@ -326,10 +326,10 @@ mod tests {
             }),
             3,
             8,
-            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}))),
+            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(SendBufferPool::new(30, 10, Arc::new(crate::encryption::NoEncryption {}))),
+            Arc::new(SendBufferPool::new(30, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
         );
 
         let rt = Builder::new_current_thread()
@@ -404,10 +404,10 @@ mod tests {
             }),
             3,
             4,
-            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}))),
+            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(SendBufferPool::new(30, 10, Arc::new(crate::encryption::NoEncryption {}))),
+            Arc::new(SendBufferPool::new(30, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
         );
 
         let rt = Builder::new_current_thread()
@@ -461,10 +461,10 @@ mod tests {
             }),
             4,
             7,
-            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}))),
+            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(SendBufferPool::new(30, 10, Arc::new(crate::encryption::NoEncryption {}))),
+            Arc::new(SendBufferPool::new(30, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
         );
 
         let expected_send_buffer_ids = expected_send_buffer_ids
@@ -582,10 +582,10 @@ mod tests {
             }),
             5,
             4,
-            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}))),
+            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(SendBufferPool::new(max_payload_len, 10, Arc::new(crate::encryption::NoEncryption {}))),
+            Arc::new(SendBufferPool::new(max_payload_len, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
         );
 
         let rt = Builder::new_current_thread()
@@ -626,10 +626,10 @@ mod tests {
                 late_send_delay: None,
                 send_window_size: 4,
             }),
-            buffer_pool: Arc::new(SendBufferPool::new(0, 10, Arc::new(crate::encryption::NoEncryption {}))),
+            buffer_pool: Arc::new(SendBufferPool::new(0, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
             generation: 3,
             stream_id: 4,
-            send_socket: Arc::new(SendPipeline::new(Arc::new(MockSendSocket::new()), Arc::new(crate::encryption::NoEncryption {}))),
+            send_socket: Arc::new(SendPipeline::new(Arc::new(MockSendSocket::new()), Arc::new(crate::buffers::encryption::NoEncryption {}))),
             peer_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             self_reply_to_addr: None,
             send_buffer: Default::default(),
@@ -659,10 +659,10 @@ mod tests {
                 }),
                 3,
                 4,
-                Arc::new(SendPipeline::new(Arc::new(MockSendSocket::default()), Arc::new(crate::encryption::NoEncryption {}))),
+                Arc::new(SendPipeline::new(Arc::new(MockSendSocket::default()), Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 SocketAddr::from(([127, 0, 0, 1], 0)),
                 reply_to_addr,
-                Arc::new(SendBufferPool::new(0, 10, Arc::new(crate::encryption::NoEncryption {}))),
+                Arc::new(SendBufferPool::new(0, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
             );
 
             let actual = send_stream.inner.read().await
@@ -698,10 +698,10 @@ mod tests {
                     late_send_delay: None,
                     send_window_size: 4,
                 }),
-                buffer_pool: Arc::new(SendBufferPool::new(100, 10, Arc::new(crate::encryption::NoEncryption {}))),
+                buffer_pool: Arc::new(SendBufferPool::new(100, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 generation: 3,
                 stream_id: 4,
-                send_socket: Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::encryption::NoEncryption {}))),
+                send_socket: Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 peer_addr: SocketAddr::from(([1,2,3,4], 9)),
                 self_reply_to_addr: None,
                 send_buffer: Default::default(),

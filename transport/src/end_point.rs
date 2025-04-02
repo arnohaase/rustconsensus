@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{debug, error, info, trace, warn};
-use crate::encryption::{NoEncryption, RudpEncryption};
+use crate::buffers::encryption::{NoEncryption, RudpEncryption};
 //TODO unit test
 
 /// EndPoint is the place where all other parts of the protocol come together: It listens on a

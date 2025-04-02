@@ -232,7 +232,6 @@ mod packet_id;
 mod message_header;
 pub mod safe_converter;
 pub mod config;
-mod encryption;
 pub mod buffers;
 
 #[cfg(test)]

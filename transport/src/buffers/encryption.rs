@@ -12,7 +12,7 @@ pub trait RudpEncryption: Send + Sync {
 
     fn init_buffer(&self, buffer: &mut FixedBuf);
 
-    fn encrypt_buffer(&self, plaintext: &[u8], ciphertext: &mut FixedBuf);
+    fn encrypt_buffer(&self, buf: &mut FixedBuf);
 }
 
 pub struct NoEncryption;
@@ -25,7 +25,7 @@ impl RudpEncryption for NoEncryption {
         buffer.put_u8(PacketHeader::PROTOCOL_VERSION_1);
     }
 
-    fn encrypt_buffer(&self, _plaintext: &[u8], _ciphertext: &mut FixedBuf) {
+    fn encrypt_buffer(&self, _buf: &mut FixedBuf) {
         // nothing to be done
     }
 }
@@ -56,7 +56,7 @@ impl RudpEncryption for AesEncryption {
         buffer.put_u64(self.nonce_incremented.fetch_add(1, Ordering::AcqRel));
     }
 
-    fn encrypt_buffer(&self, plaintext: &[u8], full_buf: &mut FixedBuf) {
+    fn encrypt_buffer(&self, full_buf: &mut FixedBuf) {
         let mut buf = FixedBuffer::from_buf(ArrayFixedBuf::<12>::new());
         buf.put_u32(self.nonce_fixed);
         buf.put_u64(self.nonce_incremented.fetch_add(1, Ordering::AcqRel));

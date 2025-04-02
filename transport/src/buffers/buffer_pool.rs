@@ -3,7 +3,7 @@ use bytes::{BufMut, BytesMut};
 use std::sync::{Arc, Mutex};
 use tracing::{debug, trace};
 use crate::buffers::fixed_buffer::{FixedBuf, FixedBuffer};
-use crate::encryption::RudpEncryption;
+use crate::buffers::encryption::RudpEncryption;
 use crate::packet_header::PacketHeader;
 
 pub struct SendBufferPool {
@@ -66,7 +66,7 @@ impl SendBufferPool {
 mod tests {
     use aead::Buffer;
     use bytes::BufMut;
-    use crate::encryption::NoEncryption;
+    use crate::buffers::encryption::NoEncryption;
     use crate::message_header::MessageHeader;
     use super::*;
 
