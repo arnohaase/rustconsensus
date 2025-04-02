@@ -2,7 +2,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use aead::{AeadInPlace, Nonce};
 use aes_gcm::Aes256Gcm;
 use bytes::BufMut;
-use crate::buffers::fixed_buffer::FixedBuf;
+use tracing::error;
+use crate::buffers::fixed_buffer::{ArrayFixedBuf, FixedBuf, FixedBuffer};
 use crate::packet_header::PacketHeader;
 
 
@@ -35,6 +36,10 @@ pub struct AesEncryption {
     nonce_fixed: u32,
     nonce_incremented: AtomicU64,
 }
+impl AesEncryption {
+    const INIT_PREFIX_LEN: usize = 13; // version + nonce
+}
+
 
 impl RudpEncryption for AesEncryption {
     fn encryption_overhead(&self) -> usize {
@@ -51,32 +56,21 @@ impl RudpEncryption for AesEncryption {
         buffer.put_u64(self.nonce_incremented.fetch_add(1, Ordering::AcqRel));
     }
 
-    fn encrypt_buffer(&self, plaintext: &[u8], ciphertext: &mut FixedBuf) {
-        let nonce = {
-            let mut nonce_array = [0u8; 12];
-            let mut nonce_buf_mut: &mut [u8] = &mut nonce_array;
-            let nonce_buf_mut_ref = &mut nonce_buf_mut;
-            nonce_buf_mut_ref.put_u32(self.nonce_fixed);
-            nonce_buf_mut_ref.put_u64(self.nonce_incremented.fetch_add(1, Ordering::AcqRel));
-            Nonce::<Aes256Gcm>::from_slice(todo!()) //&nonce_array)
-        };
+    fn encrypt_buffer(&self, plaintext: &[u8], full_buf: &mut FixedBuf) {
+        let mut buf = FixedBuffer::from_buf(ArrayFixedBuf::<12>::new());
+        buf.put_u32(self.nonce_fixed);
+        buf.put_u64(self.nonce_incremented.fetch_add(1, Ordering::AcqRel));
+        let nonce = Nonce::<Aes256Gcm>::from_slice(buf.as_ref());
 
-
-
-
-        let mut a = [0u8; 1024];
-        let mut b: &mut [u8] = &mut a;
-        let mut c = &mut b;
-
-
-        // match self.cipher.encrypt_in_place(nonce, b"", c) { //TODO
-        //     Ok(()) => {}
-        //     Err(e) => {
-        //         todo!()
-        //     }
-        // }
-
-
-        todo!()
+        let mut buf = full_buf.slice(Self::INIT_PREFIX_LEN);
+        match self.cipher.encrypt_in_place(nonce, b"", &mut buf) {
+            Ok(()) => {}
+            Err(e) => {
+                error!("encryption error: {}", e);
+                panic!("encryption error");
+            }
+        }
     }
 }
+
+//TODO unit tests

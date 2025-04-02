@@ -18,13 +18,16 @@ use bytes::buf::UninitSlice;
 use bytes::BufMut;
 
 /// A type alias for the most widely used kind of fixed buffer
-pub type FixedBuf = FixedBuffer<VecFixed>;
+pub type FixedBuf = FixedBuffer<VecFixedBuf>;
 
 
-pub struct VecFixed {
+//TODO unit tests
+
+/// The internal buffer representation for a heap-allocated fixed buffer
+pub struct VecFixedBuf {
     raw: Vec<u8>,
 }
-impl FixedBufferInternal for VecFixed {
+impl FixedBufferInternal for VecFixedBuf {
     fn raw_buf(&self) -> &[u8] {
         self.raw.as_slice()
     }
@@ -34,10 +37,31 @@ impl FixedBufferInternal for VecFixed {
     }
 }
 
-pub struct SliceFixed<'a> {
+pub struct SliceFixedBuf<'a> {
     raw: &'a mut [u8],
 }
-impl <'a> FixedBufferInternal for SliceFixed<'a> {
+impl <'a> FixedBufferInternal for SliceFixedBuf<'a> {
+    fn raw_buf(&self) -> &[u8] {
+        &self.raw
+    }
+
+    fn raw_buf_mut(&mut self) -> &mut [u8] {
+        &mut self.raw
+    }
+}
+
+/// An array-backed buffer representation, for cases when the buffer size is known at compile time
+pub struct ArrayFixedBuf<const N: usize> {
+    raw: [u8; N],
+}
+impl<const N: usize> ArrayFixedBuf<N> {
+    pub fn new() -> Self {
+        ArrayFixedBuf {
+            raw: [0; N],
+        }
+    }
+}
+impl <const N: usize> FixedBufferInternal for ArrayFixedBuf<N> {
     fn raw_buf(&self) -> &[u8] {
         &self.raw
     }
@@ -62,24 +86,31 @@ pub struct FixedBuffer<T: FixedBufferInternal> {
     len: usize
 }
 
-impl FixedBuffer<VecFixed> {
+impl FixedBuffer<VecFixedBuf> {
     /// create a new FixedBuffer instance with the given buffer capacity
-    pub fn new(capacity: usize) -> FixedBuffer<VecFixed> {
+    pub fn new(capacity: usize) -> FixedBuffer<VecFixedBuf> {
         FixedBuffer {
             // in this particular use case, there is no real benefit in lazily initializing the
             //  buffer since buffers are reused aggressively, and we trade the overhead of
             //  initial initialization for simplicity
-            internal: VecFixed { raw: vec![0; capacity] },
+            internal: VecFixedBuf { raw: vec![0; capacity] },
             len: 0,
         }
     }
 }
 
 impl <T: FixedBufferInternal> FixedBuffer<T> {
-    /// create a limited-lifetime fixed buffer backed by a slice of self's buffer
-    pub fn create_view(&mut self, start_offs: usize) -> FixedBuffer<SliceFixed> {
+    pub fn from_buf(buf: T) -> FixedBuffer<T> {
         FixedBuffer {
-            internal: SliceFixed { raw: &mut self.internal.raw_buf_mut()[start_offs..] },
+            internal: buf,
+            len: 0,
+        }
+    }
+
+    /// create a limited-lifetime fixed buffer backed by a slice of self's buffer
+    pub fn slice(&mut self, start_offs: usize) -> FixedBuffer<SliceFixedBuf> {
+        FixedBuffer {
+            internal: SliceFixedBuf { raw: &mut self.internal.raw_buf_mut()[start_offs..] },
             len: 0,
         }
     }
