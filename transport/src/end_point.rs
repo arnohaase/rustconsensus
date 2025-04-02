@@ -91,6 +91,7 @@ impl EndPoint {
         let mut receive_streams: FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>> = FxHashMap::default();
 
         let mut buf = self.buffer_pool.get_from_pool();
+        buf.maximize_len();
         loop {
             let (num_read, from) = match self.receive_socket.recv_from(buf.as_mut()).await {
                 Ok(x) => {
@@ -102,9 +103,22 @@ impl EndPoint {
                 }
             };
 
-            trace!("received packet from {:?}", from); //TODO instrument with unique ID per packet
+            trace!("received packet from {:?}: {:?}", from, &buf.as_ref()[..num_read]); //TODO instrument with unique ID per packet
 
-            let parse_buf = &mut &buf.as_ref()[..num_read];
+            if buf.len() < self.encryption.prefix_len() {
+                debug!("incomplete packet header - dropping");
+                continue;
+            }
+            if buf.as_ref()[0] != PacketHeader::PROTOCOL_VERSION_1 {
+                debug!("wrong protocol version {} - dropping", buf.as_ref()[0]);
+                continue;
+            }
+            if self.encryption.decrypt_buffer(&mut buf).is_err() {
+                debug!("cryptographically invalid - dropping");
+                continue;
+            }
+
+            let parse_buf = &mut &buf.as_ref()[self.encryption.prefix_len()..num_read];
             let packet_header = match PacketHeader::deser(parse_buf, PacketHeader::PROTOCOL_VERSION_1) {
                 Ok(header) => {
                     header
@@ -114,8 +128,6 @@ impl EndPoint {
                     continue;
                 },
             };
-
-            //TODO verify checksum
 
             let peer_addr = packet_header.reply_to_address
                 .unwrap_or(from);

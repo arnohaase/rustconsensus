@@ -1,3 +1,4 @@
+use aead::{AeadMutInPlace, Buffer};
 use aes_gcm::{Aes256Gcm, Key, AeadInPlace};
 
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Nonce};
@@ -27,6 +28,12 @@ fn main() {
     println!("plaintext: {:?}", plaintext);
 }
 
+
+fn decrypt_in_place(cipher: &Aes256Gcm, nonce: &Nonce<Aes256Gcm>, buffer: &mut impl Buffer) {
+    cipher.decrypt_in_place(nonce, b"", buffer)
+        .unwrap()
+
+}
 
 fn encrypt_in_place_bytesmut(
     cipher: &Aes256Gcm,

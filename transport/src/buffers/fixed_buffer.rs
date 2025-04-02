@@ -118,6 +118,9 @@ impl <T: FixedBufferInternal> FixedBuffer<T> {
     pub fn len(&self) -> usize {
         self.len
     }
+    pub fn maximize_len(&mut self) {
+        self.len = self.capacity();
+    }
 
     pub fn capacity(&self) -> usize {
         self.internal.raw_buf().len()

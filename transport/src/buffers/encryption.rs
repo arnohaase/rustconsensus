@@ -8,15 +8,28 @@ use crate::packet_header::PacketHeader;
 
 
 pub trait RudpEncryption: Send + Sync {
+    /// This is the number of bytes added at the start of a packet, before the actually encrypted
+    ///  payload
+    fn prefix_len(&self) -> usize;
+
+    /// This can be greater than the prefix length if the ciphertext is longer then the plaintext,
+    ///  e.g. because it includes a tag / hash for verification
     fn encryption_overhead(&self) -> usize;
+
 
     fn init_buffer(&self, buffer: &mut FixedBuf);
 
     fn encrypt_buffer(&self, buf: &mut FixedBuf);
+
+    fn decrypt_buffer(&self, buf: &mut FixedBuf) -> aead::Result<()>;
 }
 
 pub struct NoEncryption;
 impl RudpEncryption for NoEncryption {
+    fn prefix_len(&self) -> usize {
+        1 // protocol version
+    }
+
     fn encryption_overhead(&self) -> usize {
         1 // protocol version
     }
@@ -28,6 +41,11 @@ impl RudpEncryption for NoEncryption {
     fn encrypt_buffer(&self, _buf: &mut FixedBuf) {
         // nothing to be done
     }
+
+    fn decrypt_buffer(&self, _buf: &mut FixedBuf) -> aead::Result<()> {
+        // nothing to be done
+        Ok(())
+    }
 }
 
 
@@ -36,12 +54,13 @@ pub struct AesEncryption {
     nonce_fixed: u32,
     nonce_incremented: AtomicU64,
 }
-impl AesEncryption {
-    const INIT_PREFIX_LEN: usize = 13; // version + nonce
-}
-
 
 impl RudpEncryption for AesEncryption {
+    fn prefix_len(&self) -> usize {
+        1          // protocol version
+            + 12   // nonce
+    }
+
     fn encryption_overhead(&self) -> usize {
         1           // protocol version
             + 12    // nonce
@@ -62,7 +81,7 @@ impl RudpEncryption for AesEncryption {
         buf.put_u64(self.nonce_incremented.fetch_add(1, Ordering::AcqRel));
         let nonce = Nonce::<Aes256Gcm>::from_slice(buf.as_ref());
 
-        let mut buf = full_buf.slice(Self::INIT_PREFIX_LEN);
+        let mut buf = full_buf.slice(self.prefix_len());
         match self.cipher.encrypt_in_place(nonce, b"", &mut buf) {
             Ok(()) => {}
             Err(e) => {
@@ -70,6 +89,10 @@ impl RudpEncryption for AesEncryption {
                 panic!("encryption error");
             }
         }
+    }
+
+    fn decrypt_buffer(&self, full_buf: &mut FixedBuf) -> aead::Result<()> {
+        todo!()
     }
 }
 
