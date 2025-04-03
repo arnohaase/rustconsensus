@@ -1,4 +1,4 @@
-use crate::buffers::fixed_buffer::{ArrayFixedBuf, FixedBuf, FixedBuffer};
+use crate::buffers::fixed_buffer::FixedBuf;
 use crate::packet_header::PacketHeader;
 use aead::{AeadCore, AeadInPlace, Key, KeyInit, Nonce, OsRng};
 use aes_gcm::Aes256Gcm;
@@ -123,13 +123,13 @@ impl RudpEncryption for Aes256GcmEncryption {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use super::*;
 
-    #[test]
-    fn test_encrypt_decrypt() {
-        // let encryption = NoEncryption;
-        let encryption = Aes256GcmEncryption::new(&[9u8;32]);
-
+    #[rstest]
+    #[case(NoEncryption)]
+    #[case(Aes256GcmEncryption::new(&[9u8;32]))]
+    fn test_encrypt_decrypt(#[case] encryption: impl RudpEncryption + 'static) {
         let plaintext = b"hello world";
 
         let mut buf = FixedBuf::new(100);

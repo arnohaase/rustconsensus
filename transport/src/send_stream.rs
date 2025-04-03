@@ -65,7 +65,7 @@ impl SendStreamInner {
             send_buffer_low_water_mark: self.low_water_mark(),
         }.ser(&mut send_buf);
 
-        self.send_socket.finalize_and_send_packet(self.peer_addr, send_buf.as_mut()).await;
+        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
         self.buffer_pool.return_to_pool(send_buf);
     }
 
@@ -81,7 +81,7 @@ impl SendStreamInner {
 
         trace!("actually sending packet to {:?} on stream {}: {:?}", self.peer_addr, self.stream_id, wip.as_ref());
 
-        self.send_socket.finalize_and_send_packet(self.peer_addr, wip.as_mut()).await;
+        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut wip).await;
         //NB: we don't handle a send error but keep the (potentially) unsent packet in our send buffer
 
         self.send_buffer.insert(self.work_in_progress_packet_id, wip);

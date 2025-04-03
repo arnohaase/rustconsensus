@@ -113,7 +113,7 @@ impl ReceiveStreamInner {
         let mut send_buf = self.buffer_pool.get_from_pool();
         header.ser(&mut send_buf);
 
-        self.send_pipeline.finalize_and_send_packet(self.peer_addr, send_buf.as_mut()).await;
+        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
         self.buffer_pool.return_to_pool(send_buf);
     }
 
@@ -131,7 +131,7 @@ impl ReceiveStreamInner {
         trace!("sending RECV_SYNC: {:?}", msg);
         msg.ser(&mut send_buf);
 
-        self.send_pipeline.finalize_and_send_packet(self.peer_addr, send_buf.as_mut()).await;
+        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
         self.buffer_pool.return_to_pool(send_buf);
     }
 
@@ -168,7 +168,7 @@ impl ReceiveStreamInner {
             send_buf.put_u64(packet_id.to_raw());
         }
 
-        self.send_pipeline.finalize_and_send_packet(self.peer_addr, send_buf.as_mut()).await;
+        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
         self.buffer_pool.return_to_pool(send_buf);
     }
 

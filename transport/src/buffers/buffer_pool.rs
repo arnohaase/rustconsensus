@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let mut pool = SendBufferPool::new(10, 10, Arc::new(NoEncryption{}));
+        let pool = SendBufferPool::new(10, 10, Arc::new(NoEncryption{}));
 
         let mut buf = FixedBuf::new(10);
         buf.put_u8(1);
