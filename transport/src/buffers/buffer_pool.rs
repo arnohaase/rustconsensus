@@ -1,10 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use bytes::{BufMut, BytesMut};
 use std::sync::{Arc, Mutex};
 use tracing::{debug, trace};
-use crate::buffers::fixed_buffer::{FixedBuf, FixedBuffer};
+use crate::buffers::fixed_buffer::{FixedBuf};
 use crate::buffers::encryption::RudpEncryption;
-use crate::packet_header::PacketHeader;
 
 pub struct SendBufferPool {
     buf_size: usize,
@@ -64,10 +61,9 @@ impl SendBufferPool {
 
 #[cfg(test)]
 mod tests {
-    use aead::Buffer;
     use bytes::BufMut;
     use crate::buffers::encryption::NoEncryption;
-    use crate::message_header::MessageHeader;
+    use crate::packet_header::PacketHeader;
     use super::*;
 
     #[test]

@@ -1,10 +1,10 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use aead::{AeadInPlace, Nonce};
-use aes_gcm::Aes256Gcm;
-use bytes::BufMut;
-use tracing::error;
 use crate::buffers::fixed_buffer::{ArrayFixedBuf, FixedBuf, FixedBuffer};
 use crate::packet_header::PacketHeader;
+use aead::{AeadCore, AeadInPlace, Key, KeyInit, Nonce, OsRng};
+use aes_gcm::Aes256Gcm;
+use bytes::{Buf, BufMut};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tracing::error;
 
 
 pub trait RudpEncryption: Send + Sync {
@@ -49,13 +49,38 @@ impl RudpEncryption for NoEncryption {
 }
 
 
-pub struct AesEncryption {
+pub struct Aes256GcmEncryption {
     cipher: Aes256Gcm,
     nonce_fixed: u32,
     nonce_incremented: AtomicU64,
 }
 
-impl RudpEncryption for AesEncryption {
+impl Aes256GcmEncryption {
+    /// key must be exactly 32 bytes
+    pub fn new(key: &[u8]) -> Self {
+        let key = Key::<Aes256Gcm>::from_slice(key);
+        let cipher = Aes256Gcm::new(&key);
+
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let mut nonce_slice = nonce.as_slice();
+        let nonce_buf = &mut nonce_slice;
+        let nonce_fixed = nonce_buf.get_u32();
+        let nonce_incremented = AtomicU64::new(nonce_buf.get_u64());
+
+        Aes256GcmEncryption {
+            cipher,
+            nonce_fixed,
+            nonce_incremented,
+        }
+    }
+
+    fn nonce_from_buf(full_buf: &[u8]) -> Nonce<Aes256Gcm> {
+        let nonce_buf: [u8;12] = full_buf.as_ref()[1..13].try_into().unwrap();
+        Nonce::<Aes256Gcm>::from(nonce_buf)
+    }
+}
+
+impl RudpEncryption for Aes256GcmEncryption {
     fn prefix_len(&self) -> usize {
         1          // protocol version
             + 12   // nonce
@@ -76,13 +101,9 @@ impl RudpEncryption for AesEncryption {
     }
 
     fn encrypt_buffer(&self, full_buf: &mut FixedBuf) {
-        let mut buf = FixedBuffer::from_buf(ArrayFixedBuf::<12>::new());
-        buf.put_u32(self.nonce_fixed);
-        buf.put_u64(self.nonce_incremented.fetch_add(1, Ordering::AcqRel));
-        let nonce = Nonce::<Aes256Gcm>::from_slice(buf.as_ref());
-
+        let nonce = Self::nonce_from_buf(full_buf.as_ref());
         let mut buf = full_buf.slice(self.prefix_len());
-        match self.cipher.encrypt_in_place(nonce, b"", &mut buf) {
+        match self.cipher.encrypt_in_place(&nonce, b"", &mut buf) {
             Ok(()) => {}
             Err(e) => {
                 error!("encryption error: {}", e);
@@ -92,8 +113,32 @@ impl RudpEncryption for AesEncryption {
     }
 
     fn decrypt_buffer(&self, full_buf: &mut FixedBuf) -> aead::Result<()> {
-        todo!()
+        let nonce = Self::nonce_from_buf(full_buf.as_ref());
+        let mut buf = full_buf.slice(self.prefix_len());
+        self.cipher.decrypt_in_place(&nonce, b"", &mut buf)
     }
 }
 
 //TODO unit tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encrypt_decrypt() {
+        // let encryption = NoEncryption;
+        let encryption = Aes256GcmEncryption::new(&[9u8;32]);
+
+        let plaintext = b"hello world";
+
+        let mut buf = FixedBuf::new(100);
+        encryption.init_buffer(&mut buf);
+        buf.put_slice(plaintext);
+
+        encryption.encrypt_buffer(&mut buf);
+        encryption.decrypt_buffer(&mut buf).unwrap();
+
+        assert_eq!(&buf.as_ref()[encryption.prefix_len()..], plaintext);
+    }
+}

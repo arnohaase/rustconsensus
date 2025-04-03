@@ -184,7 +184,7 @@ unsafe impl<T: FixedBufferInternal> bytes::BufMut for FixedBuffer<T> {
 
 impl <T: FixedBufferInternal> aead::Buffer for FixedBuffer<T> {
     fn extend_from_slice(&mut self, other: &[u8]) -> aead::Result<()> {
-        &mut self.internal.raw_buf_mut()[self.len..].copy_from_slice(other);
+        &mut self.internal.raw_buf_mut()[self.len..self.len+other.len()].copy_from_slice(other);
         Ok(())
     }
 

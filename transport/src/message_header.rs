@@ -1,4 +1,4 @@
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut};
 use crate::safe_converter::PrecheckedCast;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +30,7 @@ impl MessageHeader {
 
 #[cfg(test)]
 mod tests {
+    use bytes::BytesMut;
     use super::*;
     use rstest::rstest;
 

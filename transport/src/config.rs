@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 use anyhow::bail;
 use rustc_hash::FxHashMap;
@@ -29,6 +28,13 @@ pub struct RudpConfig {
     /// TODO default value
     /// TODO keep track / limit buffers 'in flight'?
     pub buffer_pool_size: usize,
+    /// This is the shared secret of all nodes, and it must be set to the same value. If a key is
+    ///  present, AES-256-Gcm encryption is applied to all data, and the key must be exactly
+    ///  32 bytes long (per AES spec). If no key is present, packets are sent unencrypted.
+    ///
+    /// NB: There can be no mixed operation, i.e. either *all* nodes share the same key, or no
+    ///      nodes have a key //TODO several keys, phase out
+    pub encryption_key: Option<Vec<u8>>,
 
     //TODO integrate with SendStreamConfig and ReceiveStreamConfig
 
@@ -44,10 +50,11 @@ pub struct RudpConfig {
 impl RudpConfig {
 
     ///TODO documentation - ipv4 with end-to-end full Ethernet MTU - without optional headers
-    pub fn default_ipv4() -> RudpConfig {
+    pub fn default_ipv4(encryption_key: Option<Vec<u8>>) -> RudpConfig {
         RudpConfig {
             payload_size_inside_udp: 1472,
             buffer_pool_size: 4096,
+            encryption_key,
             max_message_size: 16*1024*1024,
             default_send_stream_config: SendStreamConfig {
                 send_delay: Some(Duration::from_millis(1)),
@@ -63,6 +70,8 @@ impl RudpConfig {
             specific_receive_stream_configs: FxHashMap::default(),
         }
     }
+
+    //TODO default_ipv6
 
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.payload_size_inside_udp < 100 {

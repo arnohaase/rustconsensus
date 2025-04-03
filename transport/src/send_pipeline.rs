@@ -2,10 +2,8 @@ use async_trait::async_trait;
 #[cfg(test)] use mockall::automock;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use aes_gcm::Aes256Gcm;
 use tokio::net::UdpSocket;
 use tracing::{error, trace};
-use crate::buffers::buffer_pool::SendBufferPool;
 use crate::buffers::encryption::RudpEncryption;
 
 /// This is an abstraction for sending a buffer on a UDP socket, introduced to facilitate mocking

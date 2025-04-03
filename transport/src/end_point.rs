@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{debug, error, info, trace, warn};
-use crate::buffers::encryption::{NoEncryption, RudpEncryption};
+use crate::buffers::encryption::{Aes256GcmEncryption, NoEncryption, RudpEncryption};
 //TODO unit test
 
 /// EndPoint is the place where all other parts of the protocol come together: It listens on a
@@ -50,7 +50,7 @@ impl EndPoint {
             (receive_socket.clone(), Arc::new(UdpSocket::bind("[::]:0").await?))
         };
 
-        let encryption = Arc::new(NoEncryption{}); //TODO!!!
+        let encryption = Self::create_encryption(&config);
 
         let buffer_pool = Arc::new(SendBufferPool::new(config.payload_size_inside_udp, config.buffer_pool_size, encryption.clone()));
         Ok(EndPoint {
@@ -64,6 +64,17 @@ impl EndPoint {
             buffer_pool,
             encryption,
         })
+    }
+
+    fn create_encryption(config: &RudpConfig) -> Arc<dyn RudpEncryption> {
+        if let Some(key) = &config.encryption_key {
+            info!("setting up AES encryption");
+            Arc::new(Aes256GcmEncryption::new(key))
+        }
+        else {
+            warn!("initializing without encryption - this is for debugging purposes and not recommended for production use");
+            Arc::new(NoEncryption)
+        }
     }
 
     fn generation_from_timestamp() -> anyhow::Result<u64> {
