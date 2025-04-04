@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 use tracing::{debug, trace};
-use crate::buffers::fixed_buffer::{FixedBuf};
+use crate::buffers::fixed_buffer::FixedBuf;
 use crate::buffers::encryption::RudpEncryption;
 
 pub struct SendBufferPool {

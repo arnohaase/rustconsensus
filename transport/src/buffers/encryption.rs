@@ -103,6 +103,7 @@ impl RudpEncryption for Aes256GcmEncryption {
     fn encrypt_buffer(&self, full_buf: &mut FixedBuf) {
         let nonce = Self::nonce_from_buf(full_buf.as_ref());
         let mut buf = full_buf.slice(self.prefix_len());
+
         match self.cipher.encrypt_in_place(&nonce, b"", &mut buf) {
             Ok(()) => {}
             Err(e) => {
@@ -123,8 +124,13 @@ impl RudpEncryption for Aes256GcmEncryption {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
     use super::*;
+    use rstest::rstest;
+
+    use crate::buffers::fixed_buffer::FixedBuf;
+    use aead::{AeadCore, AeadInPlace, Buffer, Key, KeyInit, Nonce};
+    use aes_gcm::Aes256Gcm;
+    use bytes::{Buf, BufMut};
 
     #[rstest]
     #[case(NoEncryption)]
