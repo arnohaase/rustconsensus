@@ -1,7 +1,6 @@
 use crate::packet_id::PacketId;
 use bitflags::bitflags;
-use bytes::{Buf, BufMut, BytesMut};
-use bytes_varint::try_get_fixed::TryGetFixedSupport;
+use bytes::{Buf, BufMut};
 use std::fmt::Debug;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 
@@ -64,8 +63,7 @@ impl PacketHeader {
             Some(SocketAddr::V6(_)) => 16 + 2,
         };
 
-        size_of::<u8>()          // protocol version
-            + size_of::<u8>()    // flags
+        size_of::<u8>()          // flags
             + 6                  // generation as u48
             + reply_to_len
             + size_of::<u16>()   // stream id
@@ -73,9 +71,7 @@ impl PacketHeader {
             + size_of::<u64>()   // packet number
     }
 
-    pub fn ser(&self, buf: &mut BytesMut) {
-        buf.put_u8(self.protocol_version);
-
+    pub fn ser(&self, buf: &mut impl BufMut) {
         let flags_ip = match self.reply_to_address {
             None => Flags::IP_SAME,
             Some(addr) => {
@@ -131,8 +127,7 @@ impl PacketHeader {
         }
     }
 
-    pub fn deser(buf: &mut impl Buf) -> anyhow::Result<PacketHeader> {
-        let protocol_version = buf.try_get_u8()?;
+    pub fn deser(buf: &mut impl Buf, protocol_version: u8) -> anyhow::Result<PacketHeader> {
         if protocol_version != Self::PROTOCOL_VERSION_1 {
             return Err(anyhow::anyhow!("Unsupported protocol version {}", protocol_version));
         }
@@ -219,6 +214,7 @@ mod tests {
     use rstest::rstest;
     use PacketKind::*;
     use std::str::FromStr;
+    use crate::buffers::fixed_buffer::FixedBuf;
 
     #[rstest]
     #[case::no_addr(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 3), "PCKT{V1:INIT(1)@3}")]
@@ -246,10 +242,10 @@ mod tests {
     #[case::big_generation(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 0xffff_ffff))]
     #[case::huge_generation(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 0xffff_ffff_ffff))]
     fn test_packet_header_ser(#[case] header: PacketHeader) {
-        let mut buf = BytesMut::new();
+        let mut buf = FixedBuf::new(100);
         header.ser(&mut buf);
-        let mut b: &[u8] = &mut buf;
-        let deser = PacketHeader::deser(&mut b).unwrap();
+        let mut b: &[u8] = buf.as_mut();
+        let deser = PacketHeader::deser(&mut b, PacketHeader::PROTOCOL_VERSION_1).unwrap();
         assert!(b.is_empty());
         assert_eq!(header, deser);
     }
@@ -265,7 +261,7 @@ mod tests {
     #[case::v6_addr_0(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(0), packet_sequence_number: PacketId::from_raw(u64::MAX) }, 3))]
     #[case::v6_addr_8000(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), RegularSequenced{ stream_id: 1, first_message_offset: Some(8000), packet_sequence_number: PacketId::from_raw(u64::MAX) }, 3))]
     fn test_packet_header_serialized_len_for_stream_header(#[case] header: PacketHeader) {
-        let mut buf = BytesMut::new();
+        let mut buf = FixedBuf::new(1000);
         header.ser(&mut buf);
         let expected = buf.len();
         assert_eq!(PacketHeader::serialized_len_for_stream_header(header.reply_to_address), expected);

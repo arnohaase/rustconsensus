@@ -1,7 +1,6 @@
 use std::fmt::{Debug, Formatter};
 use bytes::{Buf, BufMut, BytesMut};
 use crate::packet_id::PacketId;
-use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use bytes_varint::{VarIntSupport, VarIntSupportMut};
 
 #[derive(Clone, Eq, PartialEq)]
@@ -27,7 +26,7 @@ impl Debug for ControlMessageRecvSync {
     }
 }
 impl ControlMessageRecvSync {
-    pub fn ser(&self, buf: &mut BytesMut) {
+    pub fn ser(&self, buf: &mut impl BufMut) {
         buf.put_u64(self.receive_buffer_high_water_mark.to_raw());
         buf.put_u64(self.receive_buffer_low_water_mark.to_raw());
         buf.put_u64(self.receive_buffer_ack_threshold.to_raw());
@@ -63,7 +62,7 @@ impl Debug for ControlMessageSendSync {
     }
 }
 impl ControlMessageSendSync {
-    pub fn ser(&self, buf: &mut BytesMut) {
+    pub fn ser(&self, buf: &mut impl BufMut) {
         buf.put_u64(self.send_buffer_high_water_mark.to_raw());
         buf.put_u64(self.send_buffer_low_water_mark.to_raw());
     }

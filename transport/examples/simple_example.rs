@@ -32,14 +32,14 @@ async fn main() -> anyhow::Result<()> {
     let a = Arc::new(EndPoint::new(
         addr_a,
         msg_dispatcher.clone(),
-        RudpConfig::default_ipv4(),
+        RudpConfig::default_ipv4(Some(vec![5u8;32])),
     ).instrument(span).await?);
 
     let span = span!(Level::INFO, "node b");
     let b = Arc::new(EndPoint::new(
         addr_b,
         msg_dispatcher.clone(),
-        RudpConfig::default_ipv4(),
+        RudpConfig::default_ipv4(Some(vec![5u8;32])),
     ).instrument(span).await?);
 
     let cloned_a = a.clone();

@@ -4,7 +4,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tracing::{error, trace};
-
+use crate::buffers::encryption::RudpEncryption;
+use crate::buffers::fixed_buffer::FixedBuf;
 
 /// This is an abstraction for sending a buffer on a UDP socket, introduced to facilitate mocking
 ///  the I/O part away for testing
@@ -36,20 +37,21 @@ impl SendSocket for Arc<UdpSocket> {
 #[derive(Clone)]
 pub struct SendPipeline {
     socket: Arc<dyn SendSocket>,
+    encryption: Arc<dyn RudpEncryption>,
 }
 
 impl SendPipeline {
-    pub fn new(socket: Arc<dyn SendSocket>) -> SendPipeline {
-        SendPipeline { socket }
+    pub fn new(socket: Arc<dyn SendSocket>, encryption: Arc<dyn RudpEncryption>) -> SendPipeline {
+        SendPipeline { socket, encryption, }
     }
 
     pub fn local_addr(&self) -> SocketAddr {
         self.socket.local_addr()
     }
 
-    pub async fn finalize_and_send_packet(&self, to: SocketAddr, packet_buf: &mut [u8]) {
-        //TODO encrypt
-        self.socket.do_send_packet(to, packet_buf).await;
+    pub async fn finalize_and_send_packet(&self, to: SocketAddr, packet_buf: &mut FixedBuf) {
+        self.encryption.encrypt_buffer(packet_buf);
+        self.socket.do_send_packet(to, packet_buf.as_ref()).await;
     }
 
     pub async fn do_send_packet(&self, to: SocketAddr, packet_buf: &[u8]) {

@@ -1,5 +1,5 @@
-use crate::atomic_map::AtomicMap;
-use crate::buffer_pool::BufferPool;
+use crate::buffers::atomic_map::AtomicMap;
+use crate::buffers::buffer_pool::SendBufferPool;
 use crate::config::RudpConfig;
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
@@ -13,10 +13,10 @@ use std::collections::hash_map::Entry;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::SystemTime;
+use aead::Buffer;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{debug, error, info, trace, warn};
-
-
+use crate::buffers::encryption::{Aes256GcmEncryption, NoEncryption, RudpEncryption};
 //TODO unit test
 
 /// EndPoint is the place where all other parts of the protocol come together: It listens on a
@@ -30,7 +30,8 @@ pub struct EndPoint {
     send_streams: AtomicMap<(SocketAddr, u16), Arc<SendStream>>,
     message_dispatcher: Arc<dyn MessageDispatcher>,
     config: Arc<RudpConfig>,
-    buffer_pool: Arc<BufferPool>,
+    buffer_pool: Arc<SendBufferPool>,
+    encryption: Arc<dyn RudpEncryption>,
 }
 impl EndPoint {
     pub async fn new(
@@ -50,17 +51,31 @@ impl EndPoint {
             (receive_socket.clone(), Arc::new(UdpSocket::bind("[::]:0").await?))
         };
 
-        let buffer_pool = Arc::new(BufferPool::new(config.payload_size_inside_udp, config.buffer_pool_size));
+        let encryption = Self::create_encryption(&config);
+
+        let buffer_pool = Arc::new(SendBufferPool::new(config.payload_size_inside_udp, config.buffer_pool_size, encryption.clone()));
         Ok(EndPoint {
             generation: Self::generation_from_timestamp()?,
             receive_socket,
-            send_socket_v4: Arc::new(SendPipeline::new(Arc::new(send_socket_v4))),
-            send_socket_v6: Arc::new(SendPipeline::new(Arc::new(send_socket_v6))),
+            send_socket_v4: Arc::new(SendPipeline::new(Arc::new(send_socket_v4), encryption.clone())),
+            send_socket_v6: Arc::new(SendPipeline::new(Arc::new(send_socket_v6), encryption.clone())),
             send_streams: Default::default(),
             message_dispatcher,
             config: Arc::new(config),
             buffer_pool,
+            encryption,
         })
+    }
+
+    fn create_encryption(config: &RudpConfig) -> Arc<dyn RudpEncryption> {
+        if let Some(key) = &config.encryption_key {
+            info!("setting up AES encryption");
+            Arc::new(Aes256GcmEncryption::new(key))
+        }
+        else {
+            warn!("initializing without encryption - this is for debugging purposes and not recommended for production use");
+            Arc::new(NoEncryption)
+        }
     }
 
     fn generation_from_timestamp() -> anyhow::Result<u64> {
@@ -89,7 +104,8 @@ impl EndPoint {
 
         let mut buf = self.buffer_pool.get_from_pool();
         loop {
-            let (num_read, from) = match self.receive_socket.recv_from(&mut buf).await {
+            buf.maximize_len();
+            let (num_read, from) = match self.receive_socket.recv_from(buf.as_mut()).await {
                 Ok(x) => {
                     x
                 }
@@ -98,11 +114,25 @@ impl EndPoint {
                     continue;
                 }
             };
+            buf.truncate(num_read);
 
-            trace!("received packet from {:?}", from); //TODO instrument with unique ID per packet
+            trace!("received packet from {:?}: {:?}", from, &buf.as_ref()); //TODO instrument with unique ID per packet
 
-            let parse_buf = &mut &buf[..num_read];
-            let packet_header = match PacketHeader::deser(parse_buf) {
+            if buf.len() < self.encryption.prefix_len() {
+                debug!("incomplete packet header - dropping");
+                continue;
+            }
+            if buf.as_ref()[0] != PacketHeader::PROTOCOL_VERSION_1 {
+                debug!("wrong protocol version {} - dropping", buf.as_ref()[0]);
+                continue;
+            }
+            if self.encryption.decrypt_buffer(&mut buf).is_err() {
+                debug!("cryptographically invalid - dropping");
+                continue;
+            }
+
+            let parse_buf = &mut &buf.as_ref()[self.encryption.prefix_len()..];
+            let packet_header = match PacketHeader::deser(parse_buf, PacketHeader::PROTOCOL_VERSION_1) {
                 Ok(header) => {
                     header
                 },
@@ -111,8 +141,6 @@ impl EndPoint {
                     continue;
                 },
             };
-
-            //TODO verify checksum
 
             let peer_addr = packet_header.reply_to_address
                 .unwrap_or(from);
@@ -218,7 +246,7 @@ impl EndPoint {
 
         debug!("initializing send stream {} for {:?}", stream_id, addr);
         let stream = Arc::new(SendStream::new(
-            Arc::new(self.config.get_effective_send_stream_config(stream_id)),
+            Arc::new(self.config.get_effective_send_stream_config(stream_id, self.encryption.as_ref())),
             self.generation,
             stream_id,
             self.get_send_socket(addr),
