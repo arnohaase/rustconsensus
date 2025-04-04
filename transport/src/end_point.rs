@@ -13,6 +13,7 @@ use std::collections::hash_map::Entry;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::SystemTime;
+use aead::Buffer;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{debug, error, info, trace, warn};
 use crate::buffers::encryption::{Aes256GcmEncryption, NoEncryption, RudpEncryption};
@@ -102,8 +103,8 @@ impl EndPoint {
         let mut receive_streams: FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>> = FxHashMap::default();
 
         let mut buf = self.buffer_pool.get_from_pool();
-        buf.maximize_len();
         loop {
+            buf.maximize_len();
             let (num_read, from) = match self.receive_socket.recv_from(buf.as_mut()).await {
                 Ok(x) => {
                     x
@@ -113,8 +114,9 @@ impl EndPoint {
                     continue;
                 }
             };
+            buf.truncate(num_read);
 
-            trace!("received packet from {:?}: {:?}", from, &buf.as_ref()[..num_read]); //TODO instrument with unique ID per packet
+            trace!("received packet from {:?}: {:?}", from, &buf.as_ref()); //TODO instrument with unique ID per packet
 
             if buf.len() < self.encryption.prefix_len() {
                 debug!("incomplete packet header - dropping");
@@ -129,7 +131,7 @@ impl EndPoint {
                 continue;
             }
 
-            let parse_buf = &mut &buf.as_ref()[self.encryption.prefix_len()..num_read];
+            let parse_buf = &mut &buf.as_ref()[self.encryption.prefix_len()..];
             let packet_header = match PacketHeader::deser(parse_buf, PacketHeader::PROTOCOL_VERSION_1) {
                 Ok(header) => {
                     header

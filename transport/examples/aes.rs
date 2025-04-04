@@ -2,50 +2,23 @@ use aead::{AeadMutInPlace, Buffer};
 use aes_gcm::{Aes256Gcm, Key, AeadInPlace};
 
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Nonce};
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
+use tracing_subscriber::util::SubscriberInitExt;
+use transport::buffers::encryption::{Aes256GcmEncryption, RudpEncryption};
+use transport::buffers::fixed_buffer::FixedBuf;
 
 fn main() {
-    let text = b"plaintext message";
+    let mut buf = FixedBuf::new(1000);
+    buf.put_slice(&[0, 91, 217, 220, 214, 61, 78, 165, 77, 132, 146, 247, 194, 2, 1, 150, 0, 156, 21, 101, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 1, 2, 3, 0, 0, 0, 4, 2, 3, 4, 5, 0, 0, 0, 1, 7, 0, 0, 0, 3, 4, 5, 6]);
 
-    let key = Key::<Aes256Gcm>::from_slice(b"very secret very secret 12345678");
+    let expected: &[u8] = &[0, 91, 217, 220, 214, 61, 78, 165, 77, 132, 146, 247, 194, 215, 238, 213, 26, 68, 148, 49, 34, 184, 252, 138, 71, 110, 210, 73, 37, 138, 194, 50, 210, 233, 108, 167, 67, 209, 156, 78, 42, 242, 205, 187, 30, 90, 60, 190, 197, 170, 63, 143, 27, 157, 70, 42, 150, 59, 167, 182, 198, 202, 196, 96, 200, 175, 187, 168, 207, 187, 189, 117, 73, 155, 161].to_vec();
 
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // 96-bits; unique per message
-    let nonce = Nonce::<Aes256Gcm>::from_slice(b"123456781234");
+    let encryption = Aes256GcmEncryption::new(&vec![5u8; 32]);
+    encryption.encrypt_buffer(&mut buf);
 
-    let ciphertext = cipher.encrypt(&nonce, text.as_ref()).unwrap();
-    println!("ciphertext: {:?}", ciphertext);
-    println!("ciphertext: {:?}", ciphertext.len());
-    let plaintext = cipher.decrypt(&nonce, ciphertext.as_ref()).unwrap();
-    println!("plaintext: {:?}", plaintext);
-    println!("plaintext: {:?}", plaintext.len());
+    println!("{:?}", buf);
+    assert_eq!(buf.as_ref(), expected);
 
-    let mut buf = BytesMut::with_capacity(1024);
-    encrypt_in_place_bytesmut(&cipher, &nonce, text.as_ref(), &mut buf).unwrap();
-    println!("ciphertext2: {:?}", buf.as_ref());
-    println!("ciphertext2: {:?}", buf.as_ref().len());
-    let plaintext = cipher.decrypt(&nonce, &*buf).unwrap();
-    println!("plaintext: {:?}", plaintext);
-}
-
-
-fn decrypt_in_place(cipher: &Aes256Gcm, nonce: &Nonce<Aes256Gcm>, buffer: &mut impl Buffer) {
-    cipher.decrypt_in_place(nonce, b"", buffer)
-        .unwrap()
-
-}
-
-fn encrypt_in_place_bytesmut(
-    cipher: &Aes256Gcm,
-    nonce: &Nonce<Aes256Gcm>,
-    plaintext: &[u8],
-    out: &mut BytesMut,
-) -> Result<(), aes_gcm::aead::Error> {
-    // Clear and prepare
-    out.clear();
-    out.extend_from_slice(plaintext);
-
-    // Encrypt in place
-    cipher.encrypt_in_place(nonce, b"", out)?;
-    Ok(())
+    encryption.decrypt_buffer(&mut buf).unwrap();
+    println!("{:?}", buf);
 }
