@@ -120,8 +120,6 @@ impl RudpEncryption for Aes256GcmEncryption {
     }
 }
 
-//TODO unit tests
-
 #[cfg(test)]
 mod tests {
     use super::*;
