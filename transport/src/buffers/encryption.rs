@@ -126,8 +126,7 @@ mod tests {
     use rstest::rstest;
 
     use crate::buffers::fixed_buffer::FixedBuf;
-    use aead::{AeadCore, AeadInPlace, Buffer, Key, KeyInit, Nonce};
-    use bytes::{Buf, BufMut};
+    use bytes::BufMut;
 
     #[rstest]
     #[case(NoEncryption)]
