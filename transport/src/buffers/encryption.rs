@@ -127,7 +127,6 @@ mod tests {
 
     use crate::buffers::fixed_buffer::FixedBuf;
     use aead::{AeadCore, AeadInPlace, Buffer, Key, KeyInit, Nonce};
-    use aes_gcm::Aes256Gcm;
     use bytes::{Buf, BufMut};
 
     #[rstest]
