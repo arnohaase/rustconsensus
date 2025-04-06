@@ -48,14 +48,25 @@
 //!   * e.g. control messages + regular messages and high-frequency, low-latency messages where
 //!      packets older than 1 second are obsolete and can be dropped
 //!
+//! ## Encryption
+//!
+//! All packets (i.e. the UDP payload) are AES-GCM-256 encrypted. The resulting packet structure
+//!  is as follows:
+//!
+//! ```ascii
+//!  0: protocol version (u8) - transmitted unencrypted to allow versioning of encryption
+//!  1: nonce (12 bytes)
+//! 13: encrypted payload (including full header - this includes 16 bytes for AES-GCM 'tag',
+//!      i.e. a hashcode to ensure integrity)
+//! ```
+//!
+//! This outer wrapper adds a total of 1 + 12 + 16 = 29 bytes to the 'actual' payload length.
+//!
 //! ## Header
 //!
-//! TODO sender 'unique part' to  detect and handle server restart
-//!
-//! Packet header (inside a UDP packet) - all numbers in network byte order (BE):
+//! Packet header (inside the encryption envelope) - all numbers in network byte order (BE):
 //! ```ascii
-//! 0:  protocol version (u8)
-//! 1:  flags (8 bits):
+//! 0:  flags (8 bits):
 //!     * bit 0-1: protocol version of the reply-to address:
 //!       * 00  V4, explicitly provided in packet
 //!       * 01  V6, explicitly provided in packet
@@ -68,10 +79,10 @@
 //!       * 100 RECV_SYNC
 //!       * 101 SEND_SYNC
 //!     * 5-7: unused, should be 0
-//! 2:  generation (u48) - millis since epoch at starting time of the process. The idea is that
+//! 1:  generation (u48) - millis since epoch at starting time of the process. The idea is that
 //!      after a restart, the `generation` will be different and larger, allowing peers to detect
 //!      the restart and re-sync window positions without the need for a concept of 'connection'
-//! 8:  reply-to address (4+2 bytes if IP V4, 16+2 bytes if IP V6, 0 bytes if 'identical to UDP sender')
+//! 7:  reply-to address (4+2 bytes if IP V4, 16+2 bytes if IP V6, 0 bytes if 'identical to UDP sender')
 //! *:  stream id (u16): the id of the multiplexed stream that this frame belongs
 //!      or refers to. Not present for frame kind '001'.
 //!      NB: Each stream has its own send and receive buffers, incurring per-stream overhead
@@ -84,8 +95,8 @@
 //!      Present only for frame kind '000'.
 //!```
 //!
-//! The packet header has variable size, ranging from 8 bytes for a control message with UDP
-//!  reply-to address to 38 bytes for a sequenced packet with IP V6 reply-to address.
+//! The packet header has variable size, ranging from 7 bytes for a control message with UDP
+//!  reply-to address to 37 bytes for a sequenced packet with IP V6 reply-to address.
 //!
 //! Message header (message may be split across multiple packets)
 //!
@@ -220,9 +231,8 @@ mod send_pipeline;
 mod packet_id;
 mod message_header;
 pub mod safe_converter;
-mod atomic_map;
-mod buffer_pool;
 pub mod config;
+pub mod buffers;
 
 #[cfg(test)]
 mod tests {

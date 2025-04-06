@@ -1,4 +1,4 @@
-use crate::buffer_pool::BufferPool;
+use crate::buffers::buffer_pool::SendBufferPool;
 use crate::config::EffectiveReceiveStreamConfig;
 use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
@@ -22,7 +22,7 @@ use tracing::{debug, trace, warn};
 
 struct ReceiveStreamInner {
     config: Arc<EffectiveReceiveStreamConfig>,
-    buffer_pool: Arc<BufferPool>,
+    buffer_pool: Arc<SendBufferPool>,
 
     generation: u64,
     stream_id: u16,
@@ -72,7 +72,7 @@ struct ReceiveStreamInner {
 impl ReceiveStreamInner {
     fn new(
         config: Arc<EffectiveReceiveStreamConfig>,
-        buffer_pool: Arc<BufferPool>,
+        buffer_pool: Arc<SendBufferPool>,
         generation: u64,
         stream_id: u16,
         peer_addr: SocketAddr,
@@ -502,7 +502,7 @@ impl Drop for ReceiveStream {
 impl ReceiveStream {
     pub fn new(
         config: Arc<EffectiveReceiveStreamConfig>,
-        buffer_pool: Arc<BufferPool>,
+        buffer_pool: Arc<SendBufferPool>,
         generation: u64,
         stream_id: u16,
         peer_addr: SocketAddr,
@@ -669,9 +669,9 @@ mod tests {
     use tokio::sync::Mutex;
 
     #[rstest]
-    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![0, 10, 0,0,0,0,0,3, 0,25])]
-    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), vec![0, 8, 0,0,0,0,0,3, 1,2,3,4, 0,1, 0,25])]
-    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), vec![0, 9, 0,0,0,0,0,3, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25])]
+    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![0,10, 0,0,0,0,0,3, 0,25])]
+    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), vec![0,8, 0,0,0,0,0,3, 1,2,3,4, 0,1, 0,25])]
+    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), vec![0,9, 0,0,0,0,0,3, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25])]
     fn test_do_send_init(#[case] self_address: SocketAddr, #[case] expected_buf: Vec<u8>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
@@ -687,7 +687,7 @@ mod tests {
                 .returning(|_, _| ())
             ;
 
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}));
 
             let message_dispatcher = MockMessageDispatcher::new();
 
@@ -699,7 +699,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
-                Arc::new(BufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 3,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -713,10 +713,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), 0, 0, 0, vec![0, 18, 0,0,0,0,0,4, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
-    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), 0, 0, 0, vec![0, 16, 0,0,0,0,0,4, 1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
-    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), 0, 0, 0, vec![0, 17, 0,0,0,0,0,4, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
-    #[case::actual_values(SocketAddr::from(([1,2,3,4], 8)), 9, 3, 4, vec![0, 18, 0,0,0,0,0,4, 0,25, 0,0,0,0,0,0,0,9, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,4])]
+    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), 0, 0, 0, vec![0,18, 0,0,0,0,0,4, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), 0, 0, 0, vec![0,16, 0,0,0,0,0,4, 1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), 0, 0, 0, vec![0,17, 0,0,0,0,0,4, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::actual_values(SocketAddr::from(([1,2,3,4], 8)), 9, 3, 4, vec![0,18, 0,0,0,0,0,4, 0,25, 0,0,0,0,0,0,0,9, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,4])]
     fn test_do_send_recv_sync(#[case] self_address: SocketAddr, #[case] high_water_mark: u64, #[case] low_water_mark: u64, #[case] ack_threshold: u64, #[case] expected_buf: Vec<u8>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
@@ -732,7 +732,7 @@ mod tests {
                 .returning(|_, _| ())
             ;
 
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}));
 
             let message_dispatcher = MockMessageDispatcher::new();
 
@@ -744,7 +744,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
-                Arc::new(BufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 4,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -768,29 +768,29 @@ mod tests {
 
     #[rstest]
     #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![(1,1)], vec![
-        vec![0, 14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,1],
-        vec![0, 14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,1]])]
+        vec![0,14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,1],
+        vec![0,14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,1]])]
     #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), vec![(1,1)], vec![
-        vec![0, 12, 0,0,0,0,0,11, 1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1],
-        vec![0, 12, 0,0,0,0,0,11, 1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1]])]
+        vec![0,12, 0,0,0,0,0,11, 1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1],
+        vec![0,12, 0,0,0,0,0,11, 1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1]])]
     #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), vec![(1,1)], vec![
-        vec![0, 13, 0,0,0,0,0,11, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1],
-        vec![0, 13, 0,0,0,0,0,11, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1]])]
+        vec![0,13, 0,0,0,0,0,11, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1],
+        vec![0,13, 0,0,0,0,0,11, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1]])]
     #[case::empty(SocketAddr::from(([1,2,3,4], 8)), vec![], vec![])]
     #[case::two(SocketAddr::from(([1,2,3,4], 8)), vec![(1,1), (3,1)], vec![
-        vec![0, 14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,3],
-        vec![0, 14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,3]])]
+        vec![0,14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,3],
+        vec![0,14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,3]])]
     #[case::three(SocketAddr::from(([1,2,3,4], 8)), vec![(2,1), (3,1), (5,1)], vec![ // cut off after configured limit of two NAKs per message
-        vec![0, 14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3],
-        vec![0, 14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
+        vec![0,14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3],
+        vec![0,14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
     #[case::one_filtered(SocketAddr::from(([1,2,3,4], 8)), vec![(2,2)], vec![ // send only after tick increase
-        vec![0, 14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,2]])]
+        vec![0,14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,2]])]
     #[case::two_filtered(SocketAddr::from(([1,2,3,4], 8)), vec![(2,1), (3,2)], vec![
-        vec![0, 14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,2],
-        vec![0, 14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
+        vec![0,14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,2],
+        vec![0,14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
     #[case::three_filtered(SocketAddr::from(([1,2,3,4], 8)), vec![(2,1), (3,2), (5,2)], vec![
-        vec![0, 14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,2],
-        vec![0, 14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
+        vec![0,14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,2],
+        vec![0,14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
     fn test_do_send_nak(#[case] self_address: SocketAddr, #[case] missing: Vec<(u64, u64)>, #[case] expected_bufs: Vec<Vec<u8>>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
@@ -812,7 +812,7 @@ mod tests {
                 ;
             }
 
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}));
 
             let message_dispatcher = MockMessageDispatcher::new();
 
@@ -824,7 +824,7 @@ mod tests {
                     max_num_naks_per_packet: 2,
                     max_message_size: 10,
                 }),
-                Arc::new(BufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 11,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -953,7 +953,7 @@ mod tests {
             send_socket.expect_local_addr()
                 .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
 
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}));
 
             let message_dispatcher = Arc::new(CollectingMessageDispatcher::new());
 
@@ -965,7 +965,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
-                Arc::new(BufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 3,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1037,7 +1037,7 @@ mod tests {
             send_socket.expect_local_addr()
                 .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
 
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+            let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}));
 
             let receive_stream = ReceiveStream::new(
                 Arc::new(EffectiveReceiveStreamConfig {
@@ -1047,7 +1047,7 @@ mod tests {
                     max_num_naks_per_packet: 10,
                     max_message_size: 10,
                 }),
-                Arc::new(BufferPool::new(1000, 1)),
+                Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 3,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1101,7 +1101,7 @@ mod tests {
         let mut send_socket = MockSendSocket::new();
         send_socket.expect_local_addr()
             .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
-        let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+        let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}));
 
         let mut inner = ReceiveStreamInner::new(
             Arc::new(EffectiveReceiveStreamConfig {
@@ -1111,7 +1111,7 @@ mod tests {
                 max_num_naks_per_packet: 2,
                 max_message_size: 10,
             }),
-            Arc::new(BufferPool::new(1000, 1)),
+            Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
             3,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1140,7 +1140,7 @@ mod tests {
         let mut send_socket = MockSendSocket::new();
         send_socket.expect_local_addr()
             .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
-        let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+        let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}));
 
         let mut inner = ReceiveStreamInner::new(
             Arc::new(EffectiveReceiveStreamConfig {
@@ -1150,7 +1150,7 @@ mod tests {
                 max_num_naks_per_packet: 2,
                 max_message_size: 10,
             }),
-            Arc::new(BufferPool::new(1000, 1)),
+            Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
             3,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),
@@ -1255,7 +1255,7 @@ mod tests {
         let mut send_socket = MockSendSocket::new();
         send_socket.expect_local_addr()
             .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
-        let send_pipeline = SendPipeline::new(Arc::new(send_socket));
+        let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}));
 
         let mut inner = ReceiveStreamInner::new(
             Arc::new(EffectiveReceiveStreamConfig {
@@ -1265,7 +1265,7 @@ mod tests {
                 max_num_naks_per_packet: 2,
                 max_message_size: 10,
             }),
-            Arc::new(BufferPool::new(1000, 1)),
+            Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
             3,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),

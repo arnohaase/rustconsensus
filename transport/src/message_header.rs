@@ -1,5 +1,4 @@
-use bytes::{Buf, BufMut, BytesMut};
-use bytes_varint::try_get_fixed::TryGetFixedSupport;
+use bytes::{Buf, BufMut};
 use crate::safe_converter::PrecheckedCast;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,7 +16,7 @@ impl MessageHeader {
         }
     }
 
-    pub fn ser(&self, buf: &mut BytesMut) {
+    pub fn ser(&self, buf: &mut impl BufMut) {
         buf.put_u32(self.message_len);
     }
 
@@ -31,6 +30,7 @@ impl MessageHeader {
 
 #[cfg(test)]
 mod tests {
+    use bytes::BytesMut;
     use super::*;
     use rstest::rstest;
 
