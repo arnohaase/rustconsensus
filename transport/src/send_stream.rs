@@ -1,5 +1,12 @@
+use crate::buffers::atomic_map::AtomicMap;
+use crate::buffers::buffer_pool::SendBufferPool;
+use crate::buffers::fixed_buffer::FixedBuf;
+use crate::config::EffectiveSendStreamConfig;
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
+use crate::message_header::MessageHeader;
 use crate::packet_header::{PacketHeader, PacketKind};
+use crate::packet_id::PacketId;
+use crate::safe_converter::{PrecheckedCast, SafeCast};
 use crate::send_pipeline::SendPipeline;
 use bytes::BufMut;
 use std::cmp::min;
@@ -9,17 +16,12 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time;
 use tracing::{debug, trace};
-use crate::buffers::buffer_pool::SendBufferPool;
-use crate::buffers::fixed_buffer::FixedBuf;
-use crate::config::EffectiveSendStreamConfig;
-use crate::message_header::MessageHeader;
-use crate::packet_id::PacketId;
-use crate::safe_converter::{PrecheckedCast, SafeCast};
 
 
 struct SendStreamInner {
     config: Arc<EffectiveSendStreamConfig>,
-    generation: u64,
+    self_generation: u64,
+    peer_generations: Arc<AtomicMap<SocketAddr, u64>>,
     stream_id: u16,
     send_socket: Arc<SendPipeline>,
     peer_addr: SocketAddr,
@@ -47,7 +49,8 @@ impl SendStreamInner {
                 first_message_offset,
                 packet_sequence_number: self.work_in_progress_packet_id,
             },
-            self.generation
+            self.self_generation,
+            self.peer_generations.load().get(&self.peer_addr).cloned(),
         ).ser(&mut new_buffer);
 
         self.work_in_progress = Some(new_buffer);
@@ -55,9 +58,16 @@ impl SendStreamInner {
     }
 
     async fn send_send_sync(&self) {
-        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlSendSync { stream_id: self.stream_id }, self.generation);
+        let header = PacketHeader::new(
+            self.self_reply_to_addr,
+            PacketKind::ControlSendSync { stream_id: self.stream_id },
+            self.self_generation,
+            self.peer_generations.load().get(&self.peer_addr).cloned(),
+        );
 
         let mut send_buf = self.buffer_pool.get_from_pool();
+        println!("{:?}", send_buf.capacity());
+
         header.ser(&mut send_buf);
 
         ControlMessageSendSync {
@@ -111,7 +121,8 @@ pub struct SendStream {
 impl SendStream {
     pub fn new(
         config: Arc<EffectiveSendStreamConfig>,
-        generation: u64,
+        self_generation: u64,
+        peer_generations: Arc<AtomicMap<SocketAddr, u64>>,
         stream_id: u16,
         send_socket: Arc<SendPipeline>,
         peer_addr: SocketAddr,
@@ -121,7 +132,8 @@ impl SendStream {
         let inner = SendStreamInner {
             config: config.clone(),
             buffer_pool,
-            generation,
+            self_generation,
+            peer_generations,
             stream_id,
             send_socket,
             peer_addr,
@@ -293,20 +305,24 @@ impl SendStream {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-    use mockall::predicate::eq;
     use super::*;
-    use rstest::*;
-    use tokio::runtime::Builder;
     use crate::safe_converter::SafeCast;
     use crate::send_pipeline::MockSendSocket;
+    use mockall::predicate::eq;
+    use rstest::*;
+    use std::time::Duration;
+    use tokio::runtime::Builder;
 
     #[rstest]
-    #[case::empty(vec![], 5, None, vec![0,22, 0,0,0,0,0,3, 0,8, 0,0,0,0,0,0,0,5, 0,0,0,0,0,0,0,5])]
-    #[case::clear_send_buffer(vec![3,4,5], 6, None, vec![0,22, 0,0,0,0,0,3, 0,8, 0,0,0,0,0,0,0,6, 0,0,0,0,0,0,0,6])]
-    #[case::clear_wip(vec![], 7, Some(vec![1,2,3]), vec![0,22, 0,0,0,0,0,3, 0,8, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
-    #[case::clear_both(vec![5,6,7], 8, Some(vec![1,2,3]), vec![0,22, 0,0,0,0,0,3, 0,8, 0,0,0,0,0,0,0,8, 0,0,0,0,0,0,0,8])]
-    fn test_on_init(#[case] initial_send_buffer: Vec<u8>, #[case] wip_packet_id: u64, #[case] initial_wip_packet: Option<Vec<u8>>, #[case] expected_message: Vec<u8>, ) {
+    #[case::empty(true, vec![], 5, None, vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,4, 0,8, 0,0,0,0,0,0,0,5, 0,0,0,0,0,0,0,5])]
+    #[case::empty(false, vec![], 5, None, vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,0, 0,8, 0,0,0,0,0,0,0,5, 0,0,0,0,0,0,0,5])]
+    #[case::clear_send_buffer(true, vec![3,4,5], 6, None, vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,4, 0,8, 0,0,0,0,0,0,0,6, 0,0,0,0,0,0,0,6])]
+    #[case::clear_send_buffer(false, vec![3,4,5], 6, None, vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,0, 0,8, 0,0,0,0,0,0,0,6, 0,0,0,0,0,0,0,6])]
+    #[case::clear_wip(true, vec![], 7, Some(vec![1,2,3]), vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,4, 0,8, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
+    #[case::clear_wip(false, vec![], 7, Some(vec![1,2,3]), vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,0, 0,8, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
+    #[case::clear_both(true, vec![5,6,7], 8, Some(vec![1,2,3]), vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,4, 0,8, 0,0,0,0,0,0,0,8, 0,0,0,0,0,0,0,8])]
+    #[case::clear_both(false, vec![5,6,7], 8, Some(vec![1,2,3]), vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,0, 0,8, 0,0,0,0,0,0,0,8, 0,0,0,0,0,0,0,8])]
+    fn test_on_init(#[case] with_peer_generation: bool, #[case] initial_send_buffer: Vec<u8>, #[case] wip_packet_id: u64, #[case] initial_wip_packet: Option<Vec<u8>>, #[case] expected_message: Vec<u8>, ) {
         let mut send_socket = MockSendSocket::new();
         send_socket.expect_local_addr()
             .return_const(SocketAddr::from(([1,2,3,4], 8)));
@@ -325,11 +341,12 @@ mod tests {
                 send_window_size: 4,
             }),
             3,
+            create_peer_generations(with_peer_generation),
             8,
             Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(SendBufferPool::new(30, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
+            Arc::new(SendBufferPool::new(40, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
         );
 
         let rt = Builder::new_current_thread()
@@ -338,7 +355,7 @@ mod tests {
             .build().unwrap();
         rt.block_on(async move {
             for packet_id in initial_send_buffer {
-                let mut bm = FixedBuf::new(30);
+                let mut bm = FixedBuf::new(40);
                 bm.put_slice(vec![packet_id].as_slice());
 
                 send_stream.inner.write().await
@@ -349,7 +366,7 @@ mod tests {
             send_stream.inner.write().await
                 .work_in_progress = initial_wip_packet.map(
                 |buf| {
-                    let mut bm = FixedBuf::new(30);
+                    let mut bm = FixedBuf::new(40);
                     bm.put_slice(buf.as_slice());
                     bm
                 });
@@ -403,6 +420,7 @@ mod tests {
                 send_window_size: 32,
             }),
             3,
+            Default::default(),
             4,
             Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}))),
             SocketAddr::from(([1,2,3,4], 9)),
@@ -424,18 +442,38 @@ mod tests {
         });
     }
 
+    fn create_peer_generations(with_peer_data: bool) -> Arc<AtomicMap<SocketAddr, u64>> {
+        if !with_peer_data {
+            return Default::default();
+        }
+
+        let mut map: AtomicMap<SocketAddr, u64> = Default::default();
+        map.update(|m| { m.insert(([1,2,3,4], 9).into(), 4); });
+        Arc::new(map)
+    }
+
     #[rstest]
-    #[case::empty(vec![], 3, 1, 2, vec![], vec![0,22, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
-    #[case::filled(vec![4,5,6], 7, 4, 4, vec![4,5,6], vec![0,22, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
-    #[case::filled_too_low_1(vec![4,5,6], 7, 4, 3, vec![4,5,6], vec![0,22, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
-    #[case::filled_too_low_2(vec![4,5,6], 7, 4, 1, vec![4,5,6], vec![0,22, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
-    #[case::ack_truncate(vec![4,5,6], 7, 4, 5, vec![5,6], vec![0,22, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
-    #[case::ack_truncate_all(vec![4,5,6], 7, 4, 7, vec![], vec![0,22, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
-    #[case::ack_truncate_all_too_high_1(vec![4,5,6], 7, 4, 8, vec![], vec![0,22, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
-    #[case::ack_truncate_all_too_high_2(vec![4,5,6], 7, 4, 888, vec![], vec![0,22, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
-    #[case::ignore_high_low_1(vec![4,5,6], 3, 9, 5, vec![5,6], vec![0,22, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
-    #[case::ignore_high_low_2(vec![4,5,6], 5, 5, 5, vec![5,6], vec![0,22, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
-    fn test_on_recv_sync(#[case] initial_send_buffer_ids: Vec<u8>, #[case] msg_high_water_mark: u64, #[case] msg_low_water_mark: u64, #[case] msg_ack_threshold: u64, #[case] expected_send_buffer_ids: Vec<u64>, #[case] expected_response: Vec<u8>) {
+    #[case::empty(true, vec![], 3, 1, 2, vec![], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::empty(false, vec![], 3, 1, 2, vec![], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,0, 0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::filled(true, vec![4,5,6], 7, 4, 4, vec![4,5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
+    #[case::filled(false, vec![4,5,6], 7, 4, 4, vec![4,5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,0, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
+    #[case::filled_too_low_1(true, vec![4,5,6], 7, 4, 3, vec![4,5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
+    #[case::filled_too_low_2(true, vec![4,5,6], 7, 4, 1, vec![4,5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
+    #[case::ack_truncate(true, vec![4,5,6], 7, 4, 5, vec![5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
+    #[case::ack_truncate_all(true, vec![4,5,6], 7, 4, 7, vec![], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
+    #[case::ack_truncate_all_too_high_1(true, vec![4,5,6], 7, 4, 8, vec![], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
+    #[case::ack_truncate_all_too_high_2(true, vec![4,5,6], 7, 4, 888, vec![], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
+    #[case::ignore_high_low_1(true, vec![4,5,6], 3, 9, 5, vec![5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
+    #[case::ignore_high_low_2(true, vec![4,5,6], 5, 5, 5, vec![5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
+    fn test_on_recv_sync(
+        #[case] with_peer_generation: bool,
+        #[case] initial_send_buffer_ids: Vec<u8>,
+        #[case] msg_high_water_mark: u64,
+        #[case] msg_low_water_mark: u64,
+        #[case] msg_ack_threshold: u64,
+        #[case] expected_send_buffer_ids: Vec<u64>,
+        #[case] expected_response: Vec<u8>
+    ) {
         let msg = ControlMessageRecvSync {
             receive_buffer_high_water_mark: PacketId::from_raw(msg_high_water_mark),
             receive_buffer_low_water_mark: PacketId::from_raw(msg_low_water_mark),
@@ -460,11 +498,12 @@ mod tests {
                 send_window_size: 4,
             }),
             4,
+            create_peer_generations(with_peer_generation),
             7,
             Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}))),
             SocketAddr::from(([1,2,3,4], 9)),
             None,
-            Arc::new(SendBufferPool::new(30, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
+            Arc::new(SendBufferPool::new(40, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
         );
 
         let expected_send_buffer_ids = expected_send_buffer_ids
@@ -478,7 +517,7 @@ mod tests {
             .build().unwrap();
         rt.block_on(async move {
             for packet_id in initial_send_buffer_ids {
-                let mut buf = FixedBuf::new(30);
+                let mut buf = FixedBuf::new(40);
                 buf.put_u8(packet_id);
 
                 let buf2 = FixedBuf::from_slice(vec![packet_id].as_slice());
@@ -581,6 +620,7 @@ mod tests {
                 send_window_size: 4,
             }),
             5,
+            todo!(),
             4,
             Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}))),
             SocketAddr::from(([1,2,3,4], 9)),
@@ -627,7 +667,8 @@ mod tests {
                 send_window_size: 4,
             }),
             buffer_pool: Arc::new(SendBufferPool::new(0, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
-            generation: 3,
+            self_generation: 3,
+            peer_generations: Default::default(),
             stream_id: 4,
             send_socket: Arc::new(SendPipeline::new(Arc::new(MockSendSocket::new()), Arc::new(crate::buffers::encryption::NoEncryption {}))),
             peer_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
@@ -658,6 +699,7 @@ mod tests {
                     send_window_size: 0,
                 }),
                 3,
+                Default::default(),
                 4,
                 Arc::new(SendPipeline::new(Arc::new(MockSendSocket::default()), Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 SocketAddr::from(([127, 0, 0, 1], 0)),
@@ -674,10 +716,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::empty(vec![], 0, vec![0,22, 0,0,0,0,0,3, 0,4, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
-    #[case::just_wip(vec![], 6, vec![0,22, 0,0,0,0,0,3, 0,4, 0,0,0,0,0,0,0,6, 0,0,0,0,0,0,0,6])]
-    #[case::buf(vec![3,4], 5, vec![0,22, 0,0,0,0,0,3, 0,4, 0,0,0,0,0,0,0,5, 0,0,0,0,0,0,0,3])]
-    fn test_send_send_sync(#[case] send_buffer: Vec<u64>, #[case] wip_packet_id: u64, #[case] expected_buf: Vec<u8>) {
+    #[case::empty(true, vec![], 0, vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,4, 0,4, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::empty(false, vec![], 0, vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,0, 0,4, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::just_wip(true, vec![], 6, vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,4, 0,4, 0,0,0,0,0,0,0,6, 0,0,0,0,0,0,0,6])]
+    #[case::just_wip(false, vec![], 6, vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,0, 0,4, 0,0,0,0,0,0,0,6, 0,0,0,0,0,0,0,6])]
+    #[case::buf(true, vec![3,4], 5, vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,4, 0,4, 0,0,0,0,0,0,0,5, 0,0,0,0,0,0,0,3])]
+    #[case::buf(false, vec![3,4], 5, vec![0,22, 0,0,0,0,0,3, 0,0,0,0,0,0, 0,4, 0,0,0,0,0,0,0,5, 0,0,0,0,0,0,0,3])]
+    fn test_send_send_sync(#[case] with_peer_generation: bool, #[case] send_buffer: Vec<u64>, #[case] wip_packet_id: u64, #[case] expected_buf: Vec<u8>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let mut send_socket = MockSendSocket::new();
@@ -699,7 +744,8 @@ mod tests {
                     send_window_size: 4,
                 }),
                 buffer_pool: Arc::new(SendBufferPool::new(100, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
-                generation: 3,
+                self_generation: 3,
+                peer_generations: create_peer_generations(with_peer_generation),
                 stream_id: 4,
                 send_socket: Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 peer_addr: SocketAddr::from(([1,2,3,4], 9)),

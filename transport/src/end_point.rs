@@ -8,7 +8,6 @@ use crate::receive_stream::ReceiveStream;
 use crate::send_pipeline::SendPipeline;
 use crate::send_stream::SendStream;
 use rustc_hash::FxHashMap;
-use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -146,19 +145,21 @@ impl EndPoint {
             let peer_addr = packet_header.reply_to_address
                 .unwrap_or(from);
 
-            if !self.check_peer_generation(&mut receive_streams, peer_addr, packet_header.generation) {
+            if !self.check_peer_generation(&mut receive_streams, peer_addr, packet_header.sender_generation) {
                 continue;
             }
 
+            todo!("check own generation");
+
             match packet_header.packet_kind {
                 PacketKind::RegularSequenced { stream_id, first_message_offset, packet_sequence_number} => {
-                    self.get_receive_stream(&mut receive_streams, packet_header.generation, peer_addr, stream_id)
+                    self.get_receive_stream(&mut receive_streams, packet_header.sender_generation, peer_addr, stream_id)
                         .on_packet(packet_sequence_number, first_message_offset, parse_buf).await
                 },
                 PacketKind::OutOfSequence => self.message_dispatcher.on_message(peer_addr, None, parse_buf).await,
                 PacketKind::ControlInit { stream_id } => Self::handle_init_message(self.get_send_stream(peer_addr, stream_id).await).await,
                 PacketKind::ControlRecvSync { stream_id } => Self::handle_recv_sync(parse_buf, self.get_send_stream(peer_addr, stream_id).await).await,
-                PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(&mut receive_streams, packet_header.generation, peer_addr, stream_id)).await,
+                PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(&mut receive_streams, packet_header.sender_generation, peer_addr, stream_id)).await,
                 PacketKind::ControlNak { stream_id } => Self::handle_nak(parse_buf, self.get_send_stream(peer_addr, stream_id).await).await,
             }
         }
@@ -183,7 +184,7 @@ impl EndPoint {
             }
             else {
                 debug!("peer {:?} restarted (@{}), re-initializing local per-peer state", peer_addr, new_peer_generation);
-                self.peer_generations.update(|m| {m.insert(*peer_addr, new_peer_generation); });
+                self.peer_generations.update(|m| {m.insert(peer_addr, new_peer_generation); });
                 self.send_streams
                     .update(|map| {
                         map.retain(|(s, _), _| s != &peer_addr);
@@ -218,6 +219,7 @@ impl EndPoint {
                 let mut recv_strm = ReceiveStream::new(
                     Arc::new(self.config.get_effective_receive_stream_config(stream_id)),
                     self.buffer_pool.clone(),
+                    self.generation,
                     peer_generation,
                     stream_id,
                     addr,
@@ -248,6 +250,7 @@ impl EndPoint {
         let stream = Arc::new(SendStream::new(
             Arc::new(self.config.get_effective_send_stream_config(stream_id, self.encryption.as_ref())),
             self.generation,
+            self.peer_generations.clone(),
             stream_id,
             self.get_send_socket(addr),
             addr,

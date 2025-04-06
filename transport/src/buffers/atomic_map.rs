@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
-pub(crate) struct AtomicMap<K,V> {
+pub struct AtomicMap<K,V> {
     map: AtomicPtr<Arc<FxHashMap<K,V>>>,
 }
 impl <K: Hash+Eq+Clone+Sync+Send,V:Clone+Sync+Send> Default for AtomicMap<K,V> {

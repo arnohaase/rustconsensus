@@ -1,13 +1,12 @@
 use transport::end_point::EndPoint;
 use transport::message_dispatcher::MessageDispatcher;
-use rustc_hash::FxHashMap;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, span, Instrument, Level};
-use transport::config::{EffectiveReceiveStreamConfig, RudpConfig, SendStreamConfig};
+use transport::config::RudpConfig;
 
 fn init_logging() {
     tracing_subscriber::fmt()

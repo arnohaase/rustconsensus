@@ -19,12 +19,13 @@ use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{debug, trace, warn};
 
-
 struct ReceiveStreamInner {
     config: Arc<EffectiveReceiveStreamConfig>,
     buffer_pool: Arc<SendBufferPool>,
 
-    generation: u64,
+    self_generation: u64,
+    peer_generation: u64,
+
     stream_id: u16,
     send_pipeline: Arc<SendPipeline>,
     peer_addr: SocketAddr,
@@ -73,7 +74,8 @@ impl ReceiveStreamInner {
     fn new(
         config: Arc<EffectiveReceiveStreamConfig>,
         buffer_pool: Arc<SendBufferPool>,
-        generation: u64,
+        self_generation: u64,
+        peer_generation: u64,
         stream_id: u16,
         peer_addr: SocketAddr,
         send_pipeline: Arc<SendPipeline>,
@@ -93,7 +95,8 @@ impl ReceiveStreamInner {
         ReceiveStreamInner {
             config,
             buffer_pool,
-            generation,
+            self_generation,
+            peer_generation,
             stream_id,
             send_pipeline,
             peer_addr,
@@ -108,7 +111,7 @@ impl ReceiveStreamInner {
 
     async fn do_send_init(&self) {
         debug!("sending INIT");
-        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlInit { stream_id: self.stream_id }, self.generation);
+        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlInit { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
 
         let mut send_buf = self.buffer_pool.get_from_pool();
         header.ser(&mut send_buf);
@@ -118,7 +121,7 @@ impl ReceiveStreamInner {
     }
 
     async fn do_send_recv_sync(&self) {
-        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlRecvSync { stream_id: self.stream_id }, self.generation);
+        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlRecvSync { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
 
         let mut send_buf = self.buffer_pool.get_from_pool();
         header.ser(&mut send_buf);
@@ -158,7 +161,7 @@ impl ReceiveStreamInner {
             return;
         }
 
-        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlNak { stream_id: self.stream_id }, self.generation);
+        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlNak { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
 
         let mut send_buf = self.buffer_pool.get_from_pool();
         header.ser(&mut send_buf);
@@ -503,7 +506,8 @@ impl ReceiveStream {
     pub fn new(
         config: Arc<EffectiveReceiveStreamConfig>,
         buffer_pool: Arc<SendBufferPool>,
-        generation: u64,
+        self_generation: u64,
+        peer_generation: u64,
         stream_id: u16,
         peer_addr: SocketAddr,
         send_pipeline: Arc<SendPipeline>,
@@ -513,7 +517,8 @@ impl ReceiveStream {
         let inner: Arc<RwLock<ReceiveStreamInner>> = Arc::new(RwLock::new(ReceiveStreamInner::new(
             config.clone(),
             buffer_pool,
-            generation,
+            self_generation,
+            peer_generation,
             stream_id,
             peer_addr,
             send_pipeline,
@@ -669,9 +674,9 @@ mod tests {
     use tokio::sync::Mutex;
 
     #[rstest]
-    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![0,10, 0,0,0,0,0,3, 0,25])]
-    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), vec![0,8, 0,0,0,0,0,3, 1,2,3,4, 0,1, 0,25])]
-    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), vec![0,9, 0,0,0,0,0,3, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25])]
+    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![0,10, 0,0,0,0,0,3, 0,0,0,0,0,8, 0,25])]
+    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), vec![0,8, 0,0,0,0,0,3, 0,0,0,0,0,8, 1,2,3,4, 0,1, 0,25])]
+    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), vec![0,9, 0,0,0,0,0,3, 0,0,0,0,0,8, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25])]
     fn test_do_send_init(#[case] self_address: SocketAddr, #[case] expected_buf: Vec<u8>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
@@ -701,6 +706,7 @@ mod tests {
                 }),
                 Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 3,
+                8,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
                 Arc::new(send_pipeline),
@@ -713,10 +719,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), 0, 0, 0, vec![0,18, 0,0,0,0,0,4, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
-    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), 0, 0, 0, vec![0,16, 0,0,0,0,0,4, 1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
-    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), 0, 0, 0, vec![0,17, 0,0,0,0,0,4, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
-    #[case::actual_values(SocketAddr::from(([1,2,3,4], 8)), 9, 3, 4, vec![0,18, 0,0,0,0,0,4, 0,25, 0,0,0,0,0,0,0,9, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,4])]
+    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), 0, 0, 0, vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), 0, 0, 0, vec![0,16, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), 0, 0, 0, vec![0,17, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
+    #[case::actual_values(SocketAddr::from(([1,2,3,4], 8)), 9, 3, 4, vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,9, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,4])]
     fn test_do_send_recv_sync(#[case] self_address: SocketAddr, #[case] high_water_mark: u64, #[case] low_water_mark: u64, #[case] ack_threshold: u64, #[case] expected_buf: Vec<u8>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
@@ -746,6 +752,7 @@ mod tests {
                 }),
                 Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 4,
+                9,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
                 Arc::new(send_pipeline),
@@ -768,29 +775,29 @@ mod tests {
 
     #[rstest]
     #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![(1,1)], vec![
-        vec![0,14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,1],
-        vec![0,14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,1]])]
+        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 1, 0,0,0,0,0,0,0,1],
+        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 1, 0,0,0,0,0,0,0,1]])]
     #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), vec![(1,1)], vec![
-        vec![0,12, 0,0,0,0,0,11, 1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1],
-        vec![0,12, 0,0,0,0,0,11, 1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1]])]
+        vec![0,12, 0,0,0,0,0,11, 0,0,0,0,0,8, 1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1],
+        vec![0,12, 0,0,0,0,0,11, 0,0,0,0,0,8, 1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1]])]
     #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), vec![(1,1)], vec![
-        vec![0,13, 0,0,0,0,0,11, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1],
-        vec![0,13, 0,0,0,0,0,11, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1]])]
+        vec![0,13, 0,0,0,0,0,11, 0,0,0,0,0,8, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1],
+        vec![0,13, 0,0,0,0,0,11, 0,0,0,0,0,8, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1]])]
     #[case::empty(SocketAddr::from(([1,2,3,4], 8)), vec![], vec![])]
     #[case::two(SocketAddr::from(([1,2,3,4], 8)), vec![(1,1), (3,1)], vec![
-        vec![0,14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,3],
-        vec![0,14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,3]])]
+        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 2, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,3],
+        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 2, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,3]])]
     #[case::three(SocketAddr::from(([1,2,3,4], 8)), vec![(2,1), (3,1), (5,1)], vec![ // cut off after configured limit of two NAKs per message
-        vec![0,14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3],
-        vec![0,14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
+        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3],
+        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
     #[case::one_filtered(SocketAddr::from(([1,2,3,4], 8)), vec![(2,2)], vec![ // send only after tick increase
-        vec![0,14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,2]])]
+        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 1, 0,0,0,0,0,0,0,2]])]
     #[case::two_filtered(SocketAddr::from(([1,2,3,4], 8)), vec![(2,1), (3,2)], vec![
-        vec![0,14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,2],
-        vec![0,14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
+        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 1, 0,0,0,0,0,0,0,2],
+        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
     #[case::three_filtered(SocketAddr::from(([1,2,3,4], 8)), vec![(2,1), (3,2), (5,2)], vec![
-        vec![0,14, 0,0,0,0,0,11, 0,25, 1, 0,0,0,0,0,0,0,2],
-        vec![0,14, 0,0,0,0,0,11, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
+        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 1, 0,0,0,0,0,0,0,2],
+        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
     fn test_do_send_nak(#[case] self_address: SocketAddr, #[case] missing: Vec<(u64, u64)>, #[case] expected_bufs: Vec<Vec<u8>>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
@@ -826,6 +833,7 @@ mod tests {
                 }),
                 Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 11,
+                8,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
                 Arc::new(send_pipeline),
@@ -967,6 +975,7 @@ mod tests {
                 }),
                 Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 3,
+                8,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
                 Arc::new(send_pipeline),
@@ -1049,6 +1058,7 @@ mod tests {
                 }),
                 Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 3,
+                8,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
                 Arc::new(send_pipeline),
@@ -1113,6 +1123,7 @@ mod tests {
             }),
             Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
             3,
+            7,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),
             Arc::new(send_pipeline),
@@ -1152,6 +1163,7 @@ mod tests {
             }),
             Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
             3,
+            9,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),
             Arc::new(send_pipeline),
@@ -1267,6 +1279,7 @@ mod tests {
             }),
             Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
             3,
+            13,
             25,
             SocketAddr::from(([1, 2, 3, 4], 9)),
             Arc::new(send_pipeline),
