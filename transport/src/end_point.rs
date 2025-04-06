@@ -27,6 +27,7 @@ pub struct EndPoint {
     receive_socket: Arc<UdpSocket>,
     send_socket_v4: Arc<SendPipeline>,
     send_socket_v6: Arc<SendPipeline>,
+    peer_generations: Arc<AtomicMap<SocketAddr, u64>>,
     send_streams: AtomicMap<(SocketAddr, u16), Arc<SendStream>>,
     message_dispatcher: Arc<dyn MessageDispatcher>,
     config: Arc<RudpConfig>,
@@ -59,6 +60,7 @@ impl EndPoint {
             receive_socket,
             send_socket_v4: Arc::new(SendPipeline::new(Arc::new(send_socket_v4), encryption.clone())),
             send_socket_v6: Arc::new(SendPipeline::new(Arc::new(send_socket_v6), encryption.clone())),
+            peer_generations: Default::default(),
             send_streams: Default::default(),
             message_dispatcher,
             config: Arc::new(config),
@@ -99,7 +101,6 @@ impl EndPoint {
     pub async fn recv_loop(&self)  {
         info!("starting receive loop");
 
-        let mut generation_for_peer: FxHashMap<SocketAddr, u64> = FxHashMap::default();
         let mut receive_streams: FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>> = FxHashMap::default();
 
         let mut buf = self.buffer_pool.get_from_pool();
@@ -145,7 +146,7 @@ impl EndPoint {
             let peer_addr = packet_header.reply_to_address
                 .unwrap_or(from);
 
-            if !self.check_generation_for_peer(&mut receive_streams, &mut generation_for_peer, peer_addr, packet_header.generation) {
+            if !self.check_peer_generation(&mut receive_streams, peer_addr, packet_header.generation) {
                 continue;
             }
 
@@ -164,38 +165,37 @@ impl EndPoint {
     }
 
     #[must_use]
-    fn check_generation_for_peer(
+    fn check_peer_generation(
         &self,
         receive_streams: &mut FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>>,
-        generations_per_peer: &mut FxHashMap<SocketAddr, u64>,
         peer_addr: SocketAddr,
-        peer_generation: u64,
+        new_peer_generation: u64,
     ) -> bool {
-        match generations_per_peer.entry(peer_addr) {
-            Entry::Vacant(e) => {
-                e.insert(peer_generation);
+        let peer_generations = self.peer_generations.load();
+
+        if let Some(prev) = peer_generations.get(&peer_addr) {
+            if *prev == new_peer_generation {
                 true
             }
-            Entry::Occupied(mut e) => {
-                match e.get().cmp(&peer_generation) {
-                    Ordering::Equal => true, // unchanged generation: nothing to be done
-                    Ordering::Less => {
-                        info!("peer {:?} restarted (@{}), re-initializing local per-peer state", peer_addr, peer_generation);
-                        e.insert(peer_generation);
-                        self.send_streams
-                            .update(|map| {
-                                map.retain(|(s, _), _| s != &peer_addr);
-                            });
-                        receive_streams
-                            .retain(|(s, _), _| s != &peer_addr);
-                        true
-                    }
-                    Ordering::Greater => {
-                        debug!("peer {:?}: received packet for old generation {} - discarding", peer_addr, peer_generation);
-                        false
-                    }
-                }
+            else if *prev < new_peer_generation {
+                debug!("peer {:?}: received packet for old generation {} - discarding", peer_addr, new_peer_generation);
+                false
             }
+            else {
+                debug!("peer {:?} restarted (@{}), re-initializing local per-peer state", peer_addr, new_peer_generation);
+                self.peer_generations.update(|m| {m.insert(*peer_addr, new_peer_generation); });
+                self.send_streams
+                    .update(|map| {
+                        map.retain(|(s, _), _| s != &peer_addr);
+                    });
+                receive_streams
+                    .retain(|(s, _), _| s != &peer_addr);
+                true
+            }
+        }
+        else {
+            self.peer_generations.update(|m| { m.insert(peer_addr, new_peer_generation); });
+            true
         }
     }
 
