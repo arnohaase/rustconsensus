@@ -149,7 +149,21 @@ impl EndPoint {
                 continue;
             }
 
-            todo!("check own generation");
+            if let Some(receiver_generation) = packet_header.receiver_generation {
+                if receiver_generation < self.generation {
+                    debug!("received packet from {:?} with outdated receiver generation - dropping", peer_addr);
+                    // todo!("send ping");
+                    continue;
+                }
+                if receiver_generation > self.generation {
+                    warn!("received packet from {:?} with future receiver generation - this points to a buggy protocol implementation or intentional traffic manipulation", peer_addr);
+                    continue;
+                }
+            }
+            else {
+                debug!("received packet from {:?} without receiver generation", peer_addr);
+                // todo!("send ping");
+            }
 
             match packet_header.packet_kind {
                 PacketKind::RegularSequenced { stream_id, first_message_offset, packet_sequence_number} => {
