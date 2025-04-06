@@ -79,7 +79,7 @@
 //!       * 100 RECV_SYNC
 //!       * 101 SEND_SYNC
 //!     * 5-7: unused, should be 0
-//! 1:  generation (u48) - millis since epoch at starting time of the process. The idea is that
+//! 1:  sender generation (u48) - millis since epoch at starting time of the process. The idea is that
 //!      after a restart, the `generation` will be different and larger, allowing peers to detect
 //!      the restart and re-sync window positions without the need for a concept of 'connection'
 //! 7:  reply-to address (4+2 bytes if IP V4, 16+2 bytes if IP V6, 0 bytes if 'identical to UDP sender')

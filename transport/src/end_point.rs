@@ -99,7 +99,7 @@ impl EndPoint {
     pub async fn recv_loop(&self)  {
         info!("starting receive loop");
 
-        let mut generations_per_peer: FxHashMap<SocketAddr, u64> = FxHashMap::default();
+        let mut generation_for_peer: FxHashMap<SocketAddr, u64> = FxHashMap::default();
         let mut receive_streams: FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>> = FxHashMap::default();
 
         let mut buf = self.buffer_pool.get_from_pool();
@@ -145,7 +145,7 @@ impl EndPoint {
             let peer_addr = packet_header.reply_to_address
                 .unwrap_or(from);
 
-            if !self.update_generation_for_peer(&mut receive_streams, &mut generations_per_peer, peer_addr, packet_header.generation) {
+            if !self.check_generation_for_peer(&mut receive_streams, &mut generation_for_peer, peer_addr, packet_header.generation) {
                 continue;
             }
 
@@ -164,7 +164,7 @@ impl EndPoint {
     }
 
     #[must_use]
-    fn update_generation_for_peer(
+    fn check_generation_for_peer(
         &self,
         receive_streams: &mut FxHashMap<(SocketAddr, u16), Arc<ReceiveStream>>,
         generations_per_peer: &mut FxHashMap<SocketAddr, u64>,
