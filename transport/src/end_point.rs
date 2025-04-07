@@ -152,7 +152,7 @@ impl EndPoint {
             if let Some(receiver_generation) = packet_header.receiver_generation {
                 if receiver_generation < self.generation {
                     debug!("received packet from {:?} with outdated receiver generation - dropping", peer_addr);
-                    // todo!("send ping");
+                    self.send_ping(peer_addr).await;
                     continue;
                 }
                 if receiver_generation > self.generation {
@@ -162,7 +162,7 @@ impl EndPoint {
             }
             else {
                 debug!("received packet from {:?} without receiver generation", peer_addr);
-                // todo!("send ping");
+                self.send_ping(peer_addr).await;
             }
 
             match packet_header.packet_kind {
@@ -170,13 +170,26 @@ impl EndPoint {
                     self.get_receive_stream(&mut receive_streams, packet_header.sender_generation, peer_addr, stream_id)
                         .on_packet(packet_sequence_number, first_message_offset, parse_buf).await
                 },
-                PacketKind::OutOfSequence => self.message_dispatcher.on_message(peer_addr, None, parse_buf).await,
+                PacketKind::FireAndForget => self.message_dispatcher.on_message(peer_addr, None, parse_buf).await,
                 PacketKind::ControlInit { stream_id } => Self::handle_init_message(self.get_send_stream(peer_addr, stream_id).await).await,
                 PacketKind::ControlRecvSync { stream_id } => Self::handle_recv_sync(parse_buf, self.get_send_stream(peer_addr, stream_id).await).await,
                 PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(&mut receive_streams, packet_header.sender_generation, peer_addr, stream_id)).await,
                 PacketKind::ControlNak { stream_id } => Self::handle_nak(parse_buf, self.get_send_stream(peer_addr, stream_id).await).await,
+                PacketKind::Ping => {} // nothing to be done, just syncing generations
             }
         }
+    }
+
+    async fn send_ping(&self, to: SocketAddr) {
+        let mut buf = self.buffer_pool.get_from_pool();
+        PacketHeader::new(self.get_reply_to_addr(to), PacketKind::Ping, self.generation, self.peer_generations.load().get(&to).cloned())
+            .ser(&mut buf);
+
+        self.get_send_pipeline(to)
+            .finalize_and_send_packet(to, &mut buf)
+            .await;
+
+        self.buffer_pool.return_to_pool(buf);
     }
 
     #[must_use]
@@ -214,7 +227,7 @@ impl EndPoint {
         }
     }
 
-    fn get_send_socket(&self, peer_addr: SocketAddr) -> Arc<SendPipeline> {
+    fn get_send_pipeline(&self, peer_addr: SocketAddr) -> Arc<SendPipeline> {
         if peer_addr.is_ipv4() {
             self.send_socket_v4.clone()
         }
@@ -237,7 +250,7 @@ impl EndPoint {
                     peer_generation,
                     stream_id,
                     addr,
-                    self.get_send_socket(addr),
+                    self.get_send_pipeline(addr),
                     self.receive_socket.local_addr().unwrap(),
                     self.message_dispatcher.clone(),
                 );
@@ -266,7 +279,7 @@ impl EndPoint {
             self.generation,
             self.peer_generations.clone(),
             stream_id,
-            self.get_send_socket(addr),
+            self.get_send_pipeline(addr),
             addr,
             self.get_reply_to_addr(addr),
             self.buffer_pool.clone(),

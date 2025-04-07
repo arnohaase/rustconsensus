@@ -73,11 +73,12 @@
 //!       * 10  identical to UDP sender
 //!     * bit 2-4: kind of frame:
 //!       * 000 regular sequenced
-//!       * 001 out-of-sequence for single-packet application-level messages
+//!       * 001 fire-and-forget for single-packet application-level messages
 //!       * 010 INIT
 //!       * 011 NAK
 //!       * 100 RECV_SYNC
 //!       * 101 SEND_SYNC
+//!       * 110 PING
 //!     * 5-7: unused, should be 0
 //! 1:  sender generation (u48) - millis since epoch at starting time of the process. The idea is that
 //!      after a restart, the `generation` will be different and larger, allowing peers to detect
@@ -190,6 +191,10 @@
 //! 0: number of NAK'ed packet ids (varint u16)
 //! *: (repeated) packet id to be re-sent (u64 BE)
 //! ```
+//!
+//! *PING*
+//!
+//! has no payload and just has the purpose of notifying a peer of our generation
 //!
 //! ## Send and receive window
 //!
