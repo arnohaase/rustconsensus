@@ -62,7 +62,7 @@ pub async fn run_gossip<M: Messaging>(config: Arc<ClusterConfig>, messaging: Arc
     let (send, mut recv) = mpsc::channel(32);
 
     let message_module = GossipMessageModule::new(send);
-    messaging.register_module(message_module.clone()).await?;
+    messaging.register_module(message_module.clone());
     let messaging = messaging.as_ref();
 
     let mut gossip = Gossip::new(myself, config.clone(), cluster_state.clone());

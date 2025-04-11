@@ -13,7 +13,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use aead::Buffer;
-use tokio::net::{ToSocketAddrs, UdpSocket};
+use tokio::net::UdpSocket;
 use tracing::{debug, error, info, trace, warn};
 use crate::buffers::encryption::{Aes256GcmEncryption, NoEncryption, RudpEncryption};
 //TODO unit test
@@ -35,14 +35,13 @@ pub struct EndPoint {
 }
 impl EndPoint {
     pub async fn new(
-        addrs: impl ToSocketAddrs,
         message_dispatcher: Arc<dyn MessageDispatcher>,
-        config: RudpConfig,
+        config: Arc<RudpConfig>,
     ) -> anyhow::Result<EndPoint> {
         config.validate()?;
 
         //TODO "don't fragment" flag
-        let receive_socket = Arc::new(UdpSocket::bind(addrs).await?);
+        let receive_socket = Arc::new(UdpSocket::bind(config.self_addr).await?);
         info!("bound receive socket to {:?}", receive_socket.local_addr()?);
         let (send_socket_v4, send_socket_v6) = if receive_socket.local_addr()?.is_ipv6() {
             (Arc::new(UdpSocket::bind("0.0.0.0:0").await?), receive_socket.clone())
@@ -51,7 +50,7 @@ impl EndPoint {
             (receive_socket.clone(), Arc::new(UdpSocket::bind("[::]:0").await?))
         };
 
-        let encryption = Self::create_encryption(&config);
+        let encryption = Self::create_encryption(config.as_ref());
 
         let buffer_pool = Arc::new(SendBufferPool::new(config.payload_size_inside_udp, config.buffer_pool_size, encryption.clone()));
         Ok(EndPoint {
@@ -62,10 +61,18 @@ impl EndPoint {
             peer_generations: Default::default(),
             send_streams: Default::default(),
             message_dispatcher,
-            config: Arc::new(config),
+            config,
             buffer_pool,
             encryption,
         })
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn self_addr(&self) -> SocketAddr {
+        self.receive_socket.local_addr().unwrap()
     }
 
     fn create_encryption(config: &RudpConfig) -> Arc<dyn RudpEncryption> {

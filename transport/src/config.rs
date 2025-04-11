@@ -1,9 +1,14 @@
+use std::net::SocketAddr;
 use std::time::Duration;
 use anyhow::bail;
 use rustc_hash::FxHashMap;
 use crate::buffers::encryption::RudpEncryption;
 
+#[derive(Clone, Debug)]
 pub struct RudpConfig {
+    /// The address that the receiving UDP socket is bound to
+    pub self_addr: SocketAddr,
+
     /// This is the payload size inside UDP packets that RUDP assumes. Since RUDP enforces
     ///  non-fragmentation of packets, this payload size (and the implied packet size) must be
     ///  supported by all network connections between nodes.
@@ -50,28 +55,32 @@ pub struct RudpConfig {
 impl RudpConfig {
 
     ///TODO documentation - ipv4 with end-to-end full Ethernet MTU - without optional headers
-    pub fn default_ipv4(encryption_key: Option<Vec<u8>>) -> RudpConfig {
-        RudpConfig {
-            payload_size_inside_udp: 1472,
-            buffer_pool_size: 4096,
-            encryption_key,
-            max_message_size: 16*1024*1024,
-            default_send_stream_config: SendStreamConfig {
-                send_delay: Some(Duration::from_millis(1)),
-                send_window_size: 1024,
-            },
-            specific_send_stream_configs: FxHashMap::default(),
-            default_receive_stream_config: ReceiveStreamConfig {
-                nak_interval: Duration::from_millis(4),
-                sync_interval: Duration::from_millis(500),
-                receive_window_size: 16*1024,
-                max_num_naks_per_packet: 150,
-            },
-            specific_receive_stream_configs: FxHashMap::default(),
+    pub fn default(self_addr: SocketAddr, encryption_key: Option<Vec<u8>>) -> RudpConfig {
+        if self_addr.is_ipv4() {
+            RudpConfig {
+                self_addr,
+                payload_size_inside_udp: 1472,
+                buffer_pool_size: 4096,
+                encryption_key,
+                max_message_size: 16 * 1024 * 1024,
+                default_send_stream_config: SendStreamConfig {
+                    send_delay: Some(Duration::from_millis(1)),
+                    send_window_size: 1024,
+                },
+                specific_send_stream_configs: FxHashMap::default(),
+                default_receive_stream_config: ReceiveStreamConfig {
+                    nak_interval: Duration::from_millis(4),
+                    sync_interval: Duration::from_millis(500),
+                    receive_window_size: 16 * 1024,
+                    max_num_naks_per_packet: 150,
+                },
+                specific_receive_stream_configs: FxHashMap::default(),
+            }
+        }
+        else {
+            todo!("default ipv6")
         }
     }
-
-    //TODO default_ipv6
 
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.payload_size_inside_udp < 100 {
@@ -110,6 +119,7 @@ impl RudpConfig {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct SendStreamConfig {
     /// This is the duration that a partially filled packet is held back in case some other message
     ///  is sent and can be put into the same packet ('late send').
@@ -135,6 +145,7 @@ pub struct EffectiveSendStreamConfig {
 //TODO measure RTT
 //TODO traffic shaping - regular ACK, delay when send buffer is full
 
+#[derive(Clone, Debug)]
 pub struct ReceiveStreamConfig {
     pub nak_interval: Duration, // configure to roughly 2x RTT
     pub sync_interval: Duration, // configure on the order of seconds

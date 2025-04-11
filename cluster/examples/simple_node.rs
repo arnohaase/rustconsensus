@@ -59,8 +59,7 @@ pub async fn main() -> anyhow::Result<()> {
         seed_nodes.push(seed_node);
     }
 
-    let mut cluster_config = ClusterConfig::new(args.cluster_address.parse()?);
-    cluster_config.self_addr = args.cluster_address.parse()?;
+    let mut cluster_config = ClusterConfig::new(args.cluster_address.parse()?, Some(vec![5u8;32]));
 
     let cluster_config = Arc::new(cluster_config);
     let cluster = Arc::new(Cluster::new(cluster_config.clone()).await?);

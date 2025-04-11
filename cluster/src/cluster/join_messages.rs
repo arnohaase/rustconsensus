@@ -7,18 +7,18 @@ use bytes_varint::{VarIntSupport, VarIntSupportMut};
 use tokio::sync::RwLock;
 use tracing::error;
 use crate::cluster::cluster_state::ClusterState;
-use crate::messaging::envelope::Envelope;
 use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
-use crate::messaging::messaging::JOIN_MESSAGE_MODULE_ID;
+use crate::messaging::node_addr::NodeAddr;
 use crate::util::buf::{put_string, try_get_string};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JoinMessage {
     Join{ roles: BTreeSet<String>, }
 }
+
 impl Message for JoinMessage {
     fn module_id(&self) -> MessageModuleId {
-        JOIN_MESSAGE_MODULE_ID
+        Self::JOIN_MESSAGE_MODULE_ID
     }
 
     fn ser(&self, buf: &mut BytesMut) {
@@ -36,6 +36,8 @@ impl Message for JoinMessage {
 }
 
 impl JoinMessage {
+    pub const JOIN_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"CtrJoin\0");
+
     pub fn deser(mut buf: &[u8]) -> anyhow::Result<JoinMessage> {
         let mut roles = BTreeSet::default();
 
@@ -64,16 +66,16 @@ impl JoinMessageModule {
 impl MessageModule for JoinMessageModule {
 
     fn id(&self) -> MessageModuleId {
-        JOIN_MESSAGE_MODULE_ID
+        JoinMessage::JOIN_MESSAGE_MODULE_ID
     }
 
-    async fn on_message(&self, envelope: &Envelope, buf: &[u8]) {
+    async fn on_message(&self, sender: NodeAddr, buf: &[u8]) {
         match JoinMessage::deser(buf) {
             Ok(JoinMessage::Join { roles }) => {
                 //TODO check shared secret
 
                 self.cluster_state.write().await
-                    .add_joiner(envelope.from, roles);
+                    .add_joiner(sender, roles);
             }
             Err(e) => {
                 error!("error deserializing message: {}", e);

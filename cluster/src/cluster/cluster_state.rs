@@ -701,7 +701,7 @@ mod tests {
     fn test_new() {
         let self_addr = SocketAddr::from_str("127.0.0.1:1234").unwrap();
         let myself = NodeAddr::from(self_addr);
-        let config = Arc::new(ClusterConfig::new(self_addr));
+        let config = Arc::new(ClusterConfig::new(self_addr, None));
         let cluster_event_queue = Arc::new(ClusterEventNotifier::new());
 
         let cluster_state = ClusterState::new(
@@ -740,7 +740,7 @@ mod tests {
     #[test]
     fn test_add_joiner() {
         let myself = test_node_addr_from_number(1);
-        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
 
         let joiner_addr = test_node_addr_from_number(5);
         cluster_state.add_joiner(joiner_addr, ["a".to_string()].into());
@@ -757,7 +757,7 @@ mod tests {
     #[test]
     fn test_add_joiner_pre_existing() {
         let myself = test_node_addr_from_number(1);
-        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
 
         let joiner_addr = test_node_addr_from_number(5);
 
@@ -785,7 +785,7 @@ mod tests {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
             for n in nodes {
                 cluster_state.nodes_with_state.insert(n.addr, n);
             }
@@ -811,7 +811,7 @@ mod tests {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
             for n in nodes {
                 cluster_state.nodes_with_state.insert(n.addr, n);
             }
@@ -837,7 +837,7 @@ mod tests {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
             for n in nodes {
                 cluster_state.nodes_with_state.insert(n.addr, n);
             }
@@ -864,7 +864,7 @@ mod tests {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
             for n in nodes {
                 cluster_state.nodes_with_state.insert(n.addr, n);
             }
@@ -911,7 +911,7 @@ mod tests {
                 .collect::<Vec<_>>();
 
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
             for n in initial_nodes {
                 cluster_state.nodes_with_state.insert(n.addr, n);
             }
@@ -952,7 +952,7 @@ mod tests {
     #[case::non_existing(vec![], false)] // should not happen, robustness corner case test
     fn test_is_node_converged(#[case] nodes: Vec<NodeState>, #[case] expected: bool) {
         let myself = test_node_addr_from_number(1);
-        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
         for n in nodes {
             cluster_state.nodes_with_state.insert(n.addr, n);
         }
@@ -974,7 +974,7 @@ mod tests {
     //TODO how to handle 'seen by' by nodes that are not registered (yet)? Filter them out in ClusterState? Defer convergence? Can they become part of the cluster's lore without existing?
     fn test_is_converged(#[case] nodes: Vec<NodeState>, #[case] expected: bool) {
         let myself = test_node_addr_from_number(1);
-        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
         for n in nodes {
             cluster_state.nodes_with_state.insert(n.addr, n);
         }
@@ -1003,7 +1003,7 @@ mod tests {
         let leader_candidate = leader_candidate.map(|n| test_node_addr_from_number(n));
 
         let myself = test_node_addr_from_number(1);
-        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
         for n in nodes {
             cluster_state.nodes_with_state.insert(n.addr, n);
         }
@@ -1037,7 +1037,7 @@ mod tests {
     #[case::not_converged(vec![node_state!(1[]:Up->[]@[1,2]),node_state!(2[]:Up->[]@[1])], false)]
     fn test_am_i_leader(#[case] nodes: Vec<NodeState>, #[case] expected: bool) {
         let myself = test_node_addr_from_number(1);
-        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+        let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
         for n in nodes {
             cluster_state.nodes_with_state.insert(n.addr, n);
         }
@@ -1065,7 +1065,7 @@ mod tests {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
             cluster_state.nodes_with_state.clear();
             for n in initial {
                 cluster_state.nodes_with_state.insert(n.addr, n);
@@ -1103,7 +1103,7 @@ mod tests {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
 
             let mut event_subscriber = cluster_state.event_notifier.subscribe();
 
@@ -1134,7 +1134,7 @@ mod tests {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
 
             // node 3 is in node 2's 'seen by' set
             cluster_state.merge_node_state(NodeState {
@@ -1214,7 +1214,7 @@ mod tests {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr)), Arc::new(ClusterEventNotifier::new()));
+            let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
             cluster_state.version_counter = 8;
 
             let mut event_subscriber = cluster_state.event_notifier.subscribe();
@@ -1275,7 +1275,7 @@ mod tests {
     fn test_lazy_counter_version() {
         let self_addr = SocketAddr::from_str("127.0.0.1:1234").unwrap();
         let myself = NodeAddr::from(self_addr);
-        let config = Arc::new(ClusterConfig::new(self_addr));
+        let config = Arc::new(ClusterConfig::new(self_addr, None));
         let cluster_event_queue = Arc::new(ClusterEventNotifier::new());
 
         let mut cluster_state = ClusterState::new(
@@ -1326,7 +1326,7 @@ mod tests {
     #[case::matching_role_and_other_2(node_state!(1["l1", "o"]:Up->[]@[1]), Some(vec!["l1", "l2"]), true)]
     #[case::ignore_reachability(node_state!(1[]:Up->[2:false@5]@[1]), None, true)]
     fn test_node_state_is_leader_eligible(#[case] node_state: NodeState, #[case] required_roles: Option<Vec<&str>>, #[case] expected: bool) {
-        let mut config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr);
+        let mut config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr, None);
         if let Some(required_roles) = required_roles {
             let leader_eligible_roles = required_roles.iter()
                 .map(|r| r.to_string())

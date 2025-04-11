@@ -2,10 +2,12 @@ use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::time::Duration;
 use rustc_hash::FxHashSet;
+use transport::config::RudpConfig;
 
 #[derive(Debug)]
 pub struct ClusterConfig {
-    pub self_addr: SocketAddr,
+    pub transport_config: RudpConfig,
+
     pub roles: BTreeSet<String>,
 
     pub messaging_shared_secret: Vec<u8>,
@@ -42,9 +44,9 @@ pub struct ClusterConfig {
 }
 
 impl ClusterConfig {
-    pub fn new(self_addr: SocketAddr) -> ClusterConfig {
+    pub fn new(self_addr: SocketAddr, encryption_key: Option<Vec<u8>>) -> ClusterConfig {
         ClusterConfig {
-            self_addr,
+            transport_config: RudpConfig::default(self_addr, encryption_key),
             roles: Default::default(),
             messaging_shared_secret: b"no secret".to_vec(),
             num_gossip_partners: 3,
@@ -66,5 +68,9 @@ impl ClusterConfig {
             discovery_seed_node_retry_interval: Duration::from_secs(1),
             discovery_seed_node_give_up_timeout: Duration::from_secs(60),
         }
+    }
+
+    pub fn self_addr(&self) -> SocketAddr {
+        self.transport_config.self_addr
     }
 }

@@ -167,7 +167,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_update_unreachable_set() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
 
         let downing_strategy = Arc::new(MockDowningStrategy::new());
@@ -200,7 +200,7 @@ mod tests {
             time::pause();
 
             let myself = test_node_addr_from_number(1);
-            let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+            let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
             let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
             cluster_state.write().await
                 .merge_node_state(node_state!(2[]:Up->[3:false@9]@[1,2,3])).await;
@@ -243,7 +243,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_unstable_shutdown() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
         cluster_state.write().await
             .merge_node_state(node_state!(2[]:Up->[3:false@9]@[1,2,3])).await;

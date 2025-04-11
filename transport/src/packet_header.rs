@@ -46,9 +46,6 @@ impl PacketHeader {
     pub const PROTOCOL_VERSION_1: u8 = 0;
     pub const OFFSET_MESSAGE_CONTINUES: u16 = u16::MAX;
 
-    const OFFSET_START_CHECKSUM: usize = 1;
-    const OFFSET_AFTER_CHECKSUM: usize = Self::OFFSET_START_CHECKSUM + size_of::<u64>();
-
     pub fn new(reply_to_address: Option<SocketAddr>, packet_kind: PacketKind, sender_generation: u64, receiver_generation: Option<u64>) -> PacketHeader {
         PacketHeader {
             protocol_version: Self::PROTOCOL_VERSION_1,

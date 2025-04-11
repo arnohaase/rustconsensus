@@ -7,7 +7,6 @@ use bytes_varint::try_get_fixed::TryGetFixedSupport;
 use tokio::sync::mpsc;
 use tracing::error;
 
-use crate::messaging::envelope::Envelope;
 use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::node_addr::NodeAddr;
 
@@ -26,9 +25,9 @@ impl HeartbeatMessageModule {
     }
 
     //TODO unit test heartbeat message module
-    async fn _on_message(&self, envelope: &Envelope, buf: &[u8]) -> anyhow::Result<()> {
+    async fn _on_message(&self, sender: NodeAddr, buf: &[u8]) -> anyhow::Result<()> {
         let msg = HeartbeatMessage::deser(buf)?;
-        self.channel.send((envelope.from, msg)).await?;
+        self.channel.send((sender, msg)).await?;
         Ok(())
     }
 }
@@ -39,8 +38,8 @@ impl MessageModule for HeartbeatMessageModule {
         HEARTBEAT_MESSAGE_MODULE_ID
     }
 
-    async fn on_message(&self, envelope: &Envelope, buf: &[u8]) {
-        if let Err(e) = self._on_message(envelope, buf).await {
+    async fn on_message(&self, sender: NodeAddr, buf: &[u8]) {
+        if let Err(e) = self._on_message(sender, buf).await {
             error!("error handling message: {}", e);
         }
     }

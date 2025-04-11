@@ -32,7 +32,7 @@ pub async fn run_heartbeat<M: Messaging>(config: Arc<ClusterConfig>, messaging: 
     let (send, mut recv) = mpsc::channel(1024);
 
     let heartbeat_message_module = HeartbeatMessageModule::new(send);
-    messaging.register_module(heartbeat_message_module.clone()).await?;
+    messaging.register_module(heartbeat_message_module.clone());
 
     let mut update_reachability_ticks = time::interval(Duration::from_millis(10)); //TODO configurable?
     let mut heartbeat_ticks = time::interval(config.heartbeat_interval);
@@ -119,7 +119,7 @@ mod tests {
     #[tokio::test]
     async fn test_on_heartbeat_message_heartbeat() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let mut heartbeat = HeartBeat::<FixedTimeoutDecider>::new(myself, config);
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
@@ -134,7 +134,7 @@ mod tests {
     #[tokio::test]
     async fn test_on_heartbeat_message_response() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let mut heartbeat = HeartBeat::<FixedTimeoutDecider>::new(myself, config);
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
@@ -148,7 +148,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_update_reachability_from_here() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let cluster_state = RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new())));
         for n in [2,3,4,5] {
             let mut node_state = node_state!(2[]:Up->[]@[1,2,3,4,5]);
@@ -177,7 +177,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_do_heartbeat() {
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr);
+        let mut config = ClusterConfig::new(myself.socket_addr, None);
         config.num_heartbeat_partners_per_node = 2;
         let config = Arc::new(config);
         let cluster_state = RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new())));
