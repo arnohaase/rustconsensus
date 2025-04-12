@@ -2,7 +2,6 @@ use anyhow::anyhow;
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::{Buf, BufMut};
 
@@ -91,22 +90,6 @@ impl NodeAddr {
             unique,
             socket_addr: addr,
         })
-    }
-}
-
-impl From<SocketAddr> for NodeAddr {
-    fn from(addr: SocketAddr) -> Self {
-        //TODO overarching clock concept
-        let unique = SystemTime::now().duration_since(UNIX_EPOCH)
-            .expect("system time is before UNIX epoch") //TODO
-            .as_secs()
-            .try_into()
-            .expect("seconds since epoch bigger than u32::MAX");
-
-        NodeAddr {
-            unique,
-            socket_addr: addr,
-        }
     }
 }
 

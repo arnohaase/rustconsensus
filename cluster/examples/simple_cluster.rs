@@ -25,7 +25,7 @@ fn addr(n: usize) -> SocketAddr {
 
 #[tracing::instrument(name="Cluster", skip(num_nodes))]
 async fn new_node(num_nodes: usize, n: usize) -> anyhow::Result<()> {
-    let config = ClusterConfig::new(addr(n), Some(b"12345678123456781234567812345678".to_vec()));
+    let config = ClusterConfig::new(addr(n), Some(b"1234567_1234567_1234567_1234567_".to_vec()));
     let cluster = Cluster::new(Arc::new(config)).await?;
 
     let seed_nodes = (0..num_nodes).map(|n| addr(n)).collect::<Vec<_>>();

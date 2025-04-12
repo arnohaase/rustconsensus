@@ -140,7 +140,7 @@ impl  UnreachableTracker {
             // This is a best effort to notify all affected nodes of the downing decision.
             //  We cannot reach all nodes anyway, and there may be network problems, so this is
             //  *not* a reliable notification - but it may help in the face of problems
-            messaging.send(n, &GossipMessage::DownYourself).await;
+            messaging.send_raw_fire_and_forget(n.socket_addr, Some(n.unique), &GossipMessage::DownYourself).await;
         }
     }
 }

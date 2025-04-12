@@ -71,7 +71,7 @@ async fn on_heartbeat_message<M: MessageSender, D: ReachabilityDecider>(sender: 
             let response = HeartbeatMessage::HeartbeatResponse(HeartbeatResponseData {
                 timestamp_nanos: data.timestamp_nanos,
             });
-            messaging.send(sender, &response).await;
+            messaging.send_raw_fire_and_forget(sender.socket_addr, Some(sender.unique), &response).await;
         }
         HeartbeatMessage::HeartbeatResponse(data) => {
             debug!("received heartbeat response message");
@@ -94,7 +94,7 @@ async fn do_heartbeat<M: MessageSender, D: ReachabilityDecider>(cluster_state: &
     let recipients = heart_beat.heartbeat_recipients(&*cluster_state.read().await);
     debug!("sending heartbeat message to {:?}", recipients);
     for recipient in recipients {
-        messaging.send(recipient, &msg).await;
+        messaging.send_raw_fire_and_forget(recipient.socket_addr, Some(recipient.unique), &msg).await;
     }
 }
 

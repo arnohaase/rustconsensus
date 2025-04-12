@@ -13,6 +13,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use aead::Buffer;
+use bytes::BufMut;
 use tokio::net::UdpSocket;
 use tracing::{debug, error, info, trace, warn};
 use crate::buffers::encryption::{Aes256GcmEncryption, NoEncryption, RudpEncryption};
@@ -67,7 +68,7 @@ impl EndPoint {
         })
     }
 
-    pub fn generation(&self) -> u64 {
+    pub fn self_generation(&self) -> u64 {
         self.generation
     }
 
@@ -99,9 +100,22 @@ impl EndPoint {
 
     //TODO send without stream
 
-    pub async fn send_message(&self, to: SocketAddr, stream_id: u16, message: &[u8]) {
-        let send_stream = self.get_send_stream(to, stream_id).await;
-        send_stream.send_message(message).await;
+    pub async fn send_in_stream(&self, to_addr: SocketAddr, required_generation: Option<u64>, stream_id: u16, message: &[u8]) {
+        let send_stream = self.get_send_stream(to_addr, stream_id).await;
+        send_stream.send_message(required_generation, message).await;
+    }
+
+    //TODO unit test
+    pub async fn send_outside_stream(&self, to_addr: SocketAddr, required_to_generation: Option<u64>, message: &[u8]) {
+        let mut buf = self.buffer_pool.get_from_pool();
+        PacketHeader::new(self.get_reply_to_addr(to_addr), PacketKind::FireAndForget, self.generation, required_to_generation)
+            .ser(&mut buf);
+        buf.put_slice(message);
+
+        self.get_send_pipeline(to_addr)
+            .do_send_packet(to_addr, buf.as_ref()).await;
+
+        self.buffer_pool.return_to_pool(buf);
     }
 
     pub async fn recv_loop(&self)  {
@@ -177,7 +191,7 @@ impl EndPoint {
                     self.get_receive_stream(&mut receive_streams, packet_header.sender_generation, peer_addr, stream_id)
                         .on_packet(packet_sequence_number, first_message_offset, parse_buf).await
                 },
-                PacketKind::FireAndForget => self.message_dispatcher.on_message(peer_addr, None, parse_buf).await,
+                PacketKind::FireAndForget => self.message_dispatcher.on_message(peer_addr, packet_header.sender_generation, None, parse_buf).await,
                 PacketKind::ControlInit { stream_id } => Self::handle_init_message(self.get_send_stream(peer_addr, stream_id).await).await,
                 PacketKind::ControlRecvSync { stream_id } => Self::handle_recv_sync(parse_buf, self.get_send_stream(peer_addr, stream_id).await).await,
                 PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(&mut receive_streams, packet_header.sender_generation, peer_addr, stream_id)).await,

@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use bytes::BytesMut;
 use tracing::{error, warn};
 use transport::buffers::atomic_map::AtomicMap;
 use transport::config::RudpConfig;
@@ -13,24 +14,26 @@ use transport::message_dispatcher::MessageDispatcher;
 
 pub const MAX_MSG_SIZE: usize = 256*1024; //TODO make this configurable
 
+pub const STREAM_ID_INTERNAL : u16 = 0xFFEE;
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait MessageSender: Debug + Send + Sync + 'static {
     fn get_self_addr(&self) -> NodeAddr;
 
-    async fn send<T: Message>(&self, to: NodeAddr, msg: &T) {
-        if let Err(e) = self.try_send(to, msg).await {
-            error!("Error sending message: {}", e);
-        }
-    }
-    async fn try_send<T: Message>(&self, to: NodeAddr, msg: &T) -> anyhow::Result<()>;
+    //TODO documentation
+
+    async fn send_to_node<T: Message>(&self, to: NodeAddr, stream_id: u16, msg: &T);
+
+    async fn send_to_addr<T: Message>(&self, to: SocketAddr, stream_id: u16, msg: &T);
+
+    async fn send_raw_fire_and_forget<T: Message>(&self, to_addr: SocketAddr, required_to_generation: Option<u64>, msg: &T);
 }
 
 #[async_trait]
 pub trait Messaging: MessageSender {
     fn register_module(&self, message_module: Arc<dyn MessageModule>);
     fn deregister_module(&self, id: MessageModuleId);
-    async fn recv(&self) -> anyhow::Result<()>;
+    async fn recv(&self);
 }
 
 pub struct RudpMessagingImpl {
@@ -64,15 +67,30 @@ impl RudpMessagingImpl {
 impl MessageSender for RudpMessagingImpl {
     fn get_self_addr(&self) -> NodeAddr {
         NodeAddr {
-            unique: self.end_point.generation(),
+            unique: self.end_point.self_generation(),
             socket_addr: self.end_point.self_addr(),
         }
     }
 
-    async fn try_send<T: Message>(&self, to: NodeAddr, msg: &T) -> anyhow::Result<()> {
+    async fn send_to_node<T: Message>(&self, to: NodeAddr, stream_id: u16, msg: &T) {
+        let mut buf = BytesMut::new();
+        msg.ser(&mut buf);
 
+        self.end_point.send_in_stream(to.socket_addr, Some(to.unique), stream_id, &buf).await;
+    }
 
-        todo!()
+    async fn send_to_addr<T: Message>(&self, to: SocketAddr, stream_id: u16, msg: &T) {
+        let mut buf = BytesMut::new();
+        msg.ser(&mut buf);
+
+        self.end_point.send_in_stream(to, None, stream_id, &buf).await;
+    }
+
+    async fn send_raw_fire_and_forget<T: Message>(&self, to_addr: SocketAddr, required_to_generation: Option<u64>, msg: &T) {
+        let mut buf = BytesMut::new();
+        msg.ser(&mut buf);
+
+        self.end_point.send_outside_stream(to_addr, required_to_generation, &buf).await;
     }
 }
 
@@ -96,9 +114,8 @@ impl Messaging for RudpMessagingImpl {
             });
     }
 
-    async fn recv(&self) -> anyhow::Result<()> {
+    async fn recv(&self) {
         self.end_point.recv_loop().await;
-        Ok(()) //todo!()
     }
 }
 
@@ -108,12 +125,15 @@ struct MessageDispatcherImpl {
 
 #[async_trait]
 impl MessageDispatcher for MessageDispatcherImpl {
-    async fn on_message(&self, sender: SocketAddr, stream_id: Option<u16>, mut msg_buf: &[u8]) {
+    async fn on_message(&self, sender_addr: SocketAddr, sender_generation: u64, _stream_id: Option<u16>, mut msg_buf: &[u8]) {
         match MessageModuleId::deser(&mut msg_buf) {
             Ok(id) => {
                 match self.message_modules.load().get(&id) {
                     Some(message_module) => {
-                        message_module.on_message(todo!(), msg_buf).await;
+                        message_module.on_message(NodeAddr {
+                            unique: sender_generation,
+                            socket_addr: sender_addr,
+                        }, msg_buf).await;
                     }
                     None => {
                         warn!("received a message for message id {:?} which is not registered - skipping message", id);

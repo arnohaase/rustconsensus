@@ -50,11 +50,15 @@ impl SendStreamInner {
                 packet_sequence_number: self.work_in_progress_packet_id,
             },
             self.self_generation,
-            self.peer_generations.load().get(&self.peer_addr).cloned(),
+            self.peer_generation(),
         ).ser(&mut new_buffer);
 
         self.work_in_progress = Some(new_buffer);
         self.work_in_progress.as_mut().unwrap()
+    }
+
+    fn peer_generation(&self) -> Option<u64> {
+        self.peer_generations.load().get(&self.peer_addr).cloned()
     }
 
     async fn send_send_sync(&self) {
@@ -62,7 +66,7 @@ impl SendStreamInner {
             self.self_reply_to_addr,
             PacketKind::ControlSendSync { stream_id: self.stream_id },
             self.self_generation,
-            self.peer_generations.load().get(&self.peer_addr).cloned(),
+            self.peer_generation(),
         );
 
         let mut send_buf = self.buffer_pool.get_from_pool();
@@ -211,10 +215,19 @@ impl SendStream {
 
     /// NB: This function does not return Result because all retry / recovery handling is expected
     ///      to be done here
-    pub async fn send_message(&self, mut message: &[u8]) {
+    pub async fn send_message(&self, required_peer_generation: Option<u64>, mut message: &[u8]) {
         //TODO ensure message max length - configurable upper limit?
 
         let mut inner = self.inner.write().await;
+
+        if required_peer_generation.is_some() && inner.peer_generation() != required_peer_generation {
+            debug!("discarded message sent to {:?}: client requested generation {:?} but known generation was {:?}",
+                inner.peer_addr,
+                required_peer_generation.unwrap(),
+                inner.peer_generation(),
+            );
+            return; //TODO unit test
+        }
 
         debug!("registering message of length {} for sending to {:?} on stream {:?}", message.len(), inner.peer_addr, inner.stream_id);
 

@@ -1,14 +1,12 @@
 use crate::buffers::buffer_pool::SendBufferPool;
 use crate::config::EffectiveReceiveStreamConfig;
-use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
+use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::message_header::MessageHeader;
 use crate::packet_header::{PacketHeader, PacketKind};
 use crate::packet_id::PacketId;
 use crate::safe_converter::{PrecheckedCast, SafeCast};
 use crate::send_pipeline::SendPipeline;
-use bytes::BufMut;
-use bytes_varint::VarIntSupportMut;
 use std::cmp::{max, min, Ordering};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -165,11 +163,9 @@ impl ReceiveStreamInner {
 
         let mut send_buf = self.buffer_pool.get_from_pool();
         header.ser(&mut send_buf);
-
-        send_buf.put_usize_varint(nak_packets.len());
-        for packet_id in nak_packets {
-            send_buf.put_u64(packet_id.to_raw());
-        }
+        ControlMessageNak {
+            packet_id_resend_set: nak_packets,
+        }.ser(&mut send_buf);
 
         self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
         self.buffer_pool.return_to_pool(send_buf);
@@ -624,7 +620,7 @@ impl ReceiveStream {
         inner.sanitize_after_update();
 
         while let Some(buf) = inner.consume_next_message() {
-            self.message_dispatcher.on_message(inner.peer_addr, Some(inner.stream_id), &buf).await;
+            self.message_dispatcher.on_message(inner.peer_addr, inner.peer_generation, Some(inner.stream_id), &buf).await;
         }
     }
 
@@ -872,8 +868,8 @@ mod tests {
     }
     #[async_trait]
     impl MessageDispatcher for CollectingMessageDispatcher {
-        async fn on_message(&self, sender: SocketAddr, stream_id: Option<u16>, msg_buf: &[u8]) {
-            self.messages.lock().await.push((sender, stream_id, msg_buf.to_vec()));
+        async fn on_message(&self, sender_addr: SocketAddr, sender_generation: u64, stream_id: Option<u16>, msg_buf: &[u8]) {
+            self.messages.lock().await.push((sender_addr, stream_id, msg_buf.to_vec()));
         }
     }
 

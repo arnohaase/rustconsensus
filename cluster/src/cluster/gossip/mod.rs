@@ -8,7 +8,7 @@ use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
 use crate::cluster::gossip::gossip_logic::Gossip;
 use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipMessage, GossipMessageModule, GossipNodesData, GossipSummaryDigestData};
-use crate::messaging::messaging::{MessageSender, Messaging};
+use crate::messaging::messaging::{MessageSender, Messaging, STREAM_ID_INTERNAL};
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::random::Random;
 
@@ -95,7 +95,7 @@ async fn do_gossip<M: MessageSender>(gossip: &impl GossipApi, messaging: &M) { /
     let gossip_partners = gossip.gossip_partners().await;
     for (addr, msg) in gossip_partners {
         debug!("sending gossip message to {:?}", addr);
-        messaging.send(addr, msg.as_ref()).await;
+        messaging.send_to_node(addr, STREAM_ID_INTERNAL, msg.as_ref()).await;
     }
 }
 
@@ -105,17 +105,17 @@ async fn on_gossip_message<M: MessageSender>(msg: GossipMessage, sender: NodeAdd
     match msg {
         GossipSummaryDigest(digest) => {
             if let Some(response) = gossip.on_summary_digest(&digest).await {
-                messaging.send(sender, &GossipDetailedDigest(response)).await;
+                messaging.send_to_node(sender, STREAM_ID_INTERNAL, &GossipDetailedDigest(response)).await;
             }
         }
         GossipDetailedDigest(digest) => {
             if let Some(response) = gossip.on_detailed_digest(&digest).await {
-                messaging.send(sender, &GossipDifferingAndMissingNodes(response)).await;
+                messaging.send_to_node(sender, STREAM_ID_INTERNAL, &GossipDifferingAndMissingNodes(response)).await;
             }
         }
         GossipDifferingAndMissingNodes(data) => {
             if let Some(response) = gossip.on_differing_and_missing_nodes(data).await {
-                messaging.send(sender, &GossipNodes(response)).await;
+                messaging.send_to_node(sender, STREAM_ID_INTERNAL, &GossipNodes(response)).await;
             }
         }
         GossipNodes(data) => {
