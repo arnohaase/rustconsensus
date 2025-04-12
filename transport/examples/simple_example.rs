@@ -50,10 +50,10 @@ async fn main() -> anyhow::Result<()> {
         cloned_b.recv_loop().instrument(span).await
     });
 
-    a.send_in_stream(addr_b, 4, &[1, 2, 3]).await;
-    a.send_in_stream(addr_b, 4, &[2, 3, 4, 5]).await;
-    a.send_in_stream(addr_b, 4, &[7]).await;
-    a.send_in_stream(addr_b, 4, &[4, 5, 6]).await;
+    a.send_in_stream(addr_b, None, 4, &[1, 2, 3]).await;
+    a.send_in_stream(addr_b, None, 4, &[2, 3, 4, 5]).await;
+    a.send_in_stream(addr_b, None, 4, &[7]).await;
+    a.send_in_stream(addr_b, None, 4, &[4, 5, 6]).await;
 
     sleep(Duration::from_millis(20)).await;
 
@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
 struct SimpleMessageDispatcher {}
 #[async_trait::async_trait]
 impl MessageDispatcher for SimpleMessageDispatcher {
-    async fn on_message(&self, sender: SocketAddr, stream_id: Option<u16>, msg_buf: &[u8]) {
-        info!("received message {:?} from {:?} on stream {:?}", msg_buf, sender, stream_id);
+    async fn on_message(&self, sender_addr: SocketAddr, sender_generation: u64,  stream_id: Option<u16>, msg_buf: &[u8]) {
+        info!("received message {:?} from {:?}@{} on stream {:?}", msg_buf, sender_addr, sender_generation, stream_id);
     }
 }

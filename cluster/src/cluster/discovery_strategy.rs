@@ -208,7 +208,7 @@ mod tests {
     use super::*;
     use crate::cluster::cluster_events::ClusterEventNotifier;
     use crate::cluster::cluster_state::*;
-    use crate::messaging::messaging::{RudpMessagingImpl, MockMessageSender};
+    use crate::messaging::messaging::MockMessageSender;
     use crate::node_state;
     use crate::test_util::message::TrackingMockMessageSender;
     use crate::test_util::node::test_node_addr_from_number;
@@ -252,7 +252,7 @@ mod tests {
         let cluster_state = Arc::new(RwLock::new(cluster_state));
 
         let mut message_sender = MockMessageSender::new();
-        message_sender.expect_send::<JoinMessage>()
+        message_sender.expect_send_raw_fire_and_forget::<JoinMessage>()
             .never();
 
         let discovery_result = StartAsClusterDiscoveryStrategy{}

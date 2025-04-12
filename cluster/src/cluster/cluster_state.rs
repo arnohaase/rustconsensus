@@ -700,7 +700,10 @@ mod tests {
     #[test]
     fn test_new() {
         let self_addr = SocketAddr::from_str("127.0.0.1:1234").unwrap();
-        let myself = NodeAddr::from(self_addr);
+        let myself = NodeAddr {
+            unique: 0,
+            socket_addr: self_addr,
+        };
         let config = Arc::new(ClusterConfig::new(self_addr, None));
         let cluster_event_queue = Arc::new(ClusterEventNotifier::new());
 
@@ -1274,7 +1277,10 @@ mod tests {
     #[test]
     fn test_lazy_counter_version() {
         let self_addr = SocketAddr::from_str("127.0.0.1:1234").unwrap();
-        let myself = NodeAddr::from(self_addr);
+        let myself = NodeAddr {
+            unique: 0,
+            socket_addr: self_addr,
+        };
         let config = Arc::new(ClusterConfig::new(self_addr, None));
         let cluster_event_queue = Arc::new(ClusterEventNotifier::new());
 

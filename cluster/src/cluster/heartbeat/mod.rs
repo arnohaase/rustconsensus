@@ -193,8 +193,11 @@ mod tests {
 
         do_heartbeat(&cluster_state, &mut heartbeat, messaging.as_ref()).await;
 
+        println!("a");
         messaging.assert_message_sent(test_node_addr_from_number(2), HeartbeatMessage::Heartbeat(HeartbeatData { timestamp_nanos: 0 })).await;
+        println!("b");
         messaging.assert_message_sent(test_node_addr_from_number(3), HeartbeatMessage::Heartbeat(HeartbeatData { timestamp_nanos: 0 })).await;
+        println!("c");
         messaging.assert_no_remaining_messages().await;
     }
 }

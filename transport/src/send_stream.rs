@@ -658,7 +658,7 @@ mod tests {
 
             for message in messages {
                 time::sleep(Duration::from_millis(2)).await;
-                send_stream.send_message(&message).await;
+                send_stream.send_message(None, &message).await;
             }
 
             time::sleep(Duration::from_millis(delay_millis_after_messages)).await;

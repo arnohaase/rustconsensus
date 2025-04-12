@@ -110,6 +110,7 @@ impl ControlMessageNak {
 
 #[cfg(test)]
 mod tests {
+    use bytes::BytesMut;
     use super::*;
 
     use rstest::rstest;
