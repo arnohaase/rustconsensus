@@ -351,6 +351,8 @@ mod tests {
         let myself = test_node_addr_from_number(1);
         let mut config = ClusterConfig::new(myself.socket_addr, None);
         config.roles = ["xyz".to_string()].into();
+        config.discovery_seed_node_give_up_timeout = Duration::from_millis(300);
+        config.discovery_seed_node_retry_interval = Duration::from_millis(50);
         let config = Arc::new(config);
         let strategy = SeedNodesStrategy::new(vec![
             myself.socket_addr,
@@ -502,7 +504,7 @@ mod tests {
 
         let join_handle = tokio::spawn(check_joined_as_seed_node(cluster_state.clone(), config, seed_nodes, myself));
 
-        sleep(Duration::from_millis(30000)).await;
+        sleep(Duration::from_millis(300)).await;
         assert!(!join_handle.is_finished());
 
         // add some other node that is Up - NB: we do not need to wait for convergence
