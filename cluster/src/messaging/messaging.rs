@@ -6,7 +6,7 @@ use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use bytes::BytesMut;
-use tracing::{error, warn};
+use tracing::warn;
 use transport::buffers::atomic_map::AtomicMap;
 use transport::config::RudpConfig;
 use transport::end_point::EndPoint;
@@ -146,7 +146,7 @@ impl MessageDispatcher for MessageDispatcherImpl {
                     }
                 }
             }
-            Err(e) => {
+            Err(_) => {
                 warn!("received a message without a valid id - skipping");
             }
         }

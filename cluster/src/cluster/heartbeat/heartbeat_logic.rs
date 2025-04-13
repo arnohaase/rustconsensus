@@ -117,10 +117,6 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
             }
         }
     }
-    fn timestamp_from_nanos(&self, nanos: u64) -> Instant {
-        self.reference_time + Duration::from_nanos(nanos)
-    }
-
     pub fn get_current_reachability_from_here(&self) -> BTreeMap<NodeAddr, bool> {
         self.registry.get_current_reachability()
     }

@@ -34,6 +34,7 @@ impl Gossip<RngRandom> {
     }
 }
 impl <R: Random> Gossip<R> {
+    #[cfg(test)]
     pub fn new_with_random(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>) -> Gossip<R> {
         Gossip {
             config,

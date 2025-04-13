@@ -459,7 +459,7 @@ mod tests {
             return Default::default();
         }
 
-        let mut map: AtomicMap<SocketAddr, u64> = Default::default();
+        let map: AtomicMap<SocketAddr, u64> = Default::default();
         map.update(|m| { m.insert(([1,2,3,4], 9).into(), 4); });
         Arc::new(map)
     }

@@ -12,7 +12,6 @@ use cluster::cluster::discovery_strategy::SeedNodesStrategy;
 use cluster::cluster::heartbeat::downing_strategy::QuorumOfSeedNodesStrategy;
 use cluster::messaging::messaging::Messaging;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use anyhow::anyhow;
 use tokio::net::TcpListener;
@@ -59,7 +58,7 @@ pub async fn main() -> anyhow::Result<()> {
         seed_nodes.push(seed_node);
     }
 
-    let mut cluster_config = ClusterConfig::new(args.cluster_address.parse()?, Some(vec![5u8;32]));
+    let cluster_config = ClusterConfig::new(args.cluster_address.parse()?, Some(vec![5u8;32]));
 
     let cluster_config = Arc::new(cluster_config);
     let cluster = Arc::new(Cluster::new(cluster_config.clone()).await?);
@@ -76,8 +75,6 @@ pub async fn main() -> anyhow::Result<()> {
 
 
 async fn run_http_server<M: Messaging>(addr: SocketAddr, cluster: Arc<Cluster<M>>) -> anyhow::Result<()> {
-    let counter = Arc::new(AtomicUsize::new(0));
-
     let listener = TcpListener::bind(addr).await?;
     info!("Listening on http://{}", addr);
     loop {
