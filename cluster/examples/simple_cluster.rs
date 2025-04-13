@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use tokio::select;
-use tracing::Level;
+use tracing::{info, Level};
 use cluster::cluster::cluster::Cluster;
 use cluster::cluster::cluster_config::ClusterConfig;
 use cluster::cluster::discovery_strategy::SeedNodesStrategy;
@@ -40,7 +40,11 @@ async fn new_node(num_nodes: usize, n: usize) -> anyhow::Result<()> {
 pub async fn main() -> anyhow::Result<()> {
     init_logging();
 
+    info!("simple cluster demo");
+
     select! {
+        // _ = new_node(3, 0) => {}
+        // _ = new_node(3, 1) => {}
         _ = new_node(25, 0) => {}
         _ = new_node(25, 1) => {}
         _ = new_node(25, 2) => {}

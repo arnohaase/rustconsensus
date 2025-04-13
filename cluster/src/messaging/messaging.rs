@@ -72,22 +72,28 @@ impl MessageSender for RudpMessagingImpl {
         }
     }
 
+    //TODO unit test
     async fn send_to_node<T: Message>(&self, to: NodeAddr, stream_id: u16, msg: &T) {
         let mut buf = BytesMut::new();
+        msg.module_id().ser(&mut buf);
         msg.ser(&mut buf);
 
         self.end_point.send_in_stream(to.socket_addr, Some(to.unique), stream_id, &buf).await;
     }
 
+    //TODO unit test
     async fn send_to_addr<T: Message>(&self, to: SocketAddr, stream_id: u16, msg: &T) {
         let mut buf = BytesMut::new();
+        msg.module_id().ser(&mut buf);
         msg.ser(&mut buf);
 
         self.end_point.send_in_stream(to, None, stream_id, &buf).await;
     }
 
+    //TODO unit test
     async fn send_raw_fire_and_forget<T: Message>(&self, to_addr: SocketAddr, required_to_generation: Option<u64>, msg: &T) {
         let mut buf = BytesMut::new();
+        msg.module_id().ser(&mut buf);
         msg.ser(&mut buf);
 
         self.end_point.send_outside_stream(to_addr, required_to_generation, &buf).await;

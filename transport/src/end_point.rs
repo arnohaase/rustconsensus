@@ -113,7 +113,7 @@ impl EndPoint {
         buf.put_slice(message);
 
         self.get_send_pipeline(to_addr)
-            .do_send_packet(to_addr, buf.as_ref()).await;
+            .finalize_and_send_packet(to_addr, &mut buf).await;
 
         self.buffer_pool.return_to_pool(buf);
     }

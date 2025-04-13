@@ -610,7 +610,6 @@ mod tests {
 
         let mut buf = BytesMut::new();
         msg.ser(&mut buf);
-        println!("S {:?}", buf);
         let deser_msg = GossipMessage::deser(&buf).unwrap();
         assert_eq!(msg, deser_msg);
     }

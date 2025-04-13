@@ -70,7 +70,6 @@ impl SendStreamInner {
         );
 
         let mut send_buf = self.buffer_pool.get_from_pool();
-        println!("{:?}", send_buf.capacity());
 
         header.ser(&mut send_buf);
 

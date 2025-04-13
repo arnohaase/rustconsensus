@@ -10,8 +10,6 @@ pub struct ClusterConfig {
 
     pub roles: BTreeSet<String>,
 
-    pub messaging_shared_secret: Vec<u8>,
-
     pub num_gossip_partners: usize,
     /// number between 0.0 and 1.0 that determines the probability to gossip with a node that has
     ///  proven differences from myself (rather than a node that may have an identical perception
@@ -48,7 +46,6 @@ impl ClusterConfig {
         ClusterConfig {
             transport_config: RudpConfig::default(self_addr, encryption_key),
             roles: Default::default(),
-            messaging_shared_secret: b"no secret".to_vec(),
             num_gossip_partners: 3,
             gossip_with_differing_state_min_probability: 0.8,
             converged_gossip_interval: Duration::from_secs(1),
