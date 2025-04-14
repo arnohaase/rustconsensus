@@ -83,8 +83,11 @@
 //! 1:  sender generation (u48) - millis since epoch at starting time of the process. The idea is that
 //!      after a restart, the `generation` will be different and larger, allowing peers to detect
 //!      the restart and re-sync window positions without the need for a concept of 'connection'
-//! TODO receiver generation or 0
-//! 7:  reply-to address (4+2 bytes if IP V4, 16+2 bytes if IP V6, 0 bytes if 'identical to UDP sender')
+//! 7:  receiver generation (u48) or 0 for 'any receiver generation should match' - millis since
+//!      epoch at starting time of the process. Providing an (optional) receiver generation
+//!      allows a sender to make sure that a restarted receiver does not receive any late packets,
+//!      but can start over freshly.
+//! 13: reply-to address (4+2 bytes if IP V4, 16+2 bytes if IP V6, 0 bytes if 'identical to UDP sender')
 //! *:  stream id (u16): the id of the multiplexed stream that this frame belongs
 //!      or refers to. Not present for frame kind '001'.
 //!      NB: Each stream has its own send and receive buffers, incurring per-stream overhead
