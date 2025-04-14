@@ -16,7 +16,8 @@ use aead::Buffer;
 use anyhow::bail;
 use bytes::BufMut;
 use tokio::net::UdpSocket;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, span, trace, warn, Instrument, Level, Span};
+use uuid::Uuid;
 use crate::buffers::encryption::{Aes256GcmEncryption, NoEncryption, RudpEncryption};
 //TODO unit test
 
@@ -146,6 +147,10 @@ impl EndPoint {
             };
             buf.truncate(num_read);
 
+            let correlation_id = Uuid::new_v4();
+            let span = span!(Level::TRACE, "packet_received", ?correlation_id);
+            let _entered = span.enter();
+
             trace!("received packet from {:?}: {:?}", from, &buf.as_ref()); //TODO instrument with unique ID per packet
 
             if buf.len() < self.encryption.prefix_len() {
@@ -182,7 +187,7 @@ impl EndPoint {
             if let Some(receiver_generation) = packet_header.receiver_generation {
                 if receiver_generation < self.generation {
                     debug!("received packet from {:?} with outdated receiver generation - dropping", peer_addr);
-                    self.send_ping(peer_addr).await;
+                    self.send_ping(peer_addr).instrument(Span::current()).await;
                     continue;
                 }
                 if receiver_generation > self.generation {
@@ -192,19 +197,19 @@ impl EndPoint {
             }
             else {
                 debug!("received packet from {:?} without receiver generation", peer_addr);
-                self.send_ping(peer_addr).await;
+                self.send_ping(peer_addr).instrument(Span::current()).await;
             }
 
             match packet_header.packet_kind {
                 PacketKind::RegularSequenced { stream_id, first_message_offset, packet_sequence_number} => {
                     self.get_receive_stream(&mut receive_streams, packet_header.sender_generation, peer_addr, stream_id)
-                        .on_packet(packet_sequence_number, first_message_offset, parse_buf).await
+                        .on_packet(packet_sequence_number, first_message_offset, parse_buf).instrument(Span::current()).await
                 },
-                PacketKind::FireAndForget => self.message_dispatcher.on_message(peer_addr, packet_header.sender_generation, None, parse_buf).await,
-                PacketKind::ControlInit { stream_id } => Self::handle_init_message(self.get_send_stream(peer_addr, stream_id).await).await,
-                PacketKind::ControlRecvSync { stream_id } => Self::handle_recv_sync(parse_buf, self.get_send_stream(peer_addr, stream_id).await).await,
-                PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(&mut receive_streams, packet_header.sender_generation, peer_addr, stream_id)).await,
-                PacketKind::ControlNak { stream_id } => Self::handle_nak(parse_buf, self.get_send_stream(peer_addr, stream_id).await).await,
+                PacketKind::FireAndForget => self.message_dispatcher.on_message(peer_addr, packet_header.sender_generation, None, parse_buf.to_vec()).instrument(Span::current()).await,
+                PacketKind::ControlInit { stream_id } => Self::handle_init_message(self.get_send_stream(peer_addr, stream_id).await).instrument(Span::current()).await,
+                PacketKind::ControlRecvSync { stream_id } => Self::handle_recv_sync(parse_buf, self.get_send_stream(peer_addr, stream_id).await).instrument(Span::current()).await,
+                PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(&mut receive_streams, packet_header.sender_generation, peer_addr, stream_id)).instrument(Span::current()).await,
+                PacketKind::ControlNak { stream_id } => Self::handle_nak(parse_buf, self.get_send_stream(peer_addr, stream_id).await).instrument(Span::current()).await,
                 PacketKind::Ping => {} // nothing to be done, just syncing generations
             }
         }

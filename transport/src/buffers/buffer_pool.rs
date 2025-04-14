@@ -32,7 +32,7 @@ impl SendBufferPool {
         {
             let mut buffers = self.buffers.lock().unwrap();
             if let Some(buffer) = buffers.pop() {
-                trace!("returning buffer from pool");
+                trace!("getting buffer from pool");
                 return buffer;
             }
         }

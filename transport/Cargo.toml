@@ -21,3 +21,4 @@ mockall = "*"
 rustc-hash = "*"
 tokio = { version = "*", features = ["full"] } # TODO
 tracing = "*"
+uuid = { version = "1.16.0", features = ["v4"] }
