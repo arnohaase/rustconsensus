@@ -1,8 +1,8 @@
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use bytes::BytesMut;
-use crate::messaging::envelope::Envelope;
+use bytes::{Buf, BufMut, BytesMut};
+use crate::messaging::node_addr::NodeAddr;
 
 pub trait Message: Send + Sync + Debug + Any {
     fn module_id(&self) -> MessageModuleId;
@@ -24,6 +24,15 @@ pub struct MessageModuleId(pub u64);
 impl MessageModuleId {
     pub const fn new(value: &[u8; 8]) -> MessageModuleId {
         Self(u64::from_be_bytes(*value))
+    }
+
+    pub fn ser(&self, buf: &mut impl BufMut) { //TODO unit test
+        buf.put_u64(self.0);
+    }
+
+    pub fn deser(buf: &mut impl Buf) -> anyhow::Result<MessageModuleId> {
+        let id = buf.try_get_u64()?;
+        Ok(MessageModuleId(id))
     }
 }
 
@@ -57,7 +66,7 @@ pub trait MessageModule: 'static + Sync + Send {
     /// This is a blocking call, holding up the central receive loop. Non-trivial work should
     ///  probably be offloaded to some asynchronous processing, but it is up to the module
     ///  implementation to decide and do this.
-    async fn on_message(&self, envelope: &Envelope, buf: &[u8]);
+    async fn on_message(&self, sender: NodeAddr, buf: &[u8]);
 }
 
 #[cfg(test)]

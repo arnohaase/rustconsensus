@@ -13,8 +13,6 @@ use tracing::error;
 use transport::safe_converter::*;
 
 use crate::cluster::cluster_state::{MembershipState, NodeReachability, NodeState};
-use crate::messaging;
-use crate::messaging::envelope::Envelope;
 use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::buf::{put_string, try_get_string};
@@ -35,9 +33,9 @@ impl GossipMessageModule {
         })
     }
 
-    async fn _on_message(&self, envelope: &Envelope, buf: &[u8]) -> anyhow::Result<()> {
+    async fn _on_message(&self, sender: NodeAddr, buf: &[u8]) -> anyhow::Result<()> {
         let msg = GossipMessage::deser(buf)?;
-        self.gossip.send((envelope.from, msg)).await?;
+        self.gossip.send((sender, msg)).await?;
         Ok(())
     }
 }
@@ -48,8 +46,8 @@ impl MessageModule for GossipMessageModule {
         GOSSIP_MESSAGE_MODULE_ID
     }
 
-    async fn on_message(&self, envelope: &Envelope, buf: &[u8]) {
-        if let Err(e) = self._on_message(envelope, buf).await {
+    async fn on_message(&self, sender: NodeAddr, buf: &[u8]) {
+        if let Err(e) = self._on_message(sender, buf).await {
             error!("error deserializing message: {}", e);
         }
     }
@@ -612,7 +610,6 @@ mod tests {
 
         let mut buf = BytesMut::new();
         msg.ser(&mut buf);
-        println!("S {:?}", buf);
         let deser_msg = GossipMessage::deser(&buf).unwrap();
         assert_eq!(msg, deser_msg);
     }

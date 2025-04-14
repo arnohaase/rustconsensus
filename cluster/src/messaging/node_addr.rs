@@ -1,12 +1,10 @@
+use anyhow::anyhow;
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::time::{SystemTime, UNIX_EPOCH};
-use anyhow::anyhow;
 
 use bytes::{Buf, BufMut};
 
-use bytes_varint::try_get_fixed::TryGetFixedSupport;
 
 /// Nodes' lifecycle of membership in a _cluster is monotonous to allow tracking with CRDTs, so a
 ///  node can never rejoin once it left (or was evicted). To allow rejoining from the same network
@@ -19,7 +17,7 @@ use bytes_varint::try_get_fixed::TryGetFixedSupport;
 ///       just a convenient way of ensuring this in typical environments
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub struct NodeAddr {
-    pub unique: u32,
+    pub unique: u64,
     pub socket_addr: SocketAddr,
 }
 impl Hash for NodeAddr {
@@ -41,7 +39,7 @@ impl Debug for NodeAddr {
 
 impl NodeAddr {
     #[cfg(test)]
-    pub fn localhost(unique: u32) -> NodeAddr {
+    pub fn localhost(unique: u64) -> NodeAddr {
         let addr: SocketAddr = std::str::FromStr::from_str("127.0.0.1:16385").unwrap();
 
         NodeAddr {
@@ -51,7 +49,10 @@ impl NodeAddr {
     }
 
     pub fn ser(&self, buf: &mut impl BufMut) {
-        buf.put_u32(self.unique);
+        // unique part is u48, as per RUDP spec
+        buf.put_u16((self.unique >> 32) as u16);
+        buf.put_u32(self.unique as u32);
+
         match &self.socket_addr {
             SocketAddr::V4(data) => {
                 buf.put_u8(4);
@@ -67,7 +68,8 @@ impl NodeAddr {
     }
 
     pub fn try_deser(buf: &mut impl Buf) -> anyhow::Result<NodeAddr> {
-        let unique = buf.try_get_u32()?;
+        // unique part is u48 as per RUDP spec
+        let unique = ((buf.try_get_u16()? as u64) << 32) + buf.try_get_u32()? as u64;
 
         let addr = match buf.try_get_u8()? {
             4 => {
@@ -91,28 +93,12 @@ impl NodeAddr {
     }
 }
 
-impl From<SocketAddr> for NodeAddr {
-    fn from(addr: SocketAddr) -> Self {
-        //TODO overarching clock concept
-        let unique = SystemTime::now().duration_since(UNIX_EPOCH)
-            .expect("system time is before UNIX epoch") //TODO
-            .as_secs()
-            .try_into()
-            .expect("seconds since epoch bigger than u32::MAX");
-
-        NodeAddr {
-            unique,
-            socket_addr: addr,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
     use crate::messaging::node_addr::NodeAddr;
-    use std::net::{Ipv4Addr, SocketAddrV4};
     use bytes::BytesMut;
+    use rstest::rstest;
+    use std::net::{Ipv4Addr, SocketAddrV4};
 
     #[rstest]
     #[case(NodeAddr { unique: 5, socket_addr: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 9876).into() })]

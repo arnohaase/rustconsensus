@@ -8,7 +8,7 @@ use ordered_float::OrderedFloat;
 use rustc_hash::FxHasher;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
-use tracing::{debug, info, trace};
+use tracing::{debug, trace};
 use transport::safe_converter::{PrecheckedCast, SafeCast};
 use super::gossip_messages::*;
 
@@ -34,6 +34,7 @@ impl Gossip<RngRandom> {
     }
 }
 impl <R: Random> Gossip<R> {
+    #[cfg(test)]
     pub fn new_with_random(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>) -> Gossip<R> {
         Gossip {
             config,
@@ -342,7 +343,7 @@ mod tests {
     #[tokio::test]
     async fn test_gossip_candidates_by_differing_state() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
 
         {
@@ -370,7 +371,7 @@ mod tests {
     #[tokio::test]
     async fn test_gossip_summary_digest() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
         cluster_state.write().await
             .merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
@@ -378,7 +379,7 @@ mod tests {
 
         let digest = gossip.gossip_summary_digest().await;
         assert_eq!(digest, GossipSummaryDigestData {
-            full_sha256_digest: [56, 159, 183, 220, 160, 198, 187, 159, 36, 169, 181, 155, 139, 38, 154, 149, 93, 23, 150, 94, 28, 235, 227, 61, 177, 116, 119, 82, 220, 156, 26, 13],
+            full_sha256_digest: [249, 136, 27, 4, 192, 153, 241, 143, 172, 175, 242, 57, 30, 216, 249, 70, 185, 200, 108, 235, 240, 20, 228, 128, 106, 60, 163, 54, 131, 34, 203, 14],
         });
     }
 
@@ -395,7 +396,7 @@ mod tests {
                 .collect::<BTreeMap<_, _>>();
 
             let myself = test_node_addr_from_number(1);
-            let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+            let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
             let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
             cluster_state.write().await
                 .merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
@@ -418,7 +419,7 @@ mod tests {
     #[tokio::test]
     async fn test_gossip_detailed_digest_with_given_nonce() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
         cluster_state.write().await
             .merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
@@ -446,7 +447,7 @@ mod tests {
             let _lock = MOCK_RANDOM_MUTEX.lock();
 
             let myself = test_node_addr_from_number(1);
-            let mut config = ClusterConfig::new(myself.socket_addr);
+            let mut config = ClusterConfig::new(myself.socket_addr, None);
             config.num_gossip_partners = 2;
             let config = Arc::new(config);
             let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
@@ -508,7 +509,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
         let gossip = Gossip::<MockRandom>::new_with_random(myself, config, cluster_state.clone());
 
@@ -547,7 +548,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr);
+        let mut config = ClusterConfig::new(myself.socket_addr, None);
         config.gossip_with_differing_state_min_probability = 0.8;
         let config = Arc::new(config);
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
@@ -566,14 +567,14 @@ mod tests {
 
     #[rstest]
     #[case([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,], Some(vec![(1, 14834476511986453866), (2, 3834319792830107287)]))]
-    #[case([56, 159, 183, 220, 160, 198, 187, 159, 36, 169, 181, 155, 139, 38, 154, 149, 93, 23, 150, 94, 28, 235, 227, 61, 177, 116, 119, 82, 220, 156, 26, 13], None)]
+    #[case([249, 136, 27, 4, 192, 153, 241, 143, 172, 175, 242, 57, 30, 216, 249, 70, 185, 200, 108, 235, 240, 20, 228, 128, 106, 60, 163, 54, 131, 34, 203, 14], None)]
     fn test_on_summary_digest(#[case] digest: [u8;32], #[case] expected: Option<Vec<(u16,u64)>>) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let _lock = MOCK_RANDOM_MUTEX.lock();
 
             let myself = test_node_addr_from_number(1);
-            let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+            let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
             let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
             cluster_state.write().await
                 .merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
@@ -620,7 +621,7 @@ mod tests {
             let _lock = MOCK_RANDOM_MUTEX.lock();
 
             let myself = test_node_addr_from_number(1);
-            let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+            let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
             let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
             for n in local_nodes {
                 cluster_state.write().await
@@ -714,7 +715,7 @@ mod tests {
         let rt = Builder::new_current_thread().build().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+            let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
             let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
             for n in local_nodes {
                 cluster_state.write().await
@@ -750,7 +751,7 @@ mod tests {
     #[tokio::test]
     async fn test_on_nodes() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
         let gossip = Gossip::new(myself, config, cluster_state.clone());
 
@@ -776,7 +777,7 @@ mod tests {
     #[tokio::test]
     async fn test_down_myself() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
         let gossip = Gossip::new(myself, config, cluster_state.clone());
 

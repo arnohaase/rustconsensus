@@ -140,7 +140,8 @@ impl  UnreachableTracker {
             // This is a best effort to notify all affected nodes of the downing decision.
             //  We cannot reach all nodes anyway, and there may be network problems, so this is
             //  *not* a reliable notification - but it may help in the face of problems
-            messaging.send(n, &GossipMessage::DownYourself).await;
+            messaging.send_raw_fire_and_forget(n.socket_addr, Some(n.unique), &GossipMessage::DownYourself).await
+                .expect("DownYourself should fit into a single packet");
         }
     }
 }
@@ -167,7 +168,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_update_unreachable_set() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
 
         let downing_strategy = Arc::new(MockDowningStrategy::new());
@@ -200,7 +201,7 @@ mod tests {
             time::pause();
 
             let myself = test_node_addr_from_number(1);
-            let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+            let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
             let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
             cluster_state.write().await
                 .merge_node_state(node_state!(2[]:Up->[3:false@9]@[1,2,3])).await;
@@ -243,7 +244,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_unstable_shutdown() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
         cluster_state.write().await
             .merge_node_state(node_state!(2[]:Up->[3:false@9]@[1,2,3])).await;

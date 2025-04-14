@@ -4,7 +4,7 @@ use aead::{AeadCore, AeadInPlace, Key, KeyInit, Nonce, OsRng};
 use aes_gcm::Aes256Gcm;
 use bytes::{Buf, BufMut};
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::error;
+use tracing::{error, trace};
 
 
 pub trait RudpEncryption: Send + Sync {
@@ -104,6 +104,8 @@ impl RudpEncryption for Aes256GcmEncryption {
         let nonce = Self::nonce_from_buf(full_buf.as_ref());
         let mut buf = full_buf.slice(self.prefix_len());
 
+        trace!("encrypting {:?} with nonce {:?}", buf, nonce);
+
         match self.cipher.encrypt_in_place(&nonce, b"", &mut buf) {
             Ok(()) => {}
             Err(e) => {
@@ -111,12 +113,18 @@ impl RudpEncryption for Aes256GcmEncryption {
                 panic!("encryption error");
             }
         }
+
+        trace!("encrypted: {:?}", buf);
     }
 
     fn decrypt_buffer(&self, full_buf: &mut FixedBuf) -> aead::Result<()> {
         let nonce = Self::nonce_from_buf(full_buf.as_ref());
+        trace!("decrypting {:?}, nonce: {:?}", full_buf, nonce);
+
         let mut buf = full_buf.slice(self.prefix_len());
-        self.cipher.decrypt_in_place(&nonce, b"", &mut buf)
+        let result = self.cipher.decrypt_in_place(&nonce, b"", &mut buf);
+        trace!("decrypted {:?}", full_buf);
+        result
     }
 }
 

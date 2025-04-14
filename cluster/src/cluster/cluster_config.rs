@@ -2,13 +2,13 @@ use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::time::Duration;
 use rustc_hash::FxHashSet;
+use transport::config::RudpConfig;
 
 #[derive(Debug)]
 pub struct ClusterConfig {
-    pub self_addr: SocketAddr,
-    pub roles: BTreeSet<String>,
+    pub transport_config: RudpConfig,
 
-    pub messaging_shared_secret: Vec<u8>,
+    pub roles: BTreeSet<String>,
 
     pub num_gossip_partners: usize,
     /// number between 0.0 and 1.0 that determines the probability to gossip with a node that has
@@ -42,11 +42,10 @@ pub struct ClusterConfig {
 }
 
 impl ClusterConfig {
-    pub fn new(self_addr: SocketAddr) -> ClusterConfig {
+    pub fn new(self_addr: SocketAddr, encryption_key: Option<Vec<u8>>) -> ClusterConfig {
         ClusterConfig {
-            self_addr,
+            transport_config: RudpConfig::default(self_addr, encryption_key),
             roles: Default::default(),
-            messaging_shared_secret: b"no secret".to_vec(),
             num_gossip_partners: 3,
             gossip_with_differing_state_min_probability: 0.8,
             converged_gossip_interval: Duration::from_secs(1),
@@ -66,5 +65,9 @@ impl ClusterConfig {
             discovery_seed_node_retry_interval: Duration::from_secs(1),
             discovery_seed_node_give_up_timeout: Duration::from_secs(60),
         }
+    }
+
+    pub fn self_addr(&self) -> SocketAddr {
+        self.transport_config.self_addr
     }
 }

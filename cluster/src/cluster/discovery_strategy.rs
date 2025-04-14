@@ -80,7 +80,7 @@ pub struct SeedNodesStrategy {
 }
 impl SeedNodesStrategy {
     pub fn new(seed_nodes: Vec<SocketAddr>, config: &ClusterConfig) -> anyhow::Result<SeedNodesStrategy> {
-        let am_i_seed_node = seed_nodes.contains(&config.self_addr);
+        let am_i_seed_node = seed_nodes.contains(&config.self_addr());
 
         if am_i_seed_node {
             if let Some(leader_roles) = &config.leader_eligible_roles {
@@ -186,7 +186,8 @@ async fn send_join_message_loop<M: MessageSender>(other_seed_nodes: &[SocketAddr
     loop {
         for seed_node in other_seed_nodes {
             debug!("trying to join cluster at {}", seed_node); //TODO clearer logging
-            messaging.send(seed_node.clone().into(), &join_msg).await;
+            messaging.send_raw_fire_and_forget(seed_node.clone(), None, &join_msg).await
+                .expect("JOIN should fit into a single packet");
         }
         sleep(config.discovery_seed_node_retry_interval).await;
     }
@@ -208,7 +209,7 @@ mod tests {
     use super::*;
     use crate::cluster::cluster_events::ClusterEventNotifier;
     use crate::cluster::cluster_state::*;
-    use crate::messaging::messaging::{MessagingImpl, MockMessageSender};
+    use crate::messaging::messaging::MockMessageSender;
     use crate::node_state;
     use crate::test_util::message::TrackingMockMessageSender;
     use crate::test_util::node::test_node_addr_from_number;
@@ -219,19 +220,19 @@ mod tests {
     #[tokio::test]
     async fn test_run_discovery() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
 
         let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
         let cluster_state = Arc::new(RwLock::new(cluster_state));
         let cluster_state_for_check = cluster_state.clone();
 
-        let messaging = Arc::new(MessagingImpl::new(myself, b"").await.unwrap());
+        let messaging = Arc::new(TrackingMockMessageSender::new(myself));
         let messaging_for_check = messaging.clone();
 
         let mut mock = MockDiscoveryStrategy::new();
         mock.expect_do_discovery()
             .times(1)
-            .withf(move |_, s, _: &Arc<MessagingImpl>| std::ptr::addr_eq(Arc::as_ptr(s), Arc::as_ptr(&cluster_state_for_check)))
+            .withf(move |_, s, _: &Arc<TrackingMockMessageSender>| std::ptr::addr_eq(Arc::as_ptr(s), Arc::as_ptr(&cluster_state_for_check)))
             .withf(move |_, _, m| std::ptr::addr_eq(Arc::as_ptr(m), Arc::as_ptr(&messaging_for_check)))
             .returning_st(|_a, _b, _c| Ok(()));
 
@@ -247,12 +248,12 @@ mod tests {
     #[tokio::test]
     async fn test_start_as_cluster_strategy() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
         let cluster_state = Arc::new(RwLock::new(cluster_state));
 
         let mut message_sender = MockMessageSender::new();
-        message_sender.expect_send::<JoinMessage>()
+        message_sender.expect_send_raw_fire_and_forget::<JoinMessage>()
             .never();
 
         let discovery_result = StartAsClusterDiscoveryStrategy{}
@@ -266,7 +267,7 @@ mod tests {
     #[tokio::test]
     async fn test_part_of_seed_nodes_strategy_join_loop() {
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr);
+        let mut config = ClusterConfig::new(myself.socket_addr, None);
         config.roles = ["xyz".to_string()].into();
         let config = Arc::new(config);
         let strategy = SeedNodesStrategy::new(vec![
@@ -301,7 +302,7 @@ mod tests {
     #[tokio::test]
     async fn test_part_of_seed_nodes_strategy_promote_self() {
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr);
+        let mut config = ClusterConfig::new(myself.socket_addr, None);
         config.roles = ["xyz".to_string()].into();
         let config = Arc::new(config);
         let strategy = SeedNodesStrategy::new(vec![
@@ -349,8 +350,10 @@ mod tests {
         time::pause();
 
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr);
+        let mut config = ClusterConfig::new(myself.socket_addr, None);
         config.roles = ["xyz".to_string()].into();
+        config.discovery_seed_node_give_up_timeout = Duration::from_millis(300);
+        config.discovery_seed_node_retry_interval = Duration::from_millis(50);
         let config = Arc::new(config);
         let strategy = SeedNodesStrategy::new(vec![
             myself.socket_addr,
@@ -391,7 +394,7 @@ mod tests {
     #[case::several_leader_roles_both_plus(vec![1,2], vec!["a","b"], vec!["a", "b", "x"], true)]
     #[case::several_leader_roles_neither(vec![1,2], vec!["a","b"], vec![], false)]
     fn test_part_of_seed_nodes_strategy_new(#[case] seed_nodes: Vec<u16>, #[case] leader_roles: Vec<&str>, #[case] self_roles: Vec<&str>, #[case] expected: bool) {
-        let mut config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr);
+        let mut config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr, None);
 
         if leader_roles.len() > 0 {
             config.leader_eligible_roles = Some(
@@ -433,7 +436,7 @@ mod tests {
 
             let seed_nodes = [test_node_addr_from_number(1).socket_addr, test_node_addr_from_number(2).socket_addr, test_node_addr_from_number(3).socket_addr].to_vec();
 
-            let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+            let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
             let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
             let cluster_state = Arc::new(RwLock::new(cluster_state));
 
@@ -494,7 +497,7 @@ mod tests {
         let myself = test_node_addr_from_number(1);
         let seed_nodes = [myself.socket_addr, test_node_addr_from_number(2).socket_addr, test_node_addr_from_number(3).socket_addr].to_vec();
 
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
         let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
         let cluster_state = Arc::new(RwLock::new(cluster_state));
 
@@ -502,7 +505,7 @@ mod tests {
 
         let join_handle = tokio::spawn(check_joined_as_seed_node(cluster_state.clone(), config, seed_nodes, myself));
 
-        sleep(Duration::from_millis(30000)).await;
+        sleep(Duration::from_millis(300)).await;
         assert!(!join_handle.is_finished());
 
         // add some other node that is Up - NB: we do not need to wait for convergence
@@ -516,7 +519,7 @@ mod tests {
     #[tokio::test]
     async fn test_send_join_message_loop() {
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr);
+        let mut config = ClusterConfig::new(myself.socket_addr, None);
         config.roles.insert("abc".to_string());
         let config = Arc::new(config);
 
@@ -557,7 +560,7 @@ mod tests {
     #[case::removed(vec![node_state!(1[]:Removed->[]@[1])], false)]
     #[case::multiple(vec![node_state!(1[]:Joining->[]@[1,2,3]), node_state!(2[]:Up->[]@[1,2,3]), node_state!(3[]:WeaklyUp->[]@[1,2,3])], true)]
     fn test_is_any_leader_eligible(#[case] nodes: Vec<NodeState>, #[case] expected: bool) {
-        let config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr);
+        let config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr, None);
         assert_eq!(is_any_node_leader_eligible(&config, nodes.iter()), expected);
     }
 
@@ -583,7 +586,7 @@ mod tests {
     #[tokio::test]
     async fn test_join_others_strategy_success() {
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr);
+        let mut config = ClusterConfig::new(myself.socket_addr, None);
         config.roles.insert("abc".to_string());
         let config = Arc::new(config);
 
@@ -637,7 +640,7 @@ mod tests {
     #[tokio::test]
     async fn test_join_others_strategy_timeout() {
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr);
+        let mut config = ClusterConfig::new(myself.socket_addr, None);
         config.roles.insert("abc".to_string());
         let config = Arc::new(config);
 

@@ -1,13 +1,12 @@
 use transport::end_point::EndPoint;
 use transport::message_dispatcher::MessageDispatcher;
-use rustc_hash::FxHashMap;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, span, Instrument, Level};
-use transport::config::{EffectiveReceiveStreamConfig, RudpConfig, SendStreamConfig};
+use transport::config::RudpConfig;
 
 fn init_logging() {
     tracing_subscriber::fmt()
@@ -30,16 +29,14 @@ async fn main() -> anyhow::Result<()> {
 
     let span = span!(Level::INFO, "node a");
     let a = Arc::new(EndPoint::new(
-        addr_a,
         msg_dispatcher.clone(),
-        RudpConfig::default_ipv4(Some(vec![5u8;32])),
+        Arc::new(RudpConfig::default(addr_a, Some(vec![5u8;32].to_vec()))),
     ).instrument(span).await?);
 
     let span = span!(Level::INFO, "node b");
     let b = Arc::new(EndPoint::new(
-        addr_b,
         msg_dispatcher.clone(),
-        RudpConfig::default_ipv4(Some(vec![5u8;32])),
+        Arc::new(RudpConfig::default(addr_b, Some(vec![5u8;32].to_vec()))),
     ).instrument(span).await?);
 
     let cloned_a = a.clone();
@@ -53,10 +50,10 @@ async fn main() -> anyhow::Result<()> {
         cloned_b.recv_loop().instrument(span).await
     });
 
-    a.send_message(addr_b, 4, &[1, 2, 3]).await;
-    a.send_message(addr_b, 4, &[2, 3, 4, 5]).await;
-    a.send_message(addr_b, 4, &[7]).await;
-    a.send_message(addr_b, 4, &[4, 5, 6]).await;
+    a.send_in_stream(addr_b, None, 4, &[1, 2, 3]).await?;
+    a.send_in_stream(addr_b, None, 4, &[2, 3, 4, 5]).await?;
+    a.send_in_stream(addr_b, None, 4, &[7]).await?;
+    a.send_in_stream(addr_b, None, 4, &[4, 5, 6]).await?;
 
     sleep(Duration::from_millis(20)).await;
 
@@ -66,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
 struct SimpleMessageDispatcher {}
 #[async_trait::async_trait]
 impl MessageDispatcher for SimpleMessageDispatcher {
-    async fn on_message(&self, sender: SocketAddr, stream_id: Option<u16>, msg_buf: &[u8]) {
-        info!("received message {:?} from {:?} on stream {:?}", msg_buf, sender, stream_id);
+    async fn on_message(&self, sender_addr: SocketAddr, sender_generation: u64,  stream_id: Option<u16>, msg_buf: &[u8]) {
+        info!("received message {:?} from {:?}@{} on stream {:?}", msg_buf, sender_addr, sender_generation, stream_id);
     }
 }

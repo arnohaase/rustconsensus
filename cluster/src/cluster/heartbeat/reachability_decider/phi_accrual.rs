@@ -119,7 +119,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_phi_accrual_decider() {
-        let mut config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr);
+        let mut config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr, None);
         config.reachability_phi_threshold = 0.99999999;
         config.reachability_phi_min_stddev = Duration::from_millis(100);
 
@@ -154,7 +154,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_phi_accrual_decider_ignore_long_rtt() {
-        let mut config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr);
+        let mut config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr, None);
         config.ignore_heartbeat_response_after = Duration::from_secs(5);
         let mut decider = PhiAccrualDecider::new(&config, Duration::from_secs(1));
 

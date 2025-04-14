@@ -17,14 +17,14 @@ pub trait Random: Send + Sync {
 pub struct RngRandom {}
 impl Random for RngRandom {
     fn next_u32() -> u32 {
-        rand::thread_rng().next_u32()
+        rand::rng().next_u32()
     }
 
     fn gen_f64_range(range: Range<f64>) -> f64 {
-        rand::thread_rng().gen_range(range)
+        rand::rng().random_range(range)
     }
 
     fn gen_usize_range(range: Range<usize>) -> usize {
-        rand::thread_rng().gen_range(range)
+        rand::rng().random_range(range)
     }
 }

@@ -3,6 +3,7 @@ use crate::messaging::messaging::MessageSender;
 use crate::messaging::node_addr::NodeAddr;
 use async_trait::async_trait;
 use std::any::Any;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use crate::cluster::join_messages::JoinMessage;
@@ -58,8 +59,19 @@ impl MessageSender for TrackingMockMessageSender {
         self.myself
     }
 
-    async fn try_send<T: Message>(&self, to: NodeAddr, msg: &T) -> anyhow::Result<()> {
+    async fn send_to_node<T: Message>(&self, to: NodeAddr, _stream_id: u16, msg: &T) -> anyhow::Result<()> {
         self.tracker.write().await.push((to, msg.box_clone()));
+        Ok(())
+    }
+
+    async fn send_to_addr<T: Message>(&self, to: SocketAddr, _stream_id: u16, msg: &T) -> anyhow::Result<()> {
+        self.tracker.write().await.push((NodeAddr { unique: 0, socket_addr: to}, msg.box_clone()));
+        Ok(())
+    }
+
+    async fn send_raw_fire_and_forget<T: Message>(&self, to_addr: SocketAddr, required_to_generation: Option<u64>, msg: &T) -> anyhow::Result<()> {
+        let unique = required_to_generation.unwrap_or(0);
+        self.tracker.write().await.push((NodeAddr { unique, socket_addr: to_addr}, msg.box_clone()));
         Ok(())
     }
 }

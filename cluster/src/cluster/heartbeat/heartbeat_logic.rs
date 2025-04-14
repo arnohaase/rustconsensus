@@ -117,10 +117,6 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
             }
         }
     }
-    fn timestamp_from_nanos(&self, nanos: u64) -> Instant {
-        self.reference_time + Duration::from_nanos(nanos)
-    }
-
     pub fn get_current_reachability_from_here(&self) -> BTreeMap<NodeAddr, bool> {
         self.registry.get_current_reachability()
     }
@@ -208,7 +204,7 @@ mod tests {
     #[tokio::test]
     async fn test_heartbeat_recipients() {
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr);
+        let mut config = ClusterConfig::new(myself.socket_addr, None);
         config.num_heartbeat_partners_per_node = 3;
         let config = Arc::new(config);
         let mut cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
@@ -263,7 +259,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_on_heartbeat_response() {
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr);
+        let mut config = ClusterConfig::new(myself.socket_addr, None);
         config.ignore_heartbeat_response_after = Duration::from_secs(1);
         // config.num_heartbeat_partners_per_node = 3;
         let config = Arc::new(config);
@@ -295,7 +291,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_registry() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr));
+        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
 
         let mut registry = HeartbeatRegistry::<FixedTimeoutDecider> {
             config: config.clone(),

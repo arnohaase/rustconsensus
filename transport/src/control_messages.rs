@@ -1,5 +1,5 @@
 use std::fmt::{Debug, Formatter};
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut};
 use crate::packet_id::PacketId;
 use bytes_varint::{VarIntSupport, VarIntSupportMut};
 
@@ -91,7 +91,7 @@ impl Debug for ControlMessageNak {
     }
 }
 impl ControlMessageNak {
-    fn ser(&self, buf: &mut BytesMut) {
+    pub fn ser(&self, buf: &mut impl BufMut) {
         buf.put_usize_varint(self.packet_id_resend_set.len());
         for &packet_id in &self.packet_id_resend_set {
             buf.put_u64(packet_id.to_raw());
@@ -110,6 +110,7 @@ impl ControlMessageNak {
 
 #[cfg(test)]
 mod tests {
+    use bytes::BytesMut;
     use super::*;
 
     use rstest::rstest;

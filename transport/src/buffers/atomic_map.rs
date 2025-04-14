@@ -3,16 +3,16 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
-pub(crate) struct AtomicMap<K,V> {
+pub struct AtomicMap<K,V> {
     map: AtomicPtr<Arc<FxHashMap<K,V>>>,
 }
-impl <K: Hash+Eq+Clone,V:Clone> Default for AtomicMap<K,V> {
+impl <K: Hash+Eq+Clone+Sync+Send,V:Clone+Sync+Send> Default for AtomicMap<K,V> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K: Hash+Eq+Clone,V:Clone> AtomicMap<K,V> {
+impl<K: Hash+Eq+Clone+Sync+Send, V:Clone+Sync+Send> AtomicMap<K,V> {
     pub fn new() -> AtomicMap<K,V> {
         let map = Arc::new(FxHashMap::<K,V>::default());
         let raw = Box::into_raw(Box::new(map));

@@ -1,6 +1,5 @@
 use bytes::{Buf, BufMut, BytesMut};
 use bytes_varint::{VarIntSupport, VarIntSupportMut};
-use bytes_varint::try_get_fixed::TryGetFixedSupport;
 
 //TODO extract to crate?
 
@@ -62,7 +61,7 @@ mod tests {
         put_string(&mut buf, s);
         assert_eq!(&buf, &expected);
 
-        let mut deser_buf = &mut buf;
+        let deser_buf = &mut buf;
         let deser = try_get_string(deser_buf).unwrap();
         assert!(deser_buf.is_empty());
         assert_eq!(&deser, s);
