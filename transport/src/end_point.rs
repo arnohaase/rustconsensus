@@ -155,7 +155,7 @@ impl EndPoint {
             let span = span!(Level::TRACE, "packet_received", ?correlation_id);
             let _entered = span.enter();
 
-            trace!("received packet from {:?}: {:?}", from, &buf.as_ref()); //TODO instrument with unique ID per packet
+            trace!("received packet from {:?}: {:?}", from, &buf.as_ref());
 
             if buf.len() < self.encryption.prefix_len() {
                 debug!("incomplete packet header - dropping");

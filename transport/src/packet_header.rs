@@ -3,6 +3,8 @@ use bitflags::bitflags;
 use bytes::{Buf, BufMut};
 use std::fmt::Debug;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
+use safe_converter::PrecheckedCast;
+use crate::safe_converter;
 
 bitflags! {
     #[derive(PartialEq, Eq, Copy, Clone)]
@@ -100,8 +102,8 @@ impl PacketHeader {
         buf.put_u32(self.sender_generation as u32);
 
         // write receiver generation as u48
-        buf.put_u16((self.receiver_generation.unwrap_or(0) >> 32) as u16); //TODO safe cast
-        buf.put_u32(self.receiver_generation.unwrap_or(0) as u32);
+        buf.put_u16(((self.receiver_generation.unwrap_or(0) >> 32) & 0xffff).prechecked_cast());
+        buf.put_u32((self.receiver_generation.unwrap_or(0) & 0xffff_ffff).prechecked_cast());
 
         match self.reply_to_address {
             Some(SocketAddr::V4(addr)) => {

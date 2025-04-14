@@ -50,6 +50,16 @@ impl PrecheckedCast<u16> for usize {
     }
 }
 
+impl PrecheckedCast<u32> for u64 {
+    fn prechecked_cast(self) -> u32 {
+        self.try_into().expect("this is a bug: application logic should have ensured the value range")
+    }
+}
+impl PrecheckedCast<u16> for u64 {
+    fn prechecked_cast(self) -> u16 {
+        self.try_into().expect("this is a bug: application logic should have ensured the value range")
+    }
+}
 impl PrecheckedCast<u16> for u32 {
     fn prechecked_cast(self) -> u16 {
         self.try_into().expect("this is a bug: application logic should have ensured the value range")
