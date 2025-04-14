@@ -15,7 +15,7 @@ use tokio::select;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace, warn, Instrument, Span};
 
 struct ReceiveStreamInner {
     config: Arc<EffectiveReceiveStreamConfig>,
@@ -155,7 +155,7 @@ impl ReceiveStreamInner {
         }
 
         if nak_packets.is_empty() {
-            trace!("no missing packets to NAK");
+            // trace!("no missing packets to NAK");
             return;
         }
 
@@ -345,7 +345,7 @@ impl ReceiveStreamInner {
             }
         }
         else {
-            trace!("low water mark packet is missing");
+            trace!("no packet at low water mark: nothing to consume");
             return ConsumeResult::None;
         };
 
@@ -620,7 +620,9 @@ impl ReceiveStream {
         inner.sanitize_after_update();
 
         while let Some(buf) = inner.consume_next_message() {
-            self.message_dispatcher.on_message(inner.peer_addr, inner.peer_generation, Some(inner.stream_id), &buf).await;
+            self.message_dispatcher.on_message(inner.peer_addr, inner.peer_generation, Some(inner.stream_id), buf)
+                .instrument(Span::current())
+                .await;
         }
     }
 

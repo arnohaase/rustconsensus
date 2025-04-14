@@ -6,7 +6,7 @@ use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use bytes::BytesMut;
-use tracing::warn;
+use tracing::{warn, Instrument, Span};
 use transport::buffers::atomic_map::AtomicMap;
 use transport::config::RudpConfig;
 use transport::end_point::EndPoint;
@@ -131,24 +131,31 @@ struct MessageDispatcherImpl {
 
 #[async_trait]
 impl MessageDispatcher for MessageDispatcherImpl {
-    async fn on_message(&self, sender_addr: SocketAddr, sender_generation: u64, _stream_id: Option<u16>, mut msg_buf: &[u8]) {
-        match MessageModuleId::deser(&mut msg_buf) {
-            Ok(id) => {
-                match self.message_modules.load().get(&id) {
-                    Some(message_module) => {
-                        message_module.on_message(NodeAddr {
-                            unique: sender_generation,
-                            socket_addr: sender_addr,
-                        }, msg_buf).await;
-                    }
-                    None => {
-                        warn!("received a message for message id {:?} which is not registered - skipping message", id);
+    async fn on_message(&self, sender_addr: SocketAddr, sender_generation: u64, _stream_id: Option<u16>, msg_buf: Vec<u8>) {
+        let message_modules = self.message_modules.load();
+
+        tokio::spawn(async move {
+            let mut msg_buf = msg_buf.as_ref();
+            match MessageModuleId::deser(&mut msg_buf) {
+                Ok(id) => {
+                    match message_modules.get(&id) {
+                        Some(message_module) => {
+                            message_module.on_message(NodeAddr {
+                                unique: sender_generation,
+                                socket_addr: sender_addr,
+                            }, msg_buf)
+                                .instrument(Span::current())
+                                .await;
+                        }
+                        None => {
+                            warn!("received a message for message id {:?} which is not registered - skipping message", id);
+                        }
                     }
                 }
+                Err(_) => {
+                    warn!("received a message without a valid id - skipping");
+                }
             }
-            Err(_) => {
-                warn!("received a message without a valid id - skipping");
-            }
-        }
+        });
     }
 }
