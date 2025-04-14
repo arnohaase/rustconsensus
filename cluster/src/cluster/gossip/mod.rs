@@ -95,7 +95,8 @@ async fn do_gossip<M: MessageSender>(gossip: &impl GossipApi, messaging: &M) { /
     let gossip_partners = gossip.gossip_partners().await;
     for (addr, msg) in gossip_partners {
         debug!("sending gossip message to {:?}", addr);
-        messaging.send_to_node(addr, STREAM_ID_INTERNAL, msg.as_ref()).await;
+        messaging.send_to_node(addr, STREAM_ID_INTERNAL, msg.as_ref()).await
+            .expect("message length upper bound should be configured big enough for gossip");
     }
 }
 
@@ -105,17 +106,20 @@ async fn on_gossip_message<M: MessageSender>(msg: GossipMessage, sender: NodeAdd
     match msg {
         GossipSummaryDigest(digest) => {
             if let Some(response) = gossip.on_summary_digest(&digest).await {
-                messaging.send_to_node(sender, STREAM_ID_INTERNAL, &GossipDetailedDigest(response)).await;
+                messaging.send_to_node(sender, STREAM_ID_INTERNAL, &GossipDetailedDigest(response)).await
+                    .expect("message length upper bound should be configured big enough for gossip");
             }
         }
         GossipDetailedDigest(digest) => {
             if let Some(response) = gossip.on_detailed_digest(&digest).await {
-                messaging.send_to_node(sender, STREAM_ID_INTERNAL, &GossipDifferingAndMissingNodes(response)).await;
+                messaging.send_to_node(sender, STREAM_ID_INTERNAL, &GossipDifferingAndMissingNodes(response)).await
+                    .expect("message length upper bound should be configured big enough for gossip");
             }
         }
         GossipDifferingAndMissingNodes(data) => {
             if let Some(response) = gossip.on_differing_and_missing_nodes(data).await {
-                messaging.send_to_node(sender, STREAM_ID_INTERNAL, &GossipNodes(response)).await;
+                messaging.send_to_node(sender, STREAM_ID_INTERNAL, &GossipNodes(response)).await
+                    .expect("message length upper bound should be configured big enough for gossip");
             }
         }
         GossipNodes(data) => {

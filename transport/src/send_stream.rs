@@ -13,6 +13,7 @@ use std::cmp::min;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use anyhow::bail;
 use tokio::sync::RwLock;
 use tokio::time;
 use tracing::{debug, trace};
@@ -214,8 +215,11 @@ impl SendStream {
 
     /// NB: This function does not return Result because all retry / recovery handling is expected
     ///      to be done here
-    pub async fn send_message(&self, required_peer_generation: Option<u64>, mut message: &[u8]) {
-        //TODO ensure message max length - configurable upper limit?
+    pub async fn send_message(&self, required_peer_generation: Option<u64>, mut message: &[u8]) -> anyhow::Result<()> {
+        if message.len() > self.config.max_message_len {
+            debug!("message has length {}, configured max length is {}", message.len(), self.config.max_message_len);
+            bail!("message has length {}, configured max length is {}", message.len(), self.config.max_message_len);
+        }
 
         let mut inner = self.inner.write().await;
 
@@ -225,7 +229,7 @@ impl SendStream {
                 required_peer_generation.unwrap(),
                 inner.peer_generation(),
             );
-            return; //TODO unit test
+            return Ok(()); //TODO unit test
         }
 
         debug!("registering message of length {} for sending to {:?} on stream {:?}", message.len(), inner.peer_addr, inner.stream_id);
@@ -312,6 +316,8 @@ impl SendStream {
                 inner.do_send_work_in_progress().await;
             }
         }
+
+        Ok(())
     }
 }
 
@@ -351,6 +357,7 @@ mod tests {
                 max_payload_len: 30,
                 late_send_delay: None,
                 send_window_size: 4,
+                max_message_len: 1024*1024,
             }),
             3,
             create_peer_generations(with_peer_generation),
@@ -430,6 +437,7 @@ mod tests {
                 max_payload_len: 30,
                 late_send_delay: None,
                 send_window_size: 32,
+                max_message_len: 1024*1024,
             }),
             3,
             Default::default(),
@@ -508,6 +516,7 @@ mod tests {
                 max_payload_len: 30,
                 late_send_delay: None,
                 send_window_size: 4,
+                max_message_len: 1024*1024,
             }),
             4,
             create_peer_generations(with_peer_generation),
@@ -637,6 +646,7 @@ mod tests {
                 max_payload_len: max_payload_len,
                 late_send_delay,
                 send_window_size: 4,
+                max_message_len: 1024*1024,
             }),
             5,
             create_peer_generations(with_peer_generation),
@@ -657,7 +667,7 @@ mod tests {
 
             for message in messages {
                 time::sleep(Duration::from_millis(2)).await;
-                send_stream.send_message(None, &message).await;
+                send_stream.send_message(None, &message).await.unwrap();
             }
 
             time::sleep(Duration::from_millis(delay_millis_after_messages)).await;
@@ -684,6 +694,7 @@ mod tests {
                 max_payload_len: 0,
                 late_send_delay: None,
                 send_window_size: 4,
+                max_message_len: 1024*1024,
             }),
             buffer_pool: Arc::new(SendBufferPool::new(0, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
             self_generation: 3,
@@ -716,6 +727,7 @@ mod tests {
                     max_payload_len: 0,
                     late_send_delay: None,
                     send_window_size: 0,
+                    max_message_len: 1024*1024,
                 }),
                 3,
                 Default::default(),
@@ -761,6 +773,7 @@ mod tests {
                     max_payload_len: 0,
                     late_send_delay: None,
                     send_window_size: 4,
+                    max_message_len: 1024*1024,
                 }),
                 buffer_pool: Arc::new(SendBufferPool::new(100, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 self_generation: 3,

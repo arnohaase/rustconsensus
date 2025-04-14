@@ -13,6 +13,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use aead::Buffer;
+use anyhow::bail;
 use bytes::BufMut;
 use tokio::net::UdpSocket;
 use tracing::{debug, error, info, trace, warn};
@@ -98,15 +99,22 @@ impl EndPoint {
         Ok(raw as u64)
     }
 
-    //TODO send without stream
-
-    pub async fn send_in_stream(&self, to_addr: SocketAddr, required_generation: Option<u64>, stream_id: u16, message: &[u8]) {
+    pub async fn send_in_stream(&self, to_addr: SocketAddr, required_generation: Option<u64>, stream_id: u16, message: &[u8]) -> anyhow::Result<()> {
         let send_stream = self.get_send_stream(to_addr, stream_id).await;
-        send_stream.send_message(required_generation, message).await;
+        send_stream.send_message(required_generation, message).await
     }
 
     //TODO unit test
-    pub async fn send_outside_stream(&self, to_addr: SocketAddr, required_to_generation: Option<u64>, message: &[u8]) {
+    pub async fn send_outside_stream(&self, to_addr: SocketAddr, required_to_generation: Option<u64>, message: &[u8]) -> anyhow::Result<()> {
+        let max_len = self.config.payload_size_inside_udp
+            - PacketHeader::serialized_len_for_stream_header(self.get_reply_to_addr(to_addr))
+            - self.encryption.prefix_len();
+
+        if message.len() > max_len {
+            debug!("message outside stream for destination {:?} has a maximum length of {} to fit a single packet, was {}", to_addr, max_len, message.len());
+            bail!("message outside stream for destination {:?} has a maximum length of {} to fit a single packet, was {}", to_addr, max_len, message.len());
+        }
+
         let mut buf = self.buffer_pool.get_from_pool();
         PacketHeader::new(self.get_reply_to_addr(to_addr), PacketKind::FireAndForget, self.generation, required_to_generation)
             .ser(&mut buf);
@@ -116,6 +124,7 @@ impl EndPoint {
             .finalize_and_send_packet(to_addr, &mut buf).await;
 
         self.buffer_pool.return_to_pool(buf);
+        Ok(())
     }
 
     pub async fn recv_loop(&self)  {

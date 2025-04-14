@@ -50,10 +50,10 @@ async fn main() -> anyhow::Result<()> {
         cloned_b.recv_loop().instrument(span).await
     });
 
-    a.send_in_stream(addr_b, None, 4, &[1, 2, 3]).await;
-    a.send_in_stream(addr_b, None, 4, &[2, 3, 4, 5]).await;
-    a.send_in_stream(addr_b, None, 4, &[7]).await;
-    a.send_in_stream(addr_b, None, 4, &[4, 5, 6]).await;
+    a.send_in_stream(addr_b, None, 4, &[1, 2, 3]).await?;
+    a.send_in_stream(addr_b, None, 4, &[2, 3, 4, 5]).await?;
+    a.send_in_stream(addr_b, None, 4, &[7]).await?;
+    a.send_in_stream(addr_b, None, 4, &[4, 5, 6]).await?;
 
     sleep(Duration::from_millis(20)).await;
 

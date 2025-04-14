@@ -369,8 +369,8 @@ impl ReceiveStreamInner {
             }
         };
 
-        if header.message_len > self.config.max_message_size {
-            warn!("packet #{} declares a message length of {} which is longer than the configured maximum of {}", low_water_mark, header.message_len, self.config.max_message_size);
+        if SafeCast::<usize>::safe_cast(header.message_len) > self.config.max_message_len {
+            warn!("packet #{} declares a message length of {} which is longer than the configured maximum of {}", low_water_mark, header.message_len, self.config.max_message_len);
 
             self.receive_buffer.remove(&low_water_mark);
             self.sanitize_after_update();
@@ -698,7 +698,7 @@ mod tests {
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 32,
                     max_num_naks_per_packet: 10,
-                    max_message_size: 10,
+                    max_message_len: 10,
                 }),
                 Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 3,
@@ -744,7 +744,7 @@ mod tests {
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 32,
                     max_num_naks_per_packet: 10,
-                    max_message_size: 10,
+                    max_message_len: 10,
                 }),
                 Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 4,
@@ -825,7 +825,7 @@ mod tests {
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 32,
                     max_num_naks_per_packet: 2,
-                    max_message_size: 10,
+                    max_message_len: 10,
                 }),
                 Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 11,
@@ -967,7 +967,7 @@ mod tests {
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 4,
                     max_num_naks_per_packet: 10,
-                    max_message_size: 10,
+                    max_message_len: 10,
                 }),
                 Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 3,
@@ -1050,7 +1050,7 @@ mod tests {
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 4,
                     max_num_naks_per_packet: 10,
-                    max_message_size: 10,
+                    max_message_len: 10,
                 }),
                 Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
                 3,
@@ -1115,7 +1115,7 @@ mod tests {
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 32,
                 max_num_naks_per_packet: 2,
-                max_message_size: 10,
+                max_message_len: 10,
             }),
             Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
             3,
@@ -1155,7 +1155,7 @@ mod tests {
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 32,
                 max_num_naks_per_packet: 2,
-                max_message_size: 10,
+                max_message_len: 10,
             }),
             Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
             3,
@@ -1271,7 +1271,7 @@ mod tests {
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 4,
                 max_num_naks_per_packet: 2,
-                max_message_size: 10,
+                max_message_len: 10,
             }),
             Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
             3,

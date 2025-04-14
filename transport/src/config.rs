@@ -1,8 +1,8 @@
-use std::net::SocketAddr;
-use std::time::Duration;
+use crate::buffers::encryption::RudpEncryption;
 use anyhow::bail;
 use rustc_hash::FxHashMap;
-use crate::buffers::encryption::RudpEncryption;
+use std::net::SocketAddr;
+use std::time::Duration;
 
 #[derive(Clone, Debug)]
 pub struct RudpConfig {
@@ -41,9 +41,7 @@ pub struct RudpConfig {
     ///      nodes have a key //TODO several keys, phase out
     pub encryption_key: Option<Vec<u8>>,
 
-    //TODO integrate with SendStreamConfig and ReceiveStreamConfig
-
-    pub max_message_size: u32,
+    pub max_message_len: usize,
 
     pub default_send_stream_config: SendStreamConfig,
     pub specific_send_stream_configs: FxHashMap<u16, SendStreamConfig>,
@@ -56,29 +54,31 @@ impl RudpConfig {
 
     ///TODO documentation - ipv4 with end-to-end full Ethernet MTU - without optional headers
     pub fn default(self_addr: SocketAddr, encryption_key: Option<Vec<u8>>) -> RudpConfig {
-        if self_addr.is_ipv4() {
-            RudpConfig {
-                self_addr,
-                payload_size_inside_udp: 1472,
-                buffer_pool_size: 4096,
-                encryption_key,
-                max_message_size: 16 * 1024 * 1024,
-                default_send_stream_config: SendStreamConfig {
-                    send_delay: Some(Duration::from_millis(1)),
-                    send_window_size: 1024,
-                },
-                specific_send_stream_configs: FxHashMap::default(),
-                default_receive_stream_config: ReceiveStreamConfig {
-                    nak_interval: Duration::from_millis(4),
-                    sync_interval: Duration::from_millis(500),
-                    receive_window_size: 16 * 1024,
-                    max_num_naks_per_packet: 150,
-                },
-                specific_receive_stream_configs: FxHashMap::default(),
-            }
+        let ip_header_size = if self_addr.is_ipv4() {
+            20
         }
         else {
-            todo!("default ipv6")
+            40
+        };
+
+        RudpConfig {
+            self_addr,
+            payload_size_inside_udp: 1500 - ip_header_size - 8,
+            buffer_pool_size: 4096,
+            encryption_key,
+            max_message_len: 16 * 1024 * 1024,
+            default_send_stream_config: SendStreamConfig {
+                send_delay: Some(Duration::from_millis(1)),
+                send_window_size: 1024,
+            },
+            specific_send_stream_configs: FxHashMap::default(),
+            default_receive_stream_config: ReceiveStreamConfig {
+                nak_interval: Duration::from_millis(4),
+                sync_interval: Duration::from_millis(500),
+                receive_window_size: 16 * 1024,
+                max_num_naks_per_packet: 150,
+            },
+            specific_receive_stream_configs: FxHashMap::default(),
         }
     }
 
@@ -102,6 +102,7 @@ impl RudpConfig {
             max_payload_len: self.effective_payload_length(encryption),
             late_send_delay: raw.send_delay,
             send_window_size: raw.send_window_size,
+            max_message_len: self.max_message_len,
         }
     }
 
@@ -114,7 +115,7 @@ impl RudpConfig {
             sync_interval: raw.sync_interval,
             receive_window_size: raw.receive_window_size,
             max_num_naks_per_packet: raw.max_num_naks_per_packet, //TODO calculate this based on packet size
-            max_message_size: self.max_message_size,
+            max_message_len: self.max_message_len,
         }
     }
 }
@@ -139,7 +140,7 @@ pub struct EffectiveSendStreamConfig {
     pub max_payload_len: usize,
     pub late_send_delay: Option<Duration>,
     pub send_window_size: u32, //TODO ensure that this is <= u32::MAX / 4 (or maybe a far smaller upper bound???)
-    // pub max_message_len: usize,
+    pub max_message_len: usize,
 }
 
 //TODO measure RTT
@@ -162,6 +163,6 @@ pub struct EffectiveReceiveStreamConfig {
     pub max_num_naks_per_packet: usize, //TODO limit so it fits into a single packet
 
     //TODO send this as part of the INIT message to verify agreement (+ max payload size)
-    pub max_message_size: u32,
+    pub max_message_len: usize,
 }
 

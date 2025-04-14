@@ -48,7 +48,7 @@ impl <M: Messaging> Cluster<M> {
 
         select! {
             //TODO start transport receive loop only after the cluster is started
-            _ = self.messaging.recv() => Ok(()), //TODO spawn transport? or at least message handling?
+            _ = self.messaging.recv() => Ok(()),
             r = self._run(discovery_strategy, downing_strategy) => r,
         }
     }

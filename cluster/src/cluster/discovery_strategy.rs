@@ -186,7 +186,8 @@ async fn send_join_message_loop<M: MessageSender>(other_seed_nodes: &[SocketAddr
     loop {
         for seed_node in other_seed_nodes {
             debug!("trying to join cluster at {}", seed_node); //TODO clearer logging
-            messaging.send_raw_fire_and_forget(seed_node.clone(), None, &join_msg).await;
+            messaging.send_raw_fire_and_forget(seed_node.clone(), None, &join_msg).await
+                .expect("JOIN should fit into a single packet");
         }
         sleep(config.discovery_seed_node_retry_interval).await;
     }
