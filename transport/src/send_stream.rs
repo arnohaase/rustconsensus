@@ -8,16 +8,16 @@ use crate::packet_header::{PacketHeader, PacketKind};
 use crate::packet_id::PacketId;
 use crate::safe_converter::{PrecheckedCast, SafeCast};
 use crate::send_pipeline::SendPipeline;
+use anyhow::bail;
 use bytes::BufMut;
 use std::cmp::min;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use anyhow::bail;
 use tokio::sync::RwLock;
 use tokio::time;
-use tracing::{debug, trace};
-
+use tracing::{debug, span, trace, Instrument, Level, Span};
+use uuid::Uuid;
 
 struct SendStreamInner {
     config: Arc<EffectiveSendStreamConfig>,
@@ -95,7 +95,9 @@ impl SendStreamInner {
 
         trace!("actually sending packet to {:?} on stream {}: {:?}", self.peer_addr, self.stream_id, wip.as_ref());
 
-        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut wip).await;
+        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut wip)
+            .instrument(Span::current())
+            .await;
         //NB: we don't handle a send error but keep the (potentially) unsent packet in our send buffer
 
         self.send_buffer.insert(self.work_in_progress_packet_id, wip);
@@ -211,8 +213,6 @@ impl SendStream {
         }
     }
 
-    //TODO add some tracing here for correlation
-
     /// NB: This function does not return Result because all retry / recovery handling is expected
     ///      to be done here
     pub async fn send_message(&self, required_peer_generation: Option<u64>, mut message: &[u8]) -> anyhow::Result<()> {
@@ -232,6 +232,10 @@ impl SendStream {
             return Ok(()); //TODO unit test
         }
 
+        let correlation_id = Uuid::new_v4();
+        let span = span!(Level::TRACE, "send_message", ?correlation_id);
+        let _entered = span.enter();
+
         debug!("registering message of length {} for sending to {:?} on stream {:?}", message.len(), inner.peer_addr, inner.stream_id);
 
         let mut wip_buffer = if let Some(wip) = &mut inner.work_in_progress {
@@ -240,7 +244,9 @@ impl SendStream {
                 wip
             }
             else {
-                inner.do_send_work_in_progress().await;
+                inner.do_send_work_in_progress()
+                    .instrument(Span::current())
+                    .await;
                 inner.init_wip(Some(0))
             }
         }
@@ -269,7 +275,9 @@ impl SendStream {
 
             // getting here means that the message continues in (at least) the next packet
 
-            inner.do_send_work_in_progress().await;
+            inner.do_send_work_in_progress()
+                .instrument(Span::current())
+                .await;
 
             let first_message_offset = if inner.buffer_pool.get_envelope_prefix_len() +
                 message.len() +
@@ -287,7 +295,9 @@ impl SendStream {
 
         if wip_buffer.len() + MessageHeader::SERIALIZED_LEN > self.config.max_payload_len {
             // there is no room for another message header in the buffer, so we send it
-            inner.do_send_work_in_progress().await
+            inner.do_send_work_in_progress()
+                .instrument(Span::current())
+                .await
         }
 
         // start 'late send' timer
@@ -313,7 +323,9 @@ impl SendStream {
                 }));
             }
             else {
-                inner.do_send_work_in_progress().await;
+                inner.do_send_work_in_progress()
+                    .instrument(Span::current())
+                    .await;
             }
         }
 

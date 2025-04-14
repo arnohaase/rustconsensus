@@ -107,6 +107,8 @@ impl EndPoint {
 
     //TODO unit test
     pub async fn send_outside_stream(&self, to_addr: SocketAddr, required_to_generation: Option<u64>, message: &[u8]) -> anyhow::Result<()> {
+        trace!("sending outside stream to {:?}", to_addr);
+
         let max_len = self.config.payload_size_inside_udp
             - PacketHeader::serialized_len_for_stream_header(self.get_reply_to_addr(to_addr))
             - self.encryption.prefix_len();
@@ -121,8 +123,10 @@ impl EndPoint {
             .ser(&mut buf);
         buf.put_slice(message);
 
+
         self.get_send_pipeline(to_addr)
-            .finalize_and_send_packet(to_addr, &mut buf).await;
+            .finalize_and_send_packet(to_addr, &mut buf)
+            .await;
 
         self.buffer_pool.return_to_pool(buf);
         Ok(())
