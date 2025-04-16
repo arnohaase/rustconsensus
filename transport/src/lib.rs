@@ -1,3 +1,5 @@
+//TODO remove in-the-middle acknowledged packets
+
 //! This transport protocol is designed as a compromise between TCP and UDP, providing some
 //!  reliability and order-of-delivery guarantees while prioritising low latency over "fully"
 //!  in-sequence delivery (TCP style).
