@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
 struct SimpleMessageDispatcher {}
 #[async_trait::async_trait]
 impl MessageDispatcher for SimpleMessageDispatcher {
-    async fn on_message(&self, sender_addr: SocketAddr, sender_generation: u64,  stream_id: Option<u16>, msg_buf: &[u8]) {
+    async fn on_message(&self, sender_addr: SocketAddr, sender_generation: u64,  stream_id: Option<u16>, msg_buf: Vec<u8>) {
         info!("received message {:?} from {:?}@{} on stream {:?}", msg_buf, sender_addr, sender_generation, stream_id);
     }
 }

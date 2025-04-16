@@ -129,8 +129,8 @@ pub struct SendStreamConfig {
     ///  are never combined and sent in a single packet.
     pub send_delay: Option<Duration>,
 
-    /// This is the maximum number of *packets* (not bytes) stored on the sender side pending an
-    ///  ack message
+    /// This is the maximum difference in *packets* (not bytes) between the highest the lowest
+    ///  buffered packet
     pub send_window_size: u32,
 }
 

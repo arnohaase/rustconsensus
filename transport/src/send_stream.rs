@@ -10,7 +10,7 @@ use crate::safe_converter::{PrecheckedCast, SafeCast};
 use crate::send_pipeline::SendPipeline;
 use anyhow::bail;
 use bytes::BufMut;
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -29,7 +29,11 @@ struct SendStreamInner {
     self_reply_to_addr: Option<SocketAddr>,
 
     send_buffer: BTreeMap<PacketId, FixedBuf>,
-    /// next unsent packet, either already in 'work in progress' or next one to go there
+    congestion_window_size: u32,
+    /// first packet that was not actually sent over the network. This can be smaller than
+    ///  work_in_progress_packet_id in case of congestion
+    next_unsent_packet_id: PacketId,
+    /// next packet to be buffered, either already in 'work in progress' or next one to go there
     work_in_progress_packet_id: PacketId,
     work_in_progress: Option<FixedBuf>,
     work_in_progress_late_send_handle: Option<tokio::task::JoinHandle<()>>,
@@ -63,6 +67,9 @@ impl SendStreamInner {
     }
 
     async fn send_send_sync(&self) {
+        //TODO !!! congestion control: send unsent marker !!!
+
+
         let header = PacketHeader::new(
             self.self_reply_to_addr,
             PacketKind::ControlSendSync { stream_id: self.stream_id },
@@ -89,17 +96,37 @@ impl SendStreamInner {
             .unwrap_or(self.work_in_progress_packet_id)
     }
 
+    /// The congestion window may have grown or shrunk, or packets may have been acknowledged or
+    ///  buffered - this function sends what can be sent. It assumes that all other state is up to
+    ///  date when it is called.
+    async fn send_what_congestion_window_allows(&mut self) {
+        let cwnd = self.low_water_mark() + self.congestion_window_size.safe_cast();
+
+        while self.next_unsent_packet_id < self.work_in_progress_packet_id
+            && self.next_unsent_packet_id < cwnd
+        {
+            println!("cwnd: {:?}, unsent: {:?}, wip: {:?}, low: {:?}", cwnd, self.next_unsent_packet_id, self.work_in_progress_packet_id, self.low_water_mark());
+
+
+            self.send_socket.do_send_packet(
+                self.peer_addr,
+                self.send_buffer.get(&self.next_unsent_packet_id)
+                    .unwrap()
+                    .as_ref()
+            ).await;
+            self.next_unsent_packet_id += 1;
+        }
+    }
+
     async fn do_send_work_in_progress(&mut self) {
         let mut wip = self.work_in_progress.take()
             .expect("attempting to send uninitialized wip");
 
         trace!("actually sending packet to {:?} on stream {}: {:?}", self.peer_addr, self.stream_id, wip.as_ref());
 
-        self.send_socket.finalize_and_send_packet(self.peer_addr, &mut wip)
+        self.send_socket.finalize_packet(&mut wip)
             .instrument(Span::current())
             .await;
-        //NB: we don't handle a send error but keep the (potentially) unsent packet in our send buffer
-
         self.send_buffer.insert(self.work_in_progress_packet_id, wip);
 
         if let Some(handle) = &self.work_in_progress_late_send_handle {
@@ -107,6 +134,7 @@ impl SendStreamInner {
             self.work_in_progress_late_send_handle = None;
         }
 
+        //TODO !!! send window size !!!
         if let Some(out_of_window) = self.work_in_progress_packet_id - self.config.send_window_size.safe_cast() {
             if let Some(dropped_buf) = self.send_buffer.remove(&out_of_window) {
                 debug!("unacknowledged packet moved out of the send window for stream {} with {:?}", self.stream_id, self.peer_addr);
@@ -115,6 +143,8 @@ impl SendStreamInner {
         }
 
         self.work_in_progress_packet_id += 1;
+
+        self.send_what_congestion_window_allows().await;
     }
 }
 
@@ -145,6 +175,8 @@ impl SendStream {
             peer_addr,
             self_reply_to_addr: reply_to_addr,
             send_buffer: BTreeMap::default(),
+            congestion_window_size: config.send_window_size, // fast start TODO is this a good starting point?
+            next_unsent_packet_id: PacketId::ZERO,
             work_in_progress_packet_id: PacketId::ZERO,
             work_in_progress: None,
             work_in_progress_late_send_handle: None,
@@ -160,7 +192,7 @@ impl SendStream {
         self.inner.read().await.peer_addr
     }
 
-    pub async fn on_init_message(&self) {
+    pub async fn on_init_message(&self) { //TODO does this make sense?
         let mut inner = self.inner.write().await;
         debug!("received INIT message from {:?} for stream {}", inner.peer_addr, inner.stream_id);
 
@@ -168,6 +200,8 @@ impl SendStream {
         if let Some(wip) = inner.work_in_progress.take() {
             inner.buffer_pool.return_to_pool(wip);
         }
+
+        //TODO !!! congestion control !!!
         while let Some((_, removed)) = inner.send_buffer.pop_last() {
             inner.buffer_pool.return_to_pool(removed);
         }
@@ -183,6 +217,8 @@ impl SendStream {
         // remove all packets 'up to' the threshold from the send buffer - wrap-around semantics
         //  add some boilerplate
 
+        //TODO !!! merge with NAK, clean up !!!
+
         loop {
             if let Some(&key) = inner.send_buffer.keys().next() {
                 if key < message.receive_buffer_ack_threshold {
@@ -195,13 +231,20 @@ impl SendStream {
             break;
         }
 
+        inner.next_unsent_packet_id = max(inner.next_unsent_packet_id, inner.low_water_mark());
+
         //TODO handle / evaluate the client's packet ids
         inner.send_send_sync().await;
+        inner.send_what_congestion_window_allows().await;
     }
 
     pub async fn on_nak_message(&self, message: ControlMessageNak) {
         let inner = self.inner.read().await;
         trace!("received NAK message from {:?} for stream {} - resending packets {:?}", inner.peer_addr, inner.stream_id, message.packet_id_resend_set);
+
+        //TODO packets between NAK'ed packets will never be queried, so we can remove them from the buffer
+
+        //TODO merge this with RECV_SYNC
 
         for packet_id in &message.packet_id_resend_set {
             if let Some(packet) = inner.send_buffer.get(packet_id) {
@@ -213,8 +256,6 @@ impl SendStream {
         }
     }
 
-    /// NB: This function does not return Result because all retry / recovery handling is expected
-    ///      to be done here
     pub async fn send_message(&self, required_peer_generation: Option<u64>, mut message: &[u8]) -> anyhow::Result<()> {
         if message.len() > self.config.max_message_len {
             debug!("message has length {}, configured max length is {}", message.len(), self.config.max_message_len);
@@ -229,6 +270,7 @@ impl SendStream {
                 required_peer_generation.unwrap(),
                 inner.peer_generation(),
             );
+
             return Ok(()); //TODO unit test
         }
 
@@ -484,6 +526,7 @@ mod tests {
         Arc::new(map)
     }
 
+    //TODO unit test next_unsent
     #[rstest]
     #[case::empty(true, vec![], 3, 1, 2, vec![], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
     #[case::empty(false, vec![], 3, 1, 2, vec![], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,0, 0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
@@ -549,18 +592,22 @@ mod tests {
             .start_paused(true)
             .build().unwrap();
         rt.block_on(async move {
-            for packet_id in initial_send_buffer_ids {
-                let mut buf = FixedBuf::new(40);
-                buf.put_u8(packet_id);
+            {
+                let mut inner = send_stream.inner.write().await;
 
-                let buf2 = FixedBuf::from_slice(vec![packet_id].as_slice());
+                for packet_id in initial_send_buffer_ids {
+                    let mut buf = FixedBuf::new(40);
+                    buf.put_u8(packet_id);
 
-                assert_eq!(buf, buf2);
+                    let buf2 = FixedBuf::from_slice(vec![packet_id].as_slice());
 
-                send_stream.inner.write().await
-                    .send_buffer.insert(PacketId::from_raw(packet_id.safe_cast()), buf);
-                send_stream.inner.write().await
-                    .work_in_progress_packet_id = PacketId::from_raw(packet_id.safe_cast() + 1);
+                    assert_eq!(buf, buf2);
+
+                    inner.send_buffer.insert(PacketId::from_raw(packet_id.safe_cast()), buf);
+                    inner.work_in_progress_packet_id = PacketId::from_raw(packet_id.safe_cast() + 1);
+                }
+
+                inner.next_unsent_packet_id = inner.work_in_progress_packet_id; //TODO unit test congestion window
             }
 
             send_stream.on_recv_sync_message(msg).await;
@@ -674,8 +721,11 @@ mod tests {
             .start_paused(true)
             .build().unwrap();
         rt.block_on(async move {
-            send_stream.inner.write().await
-                .work_in_progress_packet_id = PacketId::from_raw(previous_wip_packet_id);
+            {
+                let mut inner = send_stream.inner.write().await;
+                inner.work_in_progress_packet_id = PacketId::from_raw(previous_wip_packet_id);
+                inner.next_unsent_packet_id = inner.work_in_progress_packet_id; //TODO unit test congestion window
+            }
 
             for message in messages {
                 time::sleep(Duration::from_millis(2)).await;
@@ -716,6 +766,8 @@ mod tests {
             peer_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             self_reply_to_addr: None,
             send_buffer: Default::default(),
+            congestion_window_size: 4,
+            next_unsent_packet_id: PacketId::from_raw(wip_packet_id),
             work_in_progress_packet_id: PacketId::from_raw(wip_packet_id),
             work_in_progress: None,
             work_in_progress_late_send_handle: None,
@@ -795,6 +847,8 @@ mod tests {
                 peer_addr: SocketAddr::from(([1,2,3,4], 9)),
                 self_reply_to_addr: None,
                 send_buffer: Default::default(),
+                congestion_window_size: 4,
+                next_unsent_packet_id: PacketId::from_raw(wip_packet_id),
                 work_in_progress_packet_id: PacketId::from_raw(wip_packet_id),
                 work_in_progress: None,
                 work_in_progress_late_send_handle: None,
