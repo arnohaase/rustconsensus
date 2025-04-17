@@ -14,7 +14,7 @@ use std::cmp::{max, min};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time;
 use tracing::{debug, span, trace, Instrument, Level, Span};
 use uuid::Uuid;
@@ -29,6 +29,7 @@ struct SendStreamInner {
     self_reply_to_addr: Option<SocketAddr>,
 
     send_buffer: BTreeMap<PacketId, FixedBuf>,
+    send_window_changed_notifier: mpsc::Sender<()>,
     congestion_window_size: u32,
     /// first packet that was not actually sent over the network. This can be smaller than
     ///  work_in_progress_packet_id in case of congestion
@@ -44,8 +45,15 @@ impl SendStreamInner {
         PacketHeader::serialized_len_for_stream_header(self.self_reply_to_addr)
     }
 
-    fn init_wip(&mut self, first_message_offset: Option<u16>) -> &mut FixedBuf {
+    #[must_use]
+    fn init_wip(&mut self, first_message_offset: Option<u16>) -> bool {
         assert!(self.work_in_progress.is_none());
+
+        if self.work_in_progress_packet_id >= self.low_water_mark() + self.config.send_window_size.safe_cast() {
+            // the send buffer has reached its configured capacity, so we wait for it to decrease
+            //  before increasing it
+            return false;
+        }
 
         let mut new_buffer = self.buffer_pool.get_from_pool();
         PacketHeader::new(
@@ -59,7 +67,7 @@ impl SendStreamInner {
         ).ser(&mut new_buffer);
 
         self.work_in_progress = Some(new_buffer);
-        self.work_in_progress.as_mut().unwrap()
+        true
     }
 
     fn peer_generation(&self) -> Option<u64> {
@@ -105,9 +113,6 @@ impl SendStreamInner {
         while self.next_unsent_packet_id < self.work_in_progress_packet_id
             && self.next_unsent_packet_id < cwnd
         {
-            println!("cwnd: {:?}, unsent: {:?}, wip: {:?}, low: {:?}", cwnd, self.next_unsent_packet_id, self.work_in_progress_packet_id, self.low_water_mark());
-
-
             self.send_socket.do_send_packet(
                 self.peer_addr,
                 self.send_buffer.get(&self.next_unsent_packet_id)
@@ -116,6 +121,10 @@ impl SendStreamInner {
             ).await;
             self.next_unsent_packet_id += 1;
         }
+    }
+
+    fn on_send_window_changed_maybe(&self) {
+        let _ = self.send_window_changed_notifier.try_send(());
     }
 
     async fn do_send_work_in_progress(&mut self) {
@@ -152,6 +161,10 @@ impl SendStreamInner {
 pub struct SendStream {
     config: Arc<EffectiveSendStreamConfig>,
     inner: Arc<RwLock<SendStreamInner>>,
+    /// A lock held by calls to send_message to prevent interleaving of messages. It protects
+    ///  access to a receiver of notifications that the send window may have moved, facilitating
+    ///  back pressure when the send buffer is filled up
+    send_lock: Mutex<mpsc::Receiver<()>>,
 }
 
 impl SendStream {
@@ -165,6 +178,9 @@ impl SendStream {
         reply_to_addr: Option<SocketAddr>,
         buffer_pool: Arc<SendBufferPool>,
     ) -> SendStream {
+        // for notifications that the send window changed
+        let (send, recv) = mpsc::channel(1);
+
         let inner = SendStreamInner {
             config: config.clone(),
             buffer_pool,
@@ -175,6 +191,7 @@ impl SendStream {
             peer_addr,
             self_reply_to_addr: reply_to_addr,
             send_buffer: BTreeMap::default(),
+            send_window_changed_notifier: send,
             congestion_window_size: config.send_window_size, // fast start TODO is this a good starting point?
             next_unsent_packet_id: PacketId::ZERO,
             work_in_progress_packet_id: PacketId::ZERO,
@@ -185,6 +202,7 @@ impl SendStream {
         SendStream {
             config,
             inner: Arc::new(RwLock::new(inner)),
+            send_lock: Mutex::new(recv),
         }
     }
 
@@ -218,6 +236,7 @@ impl SendStream {
         //TODO handle / evaluate the client's packet ids
         inner.send_send_sync().await;
         inner.send_what_congestion_window_allows().await;
+        inner.on_send_window_changed_maybe();
     }
 
     pub async fn on_nak_message(&self, message: ControlMessageNak) {
@@ -225,8 +244,8 @@ impl SendStream {
         trace!("received NAK message from {:?} for stream {} - resending packets {:?}", inner.peer_addr, inner.stream_id, message.packet_id_resend_set);
 
         //TODO packets between NAK'ed packets will never be queried, so we can remove them from the buffer
-
         //TODO merge this with RECV_SYNC
+        //TODO ACK all packets before the first NAK
 
         for packet_id in &message.packet_id_resend_set {
             if let Some(packet) = inner.send_buffer.get(packet_id) {
@@ -239,6 +258,8 @@ impl SendStream {
     }
 
     pub async fn send_message(&self, required_peer_generation: Option<u64>, mut message: &[u8]) -> anyhow::Result<()> {
+        let mut send_lock = self.send_lock.lock().await;
+
         if message.len() > self.config.max_message_len {
             debug!("message has length {}, configured max length is {}", message.len(), self.config.max_message_len);
             bail!("message has length {}, configured max length is {}", message.len(), self.config.max_message_len);
@@ -262,24 +283,50 @@ impl SendStream {
 
         debug!("registering message of length {} for sending to {:?} on stream {:?}", message.len(), inner.peer_addr, inner.stream_id);
 
-        let mut wip_buffer = if let Some(wip) = &mut inner.work_in_progress {
+        if let Some(wip) = &mut inner.work_in_progress {
             // if the message header does not fit in wip, send and re-init wip
-            if wip.len() + MessageHeader::SERIALIZED_LEN <= self.config.max_payload_len {
-                wip
-            }
-            else {
+            if wip.len() + MessageHeader::SERIALIZED_LEN > self.config.max_payload_len {
                 inner.do_send_work_in_progress()
                     .instrument(Span::current())
                     .await;
-                inner.init_wip(Some(0))
+
+                loop {
+                    if inner.init_wip(Some(0)) {
+                        break;
+                    }
+                    // drain previous change notifications to avoid an unnecessary additional round in the loop
+                    // NB: we do this *before* releasing the lock on 'inner': all changes to the
+                    //  send buffer require the lock on inner to be held.
+                    let _ = send_lock.try_recv();
+                    drop(inner);
+                    // Now we wait for some event - typically an ACK on some old packets - to free
+                    //  up some of the send buffer.
+                    // NB: It is critically important to do this wait *without* holding a lock
+                    //      on inner because all freeing up of the send buffer requires that lock.
+                    //      Waiting while holding that lock would create a deadlock.
+                    // NB: It is important to keep holding the send_lock because we don't want other
+                    //      calls to send_message to interleave
+                    let _ = send_lock.recv().await;
+                    inner = self.inner.write().await;
+                }
             }
         }
         else {
             // if there is no previous wip, initialize it
-            inner.init_wip(Some(0))
-        };
+            loop {
+                if inner.init_wip(Some(0)) {
+                    break;
+                }
+                let _ = send_lock.try_recv();
+                drop(inner);
+                let _ = send_lock.recv().await;
+                inner = self.inner.write().await;
+            }
+        }
 
-        // write message header
+        let mut wip_buffer = inner.work_in_progress.as_mut().unwrap();
+
+            // write message header
         MessageHeader::for_message(message)
             .ser(&mut wip_buffer);
 
@@ -314,7 +361,17 @@ impl SendStream {
                 Some(message.len().prechecked_cast())
             };
 
-            wip_buffer = inner.init_wip(first_message_offset);
+            loop {
+                if inner.init_wip(first_message_offset) {
+                    break;
+                }
+                let _ = send_lock.try_recv();
+                drop(inner);
+                let _ = send_lock.recv().await;
+                inner = self.inner.write().await;
+            }
+
+            wip_buffer = inner.work_in_progress.as_mut().unwrap();
         }
 
         if wip_buffer.len() + MessageHeader::SERIALIZED_LEN > self.config.max_payload_len {
@@ -665,6 +722,7 @@ mod tests {
     #[case::send_buffer_1(vec![2], 3, 2)]
     #[case::send_buffer_2(vec![5, 6], 7, 5)]
     fn test_low_water_mark(#[case] send_buffer: Vec<u64>, #[case] wip_packet_id: u64, #[case] expected_low_water_mark: u64) {
+        let (send, _recv) = mpsc::channel(1);
         let mut inner = SendStreamInner {
             config: Arc::new(EffectiveSendStreamConfig {
                 max_payload_len: 0,
@@ -677,6 +735,7 @@ mod tests {
             peer_generations: Default::default(),
             stream_id: 4,
             send_socket: Arc::new(SendPipeline::new(Arc::new(MockSendSocket::new()), Arc::new(crate::buffers::encryption::NoEncryption {}))),
+            send_window_changed_notifier: send,
             peer_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             self_reply_to_addr: None,
             send_buffer: Default::default(),
@@ -746,6 +805,8 @@ mod tests {
                 .returning(|_, _| ())
             ;
 
+            let (send, _recv) = mpsc::channel(1);
+
             let mut inner = SendStreamInner {
                 config: Arc::new(EffectiveSendStreamConfig {
                     max_payload_len: 0,
@@ -761,6 +822,7 @@ mod tests {
                 peer_addr: SocketAddr::from(([1,2,3,4], 9)),
                 self_reply_to_addr: None,
                 send_buffer: Default::default(),
+                send_window_changed_notifier: send,
                 congestion_window_size: 4,
                 next_unsent_packet_id: PacketId::from_raw(wip_packet_id),
                 work_in_progress_packet_id: PacketId::from_raw(wip_packet_id),
