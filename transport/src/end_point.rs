@@ -210,7 +210,6 @@ impl EndPoint {
                         .on_packet(packet_sequence_number, first_message_offset, parse_buf).instrument(Span::current()).await
                 },
                 PacketKind::FireAndForget => self.message_dispatcher.on_message(peer_addr, packet_header.sender_generation, None, parse_buf.to_vec()).instrument(Span::current()).await,
-                PacketKind::ControlInit { stream_id } => Self::handle_init_message(self.get_send_stream(peer_addr, stream_id).await).instrument(Span::current()).await,
                 PacketKind::ControlRecvSync { stream_id } => Self::handle_recv_sync(parse_buf, self.get_send_stream(peer_addr, stream_id).await).instrument(Span::current()).await,
                 PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(&mut receive_streams, packet_header.sender_generation, peer_addr, stream_id)).instrument(Span::current()).await,
                 PacketKind::ControlNak { stream_id } => Self::handle_nak(parse_buf, self.get_send_stream(peer_addr, stream_id).await).instrument(Span::current()).await,
@@ -328,10 +327,6 @@ impl EndPoint {
             map.insert((addr, stream_id), stream.clone());
         });
         stream
-    }
-
-    async fn handle_init_message(send_stream: Arc<SendStream>) {
-        send_stream.on_init_message().await
     }
 
     async fn handle_recv_sync(mut parse_buf: &[u8], send_stream: Arc<SendStream>) {

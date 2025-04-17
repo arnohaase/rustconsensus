@@ -18,7 +18,6 @@ bitflags! {
 
         const KIND_SEQUENCE   = 0b0000_0000;
         const KIND_OUT_OF_SEQ = 0b0000_0100;
-        const KIND_INIT       = 0b0000_1000;
         const KIND_NAK        = 0b0000_1100;
         const KIND_RECV_SYNC  = 0b0001_0000;
         const KIND_SEND_SYNC  = 0b0001_0100;
@@ -89,7 +88,6 @@ impl PacketHeader {
         let flags_kind = match self.packet_kind {
             PacketKind::RegularSequenced { .. } => Flags::KIND_SEQUENCE,
             PacketKind::FireAndForget => Flags::KIND_OUT_OF_SEQ,
-            PacketKind::ControlInit { .. } => Flags::KIND_INIT,
             PacketKind::ControlRecvSync { .. } => Flags::KIND_RECV_SYNC,
             PacketKind::ControlSendSync { .. } => Flags::KIND_SEND_SYNC,
             PacketKind::ControlNak { .. } => Flags::KIND_NAK,
@@ -120,7 +118,6 @@ impl PacketHeader {
         let stream_id = match self.packet_kind {
             PacketKind::RegularSequenced { stream_id, .. } => Some(stream_id),
             PacketKind::FireAndForget => None,
-            PacketKind::ControlInit { stream_id, .. } => Some(stream_id),
             PacketKind::ControlRecvSync { stream_id, .. } => Some(stream_id),
             PacketKind::ControlSendSync { stream_id, .. } => Some(stream_id),
             PacketKind::ControlNak { stream_id, .. } => Some(stream_id),
@@ -172,7 +169,6 @@ impl PacketHeader {
                 }
             },
             Flags::KIND_OUT_OF_SEQ => PacketKind::FireAndForget,
-            Flags::KIND_INIT => PacketKind::ControlInit { stream_id: buf.try_get_u16()? },
             Flags::KIND_NAK => PacketKind::ControlNak { stream_id: buf.try_get_u16()? },
             Flags::KIND_SEND_SYNC => PacketKind::ControlSendSync { stream_id: buf.try_get_u16()? },
             Flags::KIND_RECV_SYNC => PacketKind::ControlRecvSync { stream_id: buf.try_get_u16()? },
@@ -198,7 +194,6 @@ pub enum PacketKind {
         packet_sequence_number: PacketId,
     },
     FireAndForget,
-    ControlInit { stream_id: u16 },
     ControlRecvSync { stream_id: u16 },
     ControlSendSync { stream_id: u16 },
     ControlNak { stream_id: u16 },
@@ -215,7 +210,6 @@ impl Debug for PacketKind {
                 )
             }
             PacketKind::FireAndForget => write!(f, "OOS"),
-            PacketKind::ControlInit { stream_id } => write!(f, "INIT({})", stream_id),
             PacketKind::ControlRecvSync { stream_id } => write!(f, "RECV_SYNC({})", stream_id),
             PacketKind::ControlSendSync { stream_id } => write!(f, "SEND_SYNC({})", stream_id),
             PacketKind::ControlNak { stream_id } => write!(f, "NAK({})", stream_id),
@@ -234,8 +228,6 @@ mod tests {
     use crate::buffers::fixed_buffer::FixedBuf;
 
     #[rstest]
-    #[case::no_addr(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 3, Some(8)), "PCKT{V1:INIT(1)@3}")]
-    #[case::no_addr_wo_peer_addr(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 3, None), "PCKT{V1:INIT(1)@3}")]
     #[case::v4_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), FireAndForget, 4, Some(9)), "PCKT{V1[1.2.3.4:888]:OOS@4}")]
     #[case::v4_addr_wo_peer_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), FireAndForget, 4, None), "PCKT{V1[1.2.3.4:888]:OOS@4}")]
     #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlNak { stream_id: 9}, 5, Some(4)), "PCKT{V1[[1111:2222::3333:4444]:888]:NAK(9)@5}")]
@@ -245,8 +237,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::no_addr(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 3, Some(5)))]
-    #[case::no_addr(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 3, None))]
     #[case::v4_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), FireAndForget, 4, Some(9)))]
     #[case::v4_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), FireAndForget, 4, None))]
     #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlNak { stream_id: 9}, 5, Some(15)))]
@@ -257,10 +247,6 @@ mod tests {
     #[case::seq_continued(PacketHeader::new(None, RegularSequenced { stream_id: 4, first_message_offset: None, packet_sequence_number: PacketId::from_raw(6)}, 7, None))]
     #[case::oos(PacketHeader::new(None, FireAndForget, 8, Some(2000000000)))]
     #[case::oos(PacketHeader::new(None, FireAndForget, 8, None))]
-    #[case::init_0(PacketHeader::new(None, ControlInit { stream_id: 0 }, 9, Some(345978)))]
-    #[case::init_0(PacketHeader::new(None, ControlInit { stream_id: 0 }, 9, None))]
-    #[case::init_1(PacketHeader::new(None, ControlInit { stream_id: 1 }, 10, Some(231785)))]
-    #[case::init_1(PacketHeader::new(None, ControlInit { stream_id: 1 }, 10, None))]
     #[case::recv_sync_0(PacketHeader::new(None, ControlRecvSync { stream_id: 0 }, 11, Some(54378435786)))]
     #[case::recv_sync_0(PacketHeader::new(None, ControlRecvSync { stream_id: 0 }, 11, None))]
     #[case::recv_sync_3(PacketHeader::new(None, ControlRecvSync { stream_id: 3 }, 12, Some(213423)))]
@@ -273,10 +259,6 @@ mod tests {
     #[case::nak_0(PacketHeader::new(None, ControlNak { stream_id: 0 }, 15, None))]
     #[case::nak_5(PacketHeader::new(None, ControlNak { stream_id: 5 }, 16, Some(23432)))]
     #[case::nak_5(PacketHeader::new(None, ControlNak { stream_id: 5 }, 16, None))]
-    #[case::big_generation(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 0xffff_ffff, Some(12930)))]
-    #[case::big_generation(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 0xffff_ffff, None))]
-    #[case::huge_generation(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 0xffff_ffff_ffff, Some(54783)))]
-    #[case::huge_generation(PacketHeader::new(None, ControlInit{ stream_id: 1 }, 0xffff_ffff_ffff, None))]
     #[case::ping(PacketHeader::new(None, Ping, 1234, Some(5678)))]
     #[case::ping(PacketHeader::new(None, Ping, 567890, None))]
     fn test_packet_header_ser(#[case] header: PacketHeader) {
@@ -318,8 +300,6 @@ mod tests {
     #[case::seq_start(RegularSequenced { stream_id: 0, first_message_offset: Some(999), packet_sequence_number: PacketId::from_raw(8)}, "SEQ(0@8:999)")]
     #[case::seq_continued(RegularSequenced { stream_id: 4, first_message_offset: None, packet_sequence_number: PacketId::from_raw(6)}, "SEQ(4@6:-)")]
     #[case::oos(FireAndForget, "OOS")]
-    #[case::init_0(ControlInit { stream_id: 0 }, "INIT(0)")]
-    #[case::init_1(ControlInit { stream_id: 1 }, "INIT(1)")]
     #[case::recv_sync_0(ControlRecvSync { stream_id: 0 }, "RECV_SYNC(0)")]
     #[case::recv_sync_3(ControlRecvSync { stream_id: 3 }, "RECV_SYNC(3)")]
     #[case::send_sync_0(ControlSendSync { stream_id: 0 }, "SEND_SYNC(0)")]

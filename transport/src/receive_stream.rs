@@ -107,17 +107,6 @@ impl ReceiveStreamInner {
         }
     }
 
-    async fn do_send_init(&self) {
-        debug!("sending INIT");
-        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlInit { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
-
-        let mut send_buf = self.buffer_pool.get_from_pool();
-        header.ser(&mut send_buf);
-
-        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
-        self.buffer_pool.return_to_pool(send_buf);
-    }
-
     async fn do_send_recv_sync(&self) {
         let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlRecvSync { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
 
@@ -541,11 +530,6 @@ impl ReceiveStream {
         self.inner.read().await.peer_addr
     }
 
-    pub async fn do_send_init(&self) {
-        self.inner.read().await
-            .do_send_init().await;
-    }
-
     pub async fn on_send_sync_message(&self, message: ControlMessageSendSync) {
         trace!("handling SEND_RECV message: {:?}", message);
 
@@ -670,51 +654,6 @@ mod tests {
     use std::time::Duration;
     use tokio::runtime::Builder;
     use tokio::sync::Mutex;
-
-    #[rstest]
-    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![0,10, 0,0,0,0,0,3, 0,0,0,0,0,8, 0,25])]
-    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), vec![0,8, 0,0,0,0,0,3, 0,0,0,0,0,8, 1,2,3,4, 0,1, 0,25])]
-    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), vec![0,9, 0,0,0,0,0,3, 0,0,0,0,0,8, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25])]
-    fn test_do_send_init(#[case] self_address: SocketAddr, #[case] expected_buf: Vec<u8>) {
-        let rt = Builder::new_current_thread().enable_all().build().unwrap();
-        rt.block_on(async {
-            let mut send_socket = MockSendSocket::new();
-            send_socket.expect_local_addr()
-                .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
-            send_socket.expect_do_send_packet()
-                .once()
-                .withf(move |addr, buf|
-                    addr == &SocketAddr::from(([1, 2, 3, 4], 9)) &&
-                        buf == expected_buf.as_slice()
-                )
-                .returning(|_, _| ())
-            ;
-
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}));
-
-            let message_dispatcher = MockMessageDispatcher::new();
-
-            let receive_stream = ReceiveStream::new(
-                Arc::new(EffectiveReceiveStreamConfig {
-                    nak_interval: Duration::from_millis(100),
-                    sync_interval: Duration::from_millis(100),
-                    receive_window_size: 32,
-                    max_num_naks_per_packet: 10,
-                    max_message_len: 10,
-                }),
-                Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
-                3,
-                8,
-                25,
-                SocketAddr::from(([1, 2, 3, 4], 9)),
-                Arc::new(send_pipeline),
-                self_address,
-                Arc::new(message_dispatcher),
-            );
-
-            receive_stream.do_send_init().await;
-        });
-    }
 
     #[rstest]
     #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), 0, 0, 0, vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
