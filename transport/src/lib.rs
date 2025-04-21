@@ -244,6 +244,7 @@ mod message_header;
 pub mod safe_converter;
 pub mod config;
 pub mod buffers;
+mod hs_congestion_control;
 
 #[cfg(test)]
 mod tests {
