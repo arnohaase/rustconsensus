@@ -76,8 +76,8 @@
 //!     * bit 2-4: kind of frame:
 //!       * 000 regular sequenced
 //!       * 001 fire-and-forget for single-packet application-level messages
-//!       * 010 INIT
-//!       * 011 NAK
+//!       * 010 INIT              TODO removed
+//!       * 011 NAK               TODO merged with RECV_SYNC
 //!       * 100 RECV_SYNC
 //!       * 101 SEND_SYNC
 //!       * 110 PING

@@ -6,6 +6,7 @@
 
 use crate::safe_converter::{PrecheckedCast};
 use std::cmp::{max, min};
+use tracing::{debug, instrument, trace};
 
 /// From AIMD tables in RFC 3649 appendix B, with fixed-point MD scaled at << 8
 /// (implementation idea from John Heffner's Linux kernel implementation).
@@ -126,6 +127,7 @@ impl HsCongestionControl {
         self.cwnd <= AIMD_VALUES[0].0
     }
 
+    #[instrument]
     pub fn on_ack(&mut self, num_packets_in_flight: u32) {
         if self.cwnd == self.send_window_limit {
             // no point for cwnd to become greater than the send window limit
@@ -136,6 +138,7 @@ impl HsCongestionControl {
             // in slow start mode, we are somewhat lenient with regard to cwnd usage: We increase
             //  cwnd if it has at least 50% utilization
             if self.cwnd > 2*num_packets_in_flight {
+                trace!("slow start - less than cwnd/2 packets in flight -> no adjustment");
                 return;
             }
 
@@ -146,6 +149,7 @@ impl HsCongestionControl {
             //  cwnd only when we are actually using it fully: Otherwise, the ACK does not really
             //  signify the presence of additional bandwidth
             if self.cwnd > num_packets_in_flight {
+                trace!("regular congestion control - less than cwnd packets in flight -> no adjustment");
                 return;
             }
 
@@ -163,6 +167,7 @@ impl HsCongestionControl {
         }
 
         self.cwnd = min(self.cwnd, self.send_window_limit);
+        debug!("adjusted cwnd to {} packets", self.cwnd);
     }
 
     pub fn on_nak(&mut self) {
@@ -170,6 +175,8 @@ impl HsCongestionControl {
             .unwrap_or(u32::MAX);
 
         self.cwnd = max(2, self.cwnd - (capped_product >> 8));
+
+        debug!("NAK -> adjusting cwnd downwards to {}", self.cwnd);
 
         // we reset cwnd_cnt for robustness - without this, the counter could cause cwnd to jump
         // right up again

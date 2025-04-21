@@ -3,6 +3,7 @@ use crate::buffers::buffer_pool::SendBufferPool;
 use crate::buffers::fixed_buffer::FixedBuf;
 use crate::config::EffectiveSendStreamConfig;
 use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
+use crate::hs_congestion_control::HsCongestionControl;
 use crate::message_header::MessageHeader;
 use crate::packet_header::{PacketHeader, PacketKind};
 use crate::packet_id::PacketId;
@@ -30,7 +31,7 @@ struct SendStreamInner {
 
     send_buffer: BTreeMap<PacketId, FixedBuf>,
     send_window_changed_notifier: mpsc::Sender<()>,
-    congestion_window_size: u32,
+    congestion_control: HsCongestionControl,
     /// first packet that was not actually sent over the network. This can be smaller than
     ///  work_in_progress_packet_id in case of congestion
     next_unsent_packet_id: PacketId,
@@ -107,8 +108,8 @@ impl SendStreamInner {
     /// The congestion window may have grown or shrunk, or packets may have been acknowledged or
     ///  buffered - this function sends what can be sent. It assumes that all other state is up to
     ///  date when it is called.
-    async fn send_what_congestion_window_allows(&mut self) {
-        let cwnd = self.low_water_mark() + self.congestion_window_size.safe_cast();
+    async fn do_send_what_congestion_window_allows(&mut self) {
+        let cwnd = self.low_water_mark() + self.congestion_control.cwnd().safe_cast();
 
         while self.next_unsent_packet_id < self.work_in_progress_packet_id
             && self.next_unsent_packet_id < cwnd
@@ -153,7 +154,7 @@ impl SendStreamInner {
 
         self.work_in_progress_packet_id += 1;
 
-        self.send_what_congestion_window_allows().await;
+        self.do_send_what_congestion_window_allows().await;
     }
 }
 
@@ -192,7 +193,7 @@ impl SendStream {
             self_reply_to_addr: reply_to_addr,
             send_buffer: BTreeMap::default(),
             send_window_changed_notifier: send,
-            congestion_window_size: config.send_window_size, // fast start TODO is this a good starting point?
+            congestion_control: HsCongestionControl::new(config.send_window_size),
             next_unsent_packet_id: PacketId::ZERO,
             work_in_progress_packet_id: PacketId::ZERO,
             work_in_progress: None,
@@ -235,7 +236,7 @@ impl SendStream {
 
         //TODO handle / evaluate the client's packet ids
         inner.send_send_sync().await;
-        inner.send_what_congestion_window_allows().await;
+        inner.do_send_what_congestion_window_allows().await;
         inner.on_send_window_changed_maybe();
     }
 
@@ -739,7 +740,7 @@ mod tests {
             peer_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             self_reply_to_addr: None,
             send_buffer: Default::default(),
-            congestion_window_size: 4,
+            congestion_control: HsCongestionControl::new(100),
             next_unsent_packet_id: PacketId::from_raw(wip_packet_id),
             work_in_progress_packet_id: PacketId::from_raw(wip_packet_id),
             work_in_progress: None,
@@ -763,7 +764,7 @@ mod tests {
                 Arc::new(EffectiveSendStreamConfig {
                     max_payload_len: 0,
                     late_send_delay: None,
-                    send_window_size: 0,
+                    send_window_size: 10,
                     max_message_len: 1024*1024,
                 }),
                 3,
@@ -823,7 +824,7 @@ mod tests {
                 self_reply_to_addr: None,
                 send_buffer: Default::default(),
                 send_window_changed_notifier: send,
-                congestion_window_size: 4,
+                congestion_control: HsCongestionControl::new(100),
                 next_unsent_packet_id: PacketId::from_raw(wip_packet_id),
                 work_in_progress_packet_id: PacketId::from_raw(wip_packet_id),
                 work_in_progress: None,
