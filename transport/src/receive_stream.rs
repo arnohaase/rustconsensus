@@ -1,6 +1,6 @@
 use crate::buffers::buffer_pool::SendBufferPool;
 use crate::config::EffectiveReceiveStreamConfig;
-use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
+use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::message_header::MessageHeader;
 use crate::packet_header::{PacketHeader, PacketKind};
@@ -107,22 +107,25 @@ impl ReceiveStreamInner {
         }
     }
 
-    async fn do_send_recv_sync(&self) {
-        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlRecvSync { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
-
-        let mut send_buf = self.buffer_pool.get_from_pool();
-        header.ser(&mut send_buf);
-
-        let msg = ControlMessageRecvSync {
-            receive_buffer_high_water_mark: self.high_water_mark(),
-            receive_buffer_low_water_mark: self.low_water_mark(),
-            receive_buffer_ack_threshold: self.ack_threshold,
-        };
-        trace!("sending RECV_SYNC: {:?}", msg);
-        msg.ser(&mut send_buf);
-
-        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
-        self.buffer_pool.return_to_pool(send_buf);
+    async fn do_send_recv_sync(&mut self) { //TODO merge with do_send_nak
+        //TODO increment missing_packet_tick_counter or not, depending on what triggered this?
+        self.do_send_nak().await
+         
+        // let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlRecvSync { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
+        // 
+        // let mut send_buf = self.buffer_pool.get_from_pool();
+        // header.ser(&mut send_buf);
+        // 
+        // let msg = ControlMessageRecvSync {
+        //     receive_buffer_high_water_mark: self.high_water_mark(),
+        //     receive_buffer_low_water_mark: self.low_water_mark(),
+        //     receive_buffer_ack_threshold: self.ack_threshold,
+        // };
+        // trace!("sending RECV_SYNC: {:?}", msg);
+        // msg.ser(&mut send_buf);
+        // 
+        // self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
+        // self.buffer_pool.return_to_pool(send_buf);
     }
 
     /// Send a NAK for the earliest N missing packets - the assumption is that if more packets are
@@ -148,11 +151,14 @@ impl ReceiveStreamInner {
             return;
         }
 
-        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlNak { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
+        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlRecvSync { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
 
         let mut send_buf = self.buffer_pool.get_from_pool();
         header.ser(&mut send_buf);
-        ControlMessageNak {
+        ControlMessageRecvSync {
+            receive_buffer_high_water_mark: self.high_water_mark(),
+            receive_buffer_low_water_mark: self.low_water_mark(),
+            receive_buffer_ack_threshold: self.ack_threshold,
             packet_id_resend_set: nak_packets,
         }.ser(&mut send_buf);
 
@@ -531,6 +537,8 @@ impl ReceiveStream {
     }
 
     pub async fn on_send_sync_message(&self, message: ControlMessageSendSync) {
+        //TODO send this at intervals, not in response to RECV_SYNC
+
         trace!("handling SEND_RECV message: {:?}", message);
 
         // This was sent in response to a recv_sync message, and no response is required. But

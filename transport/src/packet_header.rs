@@ -18,10 +18,9 @@ bitflags! {
 
         const KIND_SEQUENCE   = 0b0000_0000;
         const KIND_OUT_OF_SEQ = 0b0000_0100;
-        const KIND_NAK        = 0b0000_1100;
         const KIND_RECV_SYNC  = 0b0001_0000;
         const KIND_SEND_SYNC  = 0b0001_0100;
-        const KIND_PING       = 0b0001_1000;
+        const KIND_PING       = 0b0001_1000; 
     }
 }
 
@@ -90,7 +89,6 @@ impl PacketHeader {
             PacketKind::FireAndForget => Flags::KIND_OUT_OF_SEQ,
             PacketKind::ControlRecvSync { .. } => Flags::KIND_RECV_SYNC,
             PacketKind::ControlSendSync { .. } => Flags::KIND_SEND_SYNC,
-            PacketKind::ControlNak { .. } => Flags::KIND_NAK,
             PacketKind::Ping => Flags::KIND_PING,
         };
         buf.put_u8((flags_ip | flags_kind).bits());
@@ -120,7 +118,6 @@ impl PacketHeader {
             PacketKind::FireAndForget => None,
             PacketKind::ControlRecvSync { stream_id, .. } => Some(stream_id),
             PacketKind::ControlSendSync { stream_id, .. } => Some(stream_id),
-            PacketKind::ControlNak { stream_id, .. } => Some(stream_id),
             PacketKind::Ping => None,
         };
         if let Some(stream_id) = stream_id {
@@ -169,7 +166,6 @@ impl PacketHeader {
                 }
             },
             Flags::KIND_OUT_OF_SEQ => PacketKind::FireAndForget,
-            Flags::KIND_NAK => PacketKind::ControlNak { stream_id: buf.try_get_u16()? },
             Flags::KIND_SEND_SYNC => PacketKind::ControlSendSync { stream_id: buf.try_get_u16()? },
             Flags::KIND_RECV_SYNC => PacketKind::ControlRecvSync { stream_id: buf.try_get_u16()? },
             Flags::KIND_PING => PacketKind::Ping,
@@ -196,7 +192,6 @@ pub enum PacketKind {
     FireAndForget,
     ControlRecvSync { stream_id: u16 },
     ControlSendSync { stream_id: u16 },
-    ControlNak { stream_id: u16 },
     Ping,
 }
 impl Debug for PacketKind {
@@ -212,7 +207,6 @@ impl Debug for PacketKind {
             PacketKind::FireAndForget => write!(f, "OOS"),
             PacketKind::ControlRecvSync { stream_id } => write!(f, "RECV_SYNC({})", stream_id),
             PacketKind::ControlSendSync { stream_id } => write!(f, "SEND_SYNC({})", stream_id),
-            PacketKind::ControlNak { stream_id } => write!(f, "NAK({})", stream_id),
             PacketKind::Ping => write!(f, "PING"),
         }
     }
@@ -230,8 +224,8 @@ mod tests {
     #[rstest]
     #[case::v4_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), FireAndForget, 4, Some(9)), "PCKT{V1[1.2.3.4:888]:OOS@4}")]
     #[case::v4_addr_wo_peer_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), FireAndForget, 4, None), "PCKT{V1[1.2.3.4:888]:OOS@4}")]
-    #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlNak { stream_id: 9}, 5, Some(4)), "PCKT{V1[[1111:2222::3333:4444]:888]:NAK(9)@5}")]
-    #[case::v6_addr_wo_peer_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlNak { stream_id: 9}, 5, None), "PCKT{V1[[1111:2222::3333:4444]:888]:NAK(9)@5}")]
+    #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlSendSync { stream_id: 9}, 5, Some(4)), "PCKT{V1[[1111:2222::3333:4444]:888]:SEND_SYNC(9)@5}")]
+    #[case::v6_addr_wo_peer_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlSendSync { stream_id: 9}, 5, None), "PCKT{V1[[1111:2222::3333:4444]:888]:SEND_SYNC(9)@5}")]
     fn test_packet_header_debug(#[case] header: PacketHeader, #[case] expected: &str) {
         assert_eq!(format!("{:?}", header), expected);
     }
@@ -239,8 +233,8 @@ mod tests {
     #[rstest]
     #[case::v4_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), FireAndForget, 4, Some(9)))]
     #[case::v4_addr(PacketHeader::new(Some(SocketAddr::from_str("1.2.3.4:888").unwrap()), FireAndForget, 4, None))]
-    #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlNak { stream_id: 9}, 5, Some(15)))]
-    #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlNak { stream_id: 9}, 5, None))]
+    #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlRecvSync { stream_id: 9}, 5, Some(15)))]
+    #[case::v6_addr(PacketHeader::new(Some(SocketAddr::from_str("[1111:2222::3333:4444]:888").unwrap()), ControlRecvSync { stream_id: 9}, 5, None))]
     #[case::seq_start(PacketHeader::new(None, RegularSequenced { stream_id: 0, first_message_offset: Some(999), packet_sequence_number: PacketId::from_raw(8)}, 6, Some(9999)))]
     #[case::seq_start(PacketHeader::new(None, RegularSequenced { stream_id: 0, first_message_offset: Some(999), packet_sequence_number: PacketId::from_raw(8)}, 6, None))]
     #[case::seq_continued(PacketHeader::new(None, RegularSequenced { stream_id: 4, first_message_offset: None, packet_sequence_number: PacketId::from_raw(6)}, 7, Some(23879289375)))]
@@ -255,10 +249,6 @@ mod tests {
     #[case::send_sync_0(PacketHeader::new(None, ControlSendSync { stream_id: 0 }, 13345346578, None))]
     #[case::send_sync_3(PacketHeader::new(None, ControlSendSync { stream_id: 2 }, 4357686734895, Some(132)))]
     #[case::send_sync_3(PacketHeader::new(None, ControlSendSync { stream_id: 2 }, 4357686734895, None))]
-    #[case::nak_0(PacketHeader::new(None, ControlNak { stream_id: 0 }, 15, Some(4376)))]
-    #[case::nak_0(PacketHeader::new(None, ControlNak { stream_id: 0 }, 15, None))]
-    #[case::nak_5(PacketHeader::new(None, ControlNak { stream_id: 5 }, 16, Some(23432)))]
-    #[case::nak_5(PacketHeader::new(None, ControlNak { stream_id: 5 }, 16, None))]
     #[case::ping(PacketHeader::new(None, Ping, 1234, Some(5678)))]
     #[case::ping(PacketHeader::new(None, Ping, 567890, None))]
     fn test_packet_header_ser(#[case] header: PacketHeader) {
@@ -304,8 +294,6 @@ mod tests {
     #[case::recv_sync_3(ControlRecvSync { stream_id: 3 }, "RECV_SYNC(3)")]
     #[case::send_sync_0(ControlSendSync { stream_id: 0 }, "SEND_SYNC(0)")]
     #[case::send_sync_3(ControlSendSync { stream_id: 2 }, "SEND_SYNC(2)")]
-    #[case::nak_0(ControlNak { stream_id: 0 }, "NAK(0)")]
-    #[case::nak_5(ControlNak { stream_id: 5 }, "NAK(5)")]
     #[case::ping(Ping, "PING")]
     fn test_packet_kind_debug(#[case] kind: PacketKind, #[case] expected: &str) {
         assert_eq!(format!("{:?}", kind), expected);

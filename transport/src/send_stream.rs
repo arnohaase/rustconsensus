@@ -2,7 +2,7 @@ use crate::buffers::atomic_map::AtomicMap;
 use crate::buffers::buffer_pool::SendBufferPool;
 use crate::buffers::fixed_buffer::FixedBuf;
 use crate::config::EffectiveSendStreamConfig;
-use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
+use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::hs_congestion_control::HsCongestionControl;
 use crate::message_header::MessageHeader;
 use crate::packet_header::{PacketHeader, PacketKind};
@@ -215,10 +215,18 @@ impl SendStream {
         let mut inner = self.inner.write().await;
         trace!("received RECV_SYNC message from {:?} for stream {}: {:?}", inner.peer_addr, inner.stream_id, message);
 
+        // resend packets requested by the receiver
+        for packet_id in &message.packet_id_resend_set {
+            if let Some(packet) = inner.send_buffer.get(packet_id) {
+                inner.send_socket.do_send_packet(inner.peer_addr, packet.as_ref()).await;
+            }
+            else {
+                debug!("NAK requested packet that is no longer in the send buffer: {}", packet_id.to_raw());
+            }
+        }
+
         // remove all packets 'up to' the threshold from the send buffer - wrap-around semantics
         //  add some boilerplate
-
-        //TODO !!! merge with NAK, clean up !!!
 
         loop {
             if let Some(&key) = inner.send_buffer.keys().next() {
@@ -234,28 +242,9 @@ impl SendStream {
 
         inner.next_unsent_packet_id = max(inner.next_unsent_packet_id, inner.low_water_mark());
 
-        //TODO handle / evaluate the client's packet ids
-        inner.send_send_sync().await;
+        //TODO inner.send_send_sync().await;
         inner.do_send_what_congestion_window_allows().await;
         inner.on_send_window_changed_maybe();
-    }
-
-    pub async fn on_nak_message(&self, message: ControlMessageNak) {
-        let inner = self.inner.read().await;
-        trace!("received NAK message from {:?} for stream {} - resending packets {:?}", inner.peer_addr, inner.stream_id, message.packet_id_resend_set);
-
-        //TODO packets between NAK'ed packets will never be queried, so we can remove them from the buffer
-        //TODO merge this with RECV_SYNC
-        //TODO ACK all packets before the first NAK
-
-        for packet_id in &message.packet_id_resend_set {
-            if let Some(packet) = inner.send_buffer.get(packet_id) {
-                inner.send_socket.do_send_packet(inner.peer_addr, packet.as_ref()).await;
-            }
-            else {
-                debug!("NAK requested packet that is no longer in the send buffer");
-            }
-        }
     }
 
     pub async fn send_message(&self, required_peer_generation: Option<u64>, mut message: &[u8]) -> anyhow::Result<()> {
@@ -435,20 +424,23 @@ mod tests {
     #[case::all_out_of_range(vec![5,6,7], vec![3,4], vec![])]
     #[case::some_above_range(vec![5,6,7], vec![5,8], vec![5])]
     #[case::all_above_range(vec![5,6,7], vec![8,9], vec![])]
-    fn test_on_nak(#[case] send_buffer_ids: Vec<u8>, #[case] packet_id_resend_set: Vec<u64>, #[case] expected: Vec<u8>) {
+    fn test_on_nak(#[case] send_buffer_ids: Vec<u8>, #[case] packet_id_resend_set: Vec<u64>, #[case] expected_resend: Vec<u8>) {
         let packet_id_resend_set = packet_id_resend_set
             .into_iter()
             .map(PacketId::from_raw)
             .collect();
 
-        let msg = ControlMessageNak {
-            packet_id_resend_set
+        let msg = ControlMessageRecvSync {
+            receive_buffer_high_water_mark: PacketId::from_raw(100),
+            receive_buffer_low_water_mark: PacketId::from_raw(0),
+            receive_buffer_ack_threshold: PacketId::from_raw(0),
+            packet_id_resend_set,
         };
 
         let mut send_socket = MockSendSocket::new();
         send_socket.expect_local_addr()
             .return_const(SocketAddr::from(([1,2,3,4], 8)));
-        for packet_id in expected {
+        for packet_id in expected_resend {
             send_socket.expect_do_send_packet()
                 .with(
                     eq(SocketAddr::from(([1,2,3,4], 9))),
@@ -484,7 +476,7 @@ mod tests {
                     .send_buffer.insert(PacketId::from_raw(packet_id.safe_cast()), FixedBuf::from_slice(vec![packet_id].as_slice()));
             }
 
-            send_stream.on_nak_message(msg).await;
+            send_stream.on_recv_sync_message(msg).await;
         });
     }
 
@@ -512,7 +504,7 @@ mod tests {
     #[case::ack_truncate_all_too_high_2(true, vec![4,5,6], 7, 4, 888, vec![], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
     #[case::ignore_high_low_1(true, vec![4,5,6], 3, 9, 5, vec![5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
     #[case::ignore_high_low_2(true, vec![4,5,6], 5, 5, 5, vec![5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
-    fn test_on_recv_sync(
+    fn test_on_recv_sync( //TODO merge with on_nak
         #[case] with_peer_generation: bool,
         #[case] initial_send_buffer_ids: Vec<u8>,
         #[case] msg_high_water_mark: u64,
@@ -525,6 +517,7 @@ mod tests {
             receive_buffer_high_water_mark: PacketId::from_raw(msg_high_water_mark),
             receive_buffer_low_water_mark: PacketId::from_raw(msg_low_water_mark),
             receive_buffer_ack_threshold: PacketId::from_raw(msg_ack_threshold),
+            packet_id_resend_set: vec![],
         };
 
         let mut send_socket = MockSendSocket::new();

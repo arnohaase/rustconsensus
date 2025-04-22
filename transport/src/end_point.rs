@@ -1,7 +1,7 @@
 use crate::buffers::atomic_map::AtomicMap;
 use crate::buffers::buffer_pool::SendBufferPool;
 use crate::config::RudpConfig;
-use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
+use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::packet_header::{PacketHeader, PacketKind};
 use crate::receive_stream::ReceiveStream;
@@ -212,7 +212,6 @@ impl EndPoint {
                 PacketKind::FireAndForget => self.message_dispatcher.on_message(peer_addr, packet_header.sender_generation, None, parse_buf.to_vec()).instrument(Span::current()).await,
                 PacketKind::ControlRecvSync { stream_id } => Self::handle_recv_sync(parse_buf, self.get_send_stream(peer_addr, stream_id).await).instrument(Span::current()).await,
                 PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(&mut receive_streams, packet_header.sender_generation, peer_addr, stream_id)).instrument(Span::current()).await,
-                PacketKind::ControlNak { stream_id } => Self::handle_nak(parse_buf, self.get_send_stream(peer_addr, stream_id).await).instrument(Span::current()).await,
                 PacketKind::Ping => {} // nothing to be done, just syncing generations
             }
         }
@@ -351,17 +350,5 @@ impl EndPoint {
         };
 
         receive_stream.on_send_sync_message(sync_message).await
-    }
-
-    async fn handle_nak(mut parse_buf: &[u8], send_stream: Arc<SendStream>) {
-        let nak_message = match ControlMessageNak::deser(&mut parse_buf) {
-            Ok(msg) => msg,
-            Err(_) => {
-                warn!("received unparseable NAK message from {:?}", send_stream.peer_addr().await);
-                return;
-            }
-        };
-
-        send_stream.on_nak_message(nak_message).await;
     }
 }
