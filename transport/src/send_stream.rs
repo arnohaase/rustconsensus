@@ -31,7 +31,10 @@ struct SendStreamInner {
 
     send_buffer: BTreeMap<PacketId, FixedBuf>,
     send_window_changed_notifier: mpsc::Sender<()>,
+
     congestion_control: HsCongestionControl,
+    fed_to_congestion_control_marker: PacketId,
+
     /// first packet that was not actually sent over the network. This can be smaller than
     ///  work_in_progress_packet_id in case of congestion
     next_unsent_packet_id: PacketId,
@@ -76,9 +79,6 @@ impl SendStreamInner {
     }
 
     async fn send_send_sync(&self) {
-        //TODO !!! congestion control: send unsent marker !!!
-
-
         let header = PacketHeader::new(
             self.self_reply_to_addr,
             PacketKind::ControlSendSync { stream_id: self.stream_id },
@@ -194,6 +194,7 @@ impl SendStream {
             send_buffer: BTreeMap::default(),
             send_window_changed_notifier: send,
             congestion_control: HsCongestionControl::new(config.send_window_size),
+            fed_to_congestion_control_marker: PacketId::ZERO,
             next_unsent_packet_id: PacketId::ZERO,
             work_in_progress_packet_id: PacketId::ZERO,
             work_in_progress: None,
@@ -215,6 +216,19 @@ impl SendStream {
         let mut inner = self.inner.write().await;
         trace!("received RECV_SYNC message from {:?} for stream {}: {:?}", inner.peer_addr, inner.stream_id, message);
 
+        // update congestion control: we start by ACK'ing everything up to the ACK threshold the receiver sent
+        let num_packets_in_flight = (inner.work_in_progress_packet_id.to_raw() - inner.low_water_mark().to_raw()).prechecked_cast();
+        for _ in inner.fed_to_congestion_control_marker.to_raw()..message.receive_buffer_ack_threshold.to_raw() {
+            inner.congestion_control.on_ack(num_packets_in_flight)
+        }
+        inner.fed_to_congestion_control_marker = max(inner.fed_to_congestion_control_marker, message.receive_buffer_ack_threshold);
+        //TODO test that this increase of the congestion window works
+
+        // then we NAK all packets for which a resend was requested
+        for _ in 0..message.packet_id_resend_set.len() {
+            inner.congestion_control.on_nak();
+        }
+
         // resend packets requested by the receiver
         for packet_id in &message.packet_id_resend_set {
             if let Some(packet) = inner.send_buffer.get(packet_id) {
@@ -225,9 +239,7 @@ impl SendStream {
             }
         }
 
-        // remove all packets 'up to' the threshold from the send buffer - wrap-around semantics
-        //  add some boilerplate
-
+        // remove all packets 'up to' the threshold from the send buffer
         loop {
             if let Some(&key) = inner.send_buffer.keys().next() {
                 if key < message.receive_buffer_ack_threshold {
@@ -242,7 +254,10 @@ impl SendStream {
 
         inner.next_unsent_packet_id = max(inner.next_unsent_packet_id, inner.low_water_mark());
 
-        //TODO inner.send_send_sync().await;
+        if message.receive_buffer_ack_threshold < inner.low_water_mark() {
+            inner.send_send_sync().await; //TODO unit test this
+        }
+
         inner.do_send_what_congestion_window_allows().await;
         inner.on_send_window_changed_maybe();
     }
@@ -414,72 +429,6 @@ mod tests {
     use std::time::Duration;
     use tokio::runtime::Builder;
 
-    #[rstest]
-    #[case::empty(vec![1,2,3], vec![], vec![])]
-    #[case::all_1(vec![5], vec![5], vec![5])]
-    #[case::all_2(vec![5,6], vec![5,6], vec![5,6])]
-    #[case::select_1(vec![5,6,7], vec![6], vec![6])]
-    #[case::select_2(vec![5,6,7], vec![5,7], vec![5,7])]
-    #[case::some_out_of_range(vec![5,6,7], vec![4,5], vec![5])] //TODO should this trigger a 'status' response to re-sync window boundaries?
-    #[case::all_out_of_range(vec![5,6,7], vec![3,4], vec![])]
-    #[case::some_above_range(vec![5,6,7], vec![5,8], vec![5])]
-    #[case::all_above_range(vec![5,6,7], vec![8,9], vec![])]
-    fn test_on_nak(#[case] send_buffer_ids: Vec<u8>, #[case] packet_id_resend_set: Vec<u64>, #[case] expected_resend: Vec<u8>) {
-        let packet_id_resend_set = packet_id_resend_set
-            .into_iter()
-            .map(PacketId::from_raw)
-            .collect();
-
-        let msg = ControlMessageRecvSync {
-            receive_buffer_high_water_mark: PacketId::from_raw(100),
-            receive_buffer_low_water_mark: PacketId::from_raw(0),
-            receive_buffer_ack_threshold: PacketId::from_raw(0),
-            packet_id_resend_set,
-        };
-
-        let mut send_socket = MockSendSocket::new();
-        send_socket.expect_local_addr()
-            .return_const(SocketAddr::from(([1,2,3,4], 8)));
-        for packet_id in expected_resend {
-            send_socket.expect_do_send_packet()
-                .with(
-                    eq(SocketAddr::from(([1,2,3,4], 9))),
-                    eq(FixedBuf::from_slice(vec![packet_id].as_slice())),
-                )
-                .return_const(())
-            ;
-        }
-
-        let send_stream = SendStream::new(
-            Arc::new(EffectiveSendStreamConfig {
-                max_payload_len: 30,
-                late_send_delay: None,
-                send_window_size: 32,
-                max_message_len: 1024*1024,
-            }),
-            3,
-            Default::default(),
-            4,
-            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}))),
-            SocketAddr::from(([1,2,3,4], 9)),
-            None,
-            Arc::new(SendBufferPool::new(30, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
-        );
-
-        let rt = Builder::new_current_thread()
-            .enable_all()
-            .start_paused(true)
-            .build().unwrap();
-        rt.block_on(async move {
-            for packet_id in send_buffer_ids {
-                send_stream.inner.write().await
-                    .send_buffer.insert(PacketId::from_raw(packet_id.safe_cast()), FixedBuf::from_slice(vec![packet_id].as_slice()));
-            }
-
-            send_stream.on_recv_sync_message(msg).await;
-        });
-    }
-
     fn create_peer_generations(with_peer_data: bool) -> Arc<AtomicMap<SocketAddr, u64>> {
         if !with_peer_data {
             return Default::default();
@@ -490,73 +439,90 @@ mod tests {
         Arc::new(map)
     }
 
-    //TODO unit test next_unsent
     #[rstest]
-    #[case::empty(true, vec![], 3, 1, 2, vec![], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
-    #[case::empty(false, vec![], 3, 1, 2, vec![], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,0, 0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
-    #[case::filled(true, vec![4,5,6], 7, 4, 4, vec![4,5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
-    #[case::filled(false, vec![4,5,6], 7, 4, 4, vec![4,5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,0, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
-    #[case::filled_too_low_1(true, vec![4,5,6], 7, 4, 3, vec![4,5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
-    #[case::filled_too_low_2(true, vec![4,5,6], 7, 4, 1, vec![4,5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4])]
-    #[case::ack_truncate(true, vec![4,5,6], 7, 4, 5, vec![5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
-    #[case::ack_truncate_all(true, vec![4,5,6], 7, 4, 7, vec![], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
-    #[case::ack_truncate_all_too_high_1(true, vec![4,5,6], 7, 4, 8, vec![], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
-    #[case::ack_truncate_all_too_high_2(true, vec![4,5,6], 7, 4, 888, vec![], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7])]
-    #[case::ignore_high_low_1(true, vec![4,5,6], 3, 9, 5, vec![5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
-    #[case::ignore_high_low_2(true, vec![4,5,6], 5, 5, 5, vec![5,6], vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5])]
-    fn test_on_recv_sync( //TODO merge with on_nak
+    #[case::thresholds_empty(true, vec![], 3, 1, 2, 3, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0]])]
+    #[case::thresholds_empty(false, vec![], 3, 1, 2, 3, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,0, 0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0]])]
+    #[case::thresholds_filled(true, vec![4,5,6], 7, 7, 4, 4, vec![], vec![4,5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4]])]
+    #[case::thresholds_filled(false, vec![4,5,6], 7, 7, 4, 4, vec![], vec![4,5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,0, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4]])]
+    #[case::thresholds_filled_too_low_1(true, vec![4,5,6], 7, 7, 4, 3, vec![], vec![4,5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4]])]
+    #[case::thresholds_filled_too_low_2(true, vec![4,5,6], 7, 7, 4, 1, vec![], vec![4,5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4]])]
+    #[case::thresholds_ack_truncate(true, vec![4,5,6], 7, 7, 4, 5, vec![], vec![5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5]])]
+    #[case::thresholds_ack_truncate_all(true, vec![4,5,6], 7, 7, 4, 7, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7]])]
+    #[case::thresholds_ack_truncate_all_too_high_1(true, vec![4,5,6], 7, 7, 4, 8, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7]])]
+    #[case::thresholds_ack_truncate_all_too_high_2(true, vec![4,5,6], 7, 7, 4, 888, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7]])]
+    #[case::thresholds_ignore_high_low_1(true, vec![4,5,6], 7, 3, 9, 5, vec![], vec![5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5]])]
+    #[case::thresholds_ignore_high_low_2(true, vec![4,5,6], 7, 5, 5, 5, vec![], vec![5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5]])]
+
+    #[case::nak_empty(true, vec![1,2,3], 4, 4, 1, 1, vec![], vec![1,2,3], vec![])]
+    #[case::nak_all_1(true, vec![5], 6, 6, 5, 5, vec![5], vec![5], vec![vec![5]])]
+    #[case::nak_all_2(true, vec![5,6], 7, 7, 5, 5, vec![5,6], vec![5,6], vec![vec![5], vec![6]])]
+    #[case::nak_select_1(true, vec![5,6,7], 8, 8, 5, 5, vec![6], vec![5,6,7], vec![vec![6]])]
+    #[case::nak_select_2(true, vec![5,6,7], 8, 8, 5, 5, vec![5,7], vec![5,6,7], vec![vec![5],vec![7]])]
+    #[case::nak_some_out_of_range(true, vec![5,6,7], 8, 8, 5, 5, vec![4,5], vec![5,6,7], vec![vec![5]])]
+    #[case::nak_all_out_of_range(true, vec![5,6,7], 8, 8, 5, 5, vec![3,4], vec![5,6,7], vec![])]
+    #[case::nak_some_above_range(true, vec![5,6,7], 8, 8, 5, 5, vec![5,8], vec![5,6,7], vec![vec![5]])]
+    #[case::nak_all_above_range(true, vec![5,6,7], 8, 8, 5, 5, vec![8,9], vec![5,6,7], vec![])]
+
+    //TODO unit test next_unsent
+    //TODO unit test combination of threshold and NAK
+
+    fn test_on_recv_sync(
         #[case] with_peer_generation: bool,
         #[case] initial_send_buffer_ids: Vec<u8>,
+        #[case] next_unsent_packet_id: u64,
         #[case] msg_high_water_mark: u64,
         #[case] msg_low_water_mark: u64,
         #[case] msg_ack_threshold: u64,
+        #[case] msg_nak_ids: Vec<u64>,
         #[case] expected_send_buffer_ids: Vec<u64>,
-        #[case] expected_response: Vec<u8>
+        #[case] expected_messages: Vec<Vec<u8>>,
     ) {
         let msg = ControlMessageRecvSync {
             receive_buffer_high_water_mark: PacketId::from_raw(msg_high_water_mark),
             receive_buffer_low_water_mark: PacketId::from_raw(msg_low_water_mark),
             receive_buffer_ack_threshold: PacketId::from_raw(msg_ack_threshold),
-            packet_id_resend_set: vec![],
+            packet_id_resend_set: msg_nak_ids.into_iter().map(PacketId::from_raw).collect(),
         };
-
-        let mut send_socket = MockSendSocket::new();
-        send_socket.expect_local_addr()
-            .return_const(SocketAddr::from(([1,2,3,4], 8)));
-        send_socket.expect_do_send_packet()
-            .with(
-                eq(SocketAddr::from(([1,2,3,4], 9))),
-                eq(FixedBuf::from_slice(expected_response.as_slice())),
-            )
-            .return_const(())
-        ;
-
-        let send_stream = SendStream::new(
-            Arc::new(EffectiveSendStreamConfig {
-                max_payload_len: 30,
-                late_send_delay: None,
-                send_window_size: 4,
-                max_message_len: 1024*1024,
-            }),
-            4,
-            create_peer_generations(with_peer_generation),
-            7,
-            Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}))),
-            SocketAddr::from(([1,2,3,4], 9)),
-            None,
-            Arc::new(SendBufferPool::new(40, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
-        );
-
-        let expected_send_buffer_ids = expected_send_buffer_ids
-            .into_iter()
-            .map(PacketId::from_raw)
-            .collect::<Vec<_>>();
 
         let rt = Builder::new_current_thread()
             .enable_all()
             .start_paused(true)
             .build().unwrap();
         rt.block_on(async move {
+            let mut send_socket = MockSendSocket::new();
+            send_socket.expect_local_addr()
+                .return_const(SocketAddr::from(([1,2,3,4], 8)));
+            for msg in expected_messages {
+                send_socket.expect_do_send_packet()
+                    .with(
+                        eq(SocketAddr::from(([1,2,3,4], 9))),
+                        eq(FixedBuf::from_slice(40, msg.as_slice())),
+                    )
+                    .return_const(())
+                ;
+            }
+
+            let send_stream = SendStream::new(
+                Arc::new(EffectiveSendStreamConfig {
+                    max_payload_len: 30,
+                    late_send_delay: None,
+                    send_window_size: 4,
+                    max_message_len: 1024*1024,
+                }),
+                4,
+                create_peer_generations(with_peer_generation),
+                7,
+                Arc::new(SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}))),
+                SocketAddr::from(([1,2,3,4], 9)),
+                None,
+                Arc::new(SendBufferPool::new(40, 10, Arc::new(crate::buffers::encryption::NoEncryption {}))),
+            );
+
+            let expected_send_buffer_ids = expected_send_buffer_ids
+                .into_iter()
+                .map(PacketId::from_raw)
+                .collect::<Vec<_>>();
+
             {
                 let mut inner = send_stream.inner.write().await;
 
@@ -564,7 +530,7 @@ mod tests {
                     let mut buf = FixedBuf::new(40);
                     buf.put_u8(packet_id);
 
-                    let buf2 = FixedBuf::from_slice(vec![packet_id].as_slice());
+                    let buf2 = FixedBuf::from_slice(40, vec![packet_id].as_slice());
 
                     assert_eq!(buf, buf2);
 
@@ -572,14 +538,15 @@ mod tests {
                     inner.work_in_progress_packet_id = PacketId::from_raw(packet_id.safe_cast() + 1);
                 }
 
-                inner.next_unsent_packet_id = inner.work_in_progress_packet_id; //TODO unit test congestion window
+                inner.next_unsent_packet_id = PacketId::from_raw(next_unsent_packet_id); //TODO unit test congestion window
             }
 
             send_stream.on_recv_sync_message(msg).await;
 
-            assert_eq!(send_stream.inner.read().await.send_buffer.keys().cloned().collect::<Vec<_>>(), expected_send_buffer_ids)
+            assert_eq!(send_stream.inner.read().await.send_buffer.keys().cloned().collect::<Vec<_>>(), expected_send_buffer_ids);
         });
     }
+
 
     #[rstest]
     #[case::single_late_send_nowait    (true,  Some(5), 42, 0, 0, vec![vec![1,2,3]], vec![], 0, Some(vec![0,2, 0,0,0,0,0,5, 0,0,0,0,0,4, 0,4, 0,0, 0,0,0,0,0,0,0,0, 0,0,0,3,1,2,3]))]
@@ -734,6 +701,7 @@ mod tests {
             self_reply_to_addr: None,
             send_buffer: Default::default(),
             congestion_control: HsCongestionControl::new(100),
+            fed_to_congestion_control_marker: PacketId::ZERO,
             next_unsent_packet_id: PacketId::from_raw(wip_packet_id),
             work_in_progress_packet_id: PacketId::from_raw(wip_packet_id),
             work_in_progress: None,
@@ -818,6 +786,7 @@ mod tests {
                 send_buffer: Default::default(),
                 send_window_changed_notifier: send,
                 congestion_control: HsCongestionControl::new(100),
+                fed_to_congestion_control_marker: PacketId::ZERO,
                 next_unsent_packet_id: PacketId::from_raw(wip_packet_id),
                 work_in_progress_packet_id: PacketId::from_raw(wip_packet_id),
                 work_in_progress: None,

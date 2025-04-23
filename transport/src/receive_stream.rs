@@ -107,31 +107,10 @@ impl ReceiveStreamInner {
         }
     }
 
-    async fn do_send_recv_sync(&mut self) { //TODO merge with do_send_nak
-        //TODO increment missing_packet_tick_counter or not, depending on what triggered this?
-        self.do_send_nak().await
-         
-        // let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlRecvSync { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
-        // 
-        // let mut send_buf = self.buffer_pool.get_from_pool();
-        // header.ser(&mut send_buf);
-        // 
-        // let msg = ControlMessageRecvSync {
-        //     receive_buffer_high_water_mark: self.high_water_mark(),
-        //     receive_buffer_low_water_mark: self.low_water_mark(),
-        //     receive_buffer_ack_threshold: self.ack_threshold,
-        // };
-        // trace!("sending RECV_SYNC: {:?}", msg);
-        // msg.ser(&mut send_buf);
-        // 
-        // self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
-        // self.buffer_pool.return_to_pool(send_buf);
-    }
-
     /// Send a NAK for the earliest N missing packets - the assumption is that if more packets are
     ///  missing, something is seriously wrong, and it is likely better to ask for the second batch
     ///  only when the first is re-delivered
-    async fn do_send_nak(&mut self) {
+    async fn do_send_recv_sync(&mut self) {
         self.missing_packet_tick_counter += 1;
 
         let mut nak_packets = Vec::new();
@@ -146,12 +125,9 @@ impl ReceiveStreamInner {
             }
         }
 
-        if nak_packets.is_empty() {
-            // trace!("no missing packets to NAK");
-            return;
-        }
-
-        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlRecvSync { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
+        let header = PacketHeader::new(
+            self.self_reply_to_addr, 
+            PacketKind::ControlRecvSync { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
 
         let mut send_buf = self.buffer_pool.get_from_pool();
         header.ser(&mut send_buf);
@@ -537,8 +513,6 @@ impl ReceiveStream {
     }
 
     pub async fn on_send_sync_message(&self, message: ControlMessageSendSync) {
-        //TODO send this at intervals, not in response to RECV_SYNC
-
         trace!("handling SEND_RECV message: {:?}", message);
 
         // This was sent in response to a recv_sync message, and no response is required. But
@@ -622,20 +596,10 @@ impl ReceiveStream {
     async fn do_loop(config: Arc<EffectiveReceiveStreamConfig>, inner: Arc<RwLock<ReceiveStreamInner>>) {
         //TODO test this
 
-        let mut nak_interval = interval(config.nak_interval);
         let mut sync_interval = interval(config.sync_interval);
 
         loop {
             select! {
-                _ = nak_interval.tick() => {
-                    //TODO sending NAKs at fixed intervals rather than every N received packets avoids thrashing, but
-                    // it requires big send windows to avoid permanent message loss if a bulk of packets get
-                    // lost rather than the sporadic more or less isolated packet - which may or may not be
-                    // a good trade-off.
-                    // --> this could do with some thinking and failure scenario modeling
-                    inner.write().await
-                       .do_send_nak().await;
-                }
                 _ = sync_interval.tick() => {
                     inner.write().await
                         .do_send_recv_sync().await;
@@ -689,7 +653,6 @@ mod tests {
 
             let receive_stream = ReceiveStream::new(
                 Arc::new(EffectiveReceiveStreamConfig {
-                    nak_interval: Duration::from_millis(100),
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 32,
                     max_num_naks_per_packet: 10,
@@ -770,7 +733,6 @@ mod tests {
 
             let receive_stream = ReceiveStream::new(
                 Arc::new(EffectiveReceiveStreamConfig {
-                    nak_interval: Duration::from_millis(100),
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 32,
                     max_num_naks_per_packet: 2,
@@ -792,8 +754,8 @@ mod tests {
             }
             inner.missing_packet_tick_counter = 2;
 
-            inner.do_send_nak().await;
-            inner.do_send_nak().await; // second call is with increased tick
+            inner.do_send_recv_sync().await;
+            inner.do_send_recv_sync().await; // second call is with increased tick
         });
     }
 
@@ -912,7 +874,6 @@ mod tests {
 
             let receive_stream = ReceiveStream::new(
                 Arc::new(EffectiveReceiveStreamConfig {
-                    nak_interval: Duration::from_millis(100),
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 4,
                     max_num_naks_per_packet: 10,
@@ -995,7 +956,6 @@ mod tests {
 
             let receive_stream = ReceiveStream::new(
                 Arc::new(EffectiveReceiveStreamConfig {
-                    nak_interval: Duration::from_millis(100),
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 4,
                     max_num_naks_per_packet: 10,
@@ -1060,7 +1020,6 @@ mod tests {
 
         let mut inner = ReceiveStreamInner::new(
             Arc::new(EffectiveReceiveStreamConfig {
-                nak_interval: Duration::from_millis(100),
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 32,
                 max_num_naks_per_packet: 2,
@@ -1100,7 +1059,6 @@ mod tests {
 
         let mut inner = ReceiveStreamInner::new(
             Arc::new(EffectiveReceiveStreamConfig {
-                nak_interval: Duration::from_millis(100),
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 32,
                 max_num_naks_per_packet: 2,
@@ -1216,7 +1174,6 @@ mod tests {
 
         let mut inner = ReceiveStreamInner::new(
             Arc::new(EffectiveReceiveStreamConfig {
-                nak_interval: Duration::from_millis(100),
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 4,
                 max_num_naks_per_packet: 2,

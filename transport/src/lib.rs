@@ -1,3 +1,7 @@
+//TODO send SEND_SYNC periodically, if the send buffer is non-empty, if it changed, ...
+//TODO clean up NAK / RECV_SYNC sending
+//TODO merge / clean up unit tests for NAK / RECV_SYNC
+
 //TODO remove in-the-middle acknowledged packets
 
 //! This transport protocol is designed as a compromise between TCP and UDP, providing some
