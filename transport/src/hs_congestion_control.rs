@@ -119,6 +119,13 @@ impl HsCongestionControl {
         }
     }
 
+    #[cfg(test)]
+    pub fn set_internals(&mut self, ai: usize, cwnd: u32, cwnd_cnt: u32) {
+        self.ai = ai;
+        self.cwnd = cwnd;
+        self.cwnd_cnt = cwnd_cnt;
+    }
+    
     pub fn cwnd(&self) -> u32 {
         self.cwnd
     }

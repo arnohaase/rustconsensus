@@ -222,7 +222,6 @@ impl SendStream {
             inner.congestion_control.on_ack(num_packets_in_flight)
         }
         inner.fed_to_congestion_control_marker = max(inner.fed_to_congestion_control_marker, message.receive_buffer_ack_threshold);
-        //TODO test that this increase of the congestion window works
 
         // then we NAK all packets for which a resend was requested
         for _ in 0..message.packet_id_resend_set.len() {
@@ -255,7 +254,7 @@ impl SendStream {
         inner.next_unsent_packet_id = max(inner.next_unsent_packet_id, inner.low_water_mark());
 
         if message.receive_buffer_ack_threshold < inner.low_water_mark() {
-            inner.send_send_sync().await; //TODO unit test this
+            inner.send_send_sync().await;
         }
 
         inner.do_send_what_congestion_window_allows().await;
@@ -440,34 +439,42 @@ mod tests {
     }
 
     #[rstest]
-    #[case::thresholds_empty(true, vec![], 3, 1, 2, 3, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0]])]
-    #[case::thresholds_empty(false, vec![], 3, 1, 2, 3, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,0, 0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0]])]
-    #[case::thresholds_filled(true, vec![4,5,6], 7, 7, 4, 4, vec![], vec![4,5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4]])]
-    #[case::thresholds_filled(false, vec![4,5,6], 7, 7, 4, 4, vec![], vec![4,5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,0, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4]])]
-    #[case::thresholds_filled_too_low_1(true, vec![4,5,6], 7, 7, 4, 3, vec![], vec![4,5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4]])]
-    #[case::thresholds_filled_too_low_2(true, vec![4,5,6], 7, 7, 4, 1, vec![], vec![4,5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4]])]
-    #[case::thresholds_ack_truncate(true, vec![4,5,6], 7, 7, 4, 5, vec![], vec![5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5]])]
-    #[case::thresholds_ack_truncate_all(true, vec![4,5,6], 7, 7, 4, 7, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7]])]
-    #[case::thresholds_ack_truncate_all_too_high_1(true, vec![4,5,6], 7, 7, 4, 8, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7]])]
-    #[case::thresholds_ack_truncate_all_too_high_2(true, vec![4,5,6], 7, 7, 4, 888, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7]])]
-    #[case::thresholds_ignore_high_low_1(true, vec![4,5,6], 7, 3, 9, 5, vec![], vec![5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5]])]
-    #[case::thresholds_ignore_high_low_2(true, vec![4,5,6], 7, 5, 5, 5, vec![], vec![5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5]])]
+    #[case::thresholds_empty(true, 4, 3, 4, 3, vec![], 3, 3, 1, 2, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0]])]
+    #[case::thresholds_empty(false, 4, 3, 4, 3, vec![], 3, 3, 1, 2, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,0, 0,7, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0]])]
+    #[case::thresholds_filled(true, 4, 7, 4, 7, vec![4,5,6], 7, 7, 4, 4, vec![], vec![4,5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4]])]
+    #[case::thresholds_filled(false, 4, 7, 4, 7, vec![4,5,6], 7, 7, 4, 4, vec![], vec![4,5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,0, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4]])]
+    #[case::thresholds_filled_too_low_1(true, 4, 7, 4, 7, vec![4,5,6], 7, 7, 4, 3, vec![], vec![4,5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4]])]
+    #[case::thresholds_filled_too_low_2(true, 4, 7, 4, 7, vec![4,5,6], 7, 7, 4, 1, vec![], vec![4,5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,4]])]
+    #[case::thresholds_ack_truncate(true, 4, 7, 4, 7, vec![4,5,6], 7, 7, 4, 5, vec![], vec![5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5]])]
+    #[case::thresholds_ack_truncate_all(true, 4, 7, 4, 7, vec![4,5,6], 7, 7, 4, 7, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7]])]
+    #[case::thresholds_ack_truncate_all_too_high_1(true, 4, 7, 4, 8, vec![4,5,6], 7, 7, 4, 8, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7]])]
+    #[case::thresholds_ack_truncate_all_too_high_2(true, 4, 7, 4, 888, vec![4,5,6], 7, 7, 4, 888, vec![], vec![], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,7]])]
+    #[case::thresholds_ignore_high_low_1(true, 4, 5, 4, 5, vec![4,5,6], 7, 3, 9, 5, vec![], vec![5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5]])]
+    #[case::thresholds_ignore_high_low_2(true, 4, 5, 4, 5, vec![4,5,6], 7, 5, 5, 5, vec![], vec![5,6], vec![vec![0,22, 0,0,0,0,0,4, 0,0,0,0,0,4, 0,7, 0,0,0,0,0,0,0,7, 0,0,0,0,0,0,0,5]])]
 
-    #[case::nak_empty(true, vec![1,2,3], 4, 4, 1, 1, vec![], vec![1,2,3], vec![])]
-    #[case::nak_all_1(true, vec![5], 6, 6, 5, 5, vec![5], vec![5], vec![vec![5]])]
-    #[case::nak_all_2(true, vec![5,6], 7, 7, 5, 5, vec![5,6], vec![5,6], vec![vec![5], vec![6]])]
-    #[case::nak_select_1(true, vec![5,6,7], 8, 8, 5, 5, vec![6], vec![5,6,7], vec![vec![6]])]
-    #[case::nak_select_2(true, vec![5,6,7], 8, 8, 5, 5, vec![5,7], vec![5,6,7], vec![vec![5],vec![7]])]
-    #[case::nak_some_out_of_range(true, vec![5,6,7], 8, 8, 5, 5, vec![4,5], vec![5,6,7], vec![vec![5]])]
-    #[case::nak_all_out_of_range(true, vec![5,6,7], 8, 8, 5, 5, vec![3,4], vec![5,6,7], vec![])]
-    #[case::nak_some_above_range(true, vec![5,6,7], 8, 8, 5, 5, vec![5,8], vec![5,6,7], vec![vec![5]])]
-    #[case::nak_all_above_range(true, vec![5,6,7], 8, 8, 5, 5, vec![8,9], vec![5,6,7], vec![])]
+    #[case::nak_empty(true, 4, 4, 4, 4, vec![1,2,3], 4, 4, 1, 1, vec![], vec![1,2,3], vec![])]
+    #[case::nak_all_1(true, 4, 5, 2, 5, vec![5], 6, 6, 5, 5, vec![5], vec![5], vec![vec![5]])]
+    #[case::nak_all_2(true, 4, 5, 2, 5, vec![5,6], 7, 7, 5, 5, vec![5,6], vec![5,6], vec![vec![5], vec![6]])]
+    #[case::nak_select_1(true, 4, 6, 2, 6, vec![5,6,7], 8, 8, 5, 5, vec![6], vec![5,6,7], vec![vec![6]])]
+    #[case::nak_select_2(true, 4, 5, 2, 5, vec![5,6,7], 8, 8, 5, 5, vec![5,7], vec![5,6,7], vec![vec![5],vec![7]])]
+    #[case::nak_some_out_of_range(true, 4, 4, 2, 5, vec![5,6,7], 8, 8, 5, 5, vec![4,5], vec![5,6,7], vec![vec![5]])]
+    #[case::nak_all_out_of_range(true, 4, 3, 2, 5, vec![5,6,7], 8, 8, 5, 5, vec![3,4], vec![5,6,7], vec![])]
+    #[case::nak_some_above_range(true, 4, 5, 2, 5, vec![5,6,7], 8, 8, 5, 5, vec![5,8], vec![5,6,7], vec![vec![5]])]
+    #[case::nak_all_above_range(true, 4, 8, 2, 8, vec![5,6,7], 8, 8, 5, 5, vec![8,9], vec![5,6,7], vec![])]
 
-    //TODO unit test next_unsent
-    //TODO unit test combination of threshold and NAK
-
+    #[case::send_unsent(true, 3, 11, 3, 11, vec![8,9,10,11], 11, 10, 7, 8, vec![], vec![8,9,10,11], vec![vec![11]])]
+    #[case::send_unsent(true, 2, 10, 2, 10, vec![8,9,10,11], 10, 10, 7, 8, vec![], vec![8,9,10,11], vec![vec![10]])]
+    #[case::send_unsent_cwnd_increase(true, 2, 8, 3, 9, vec![8,9,10,11], 10, 10, 7, 9, vec![], vec![9,10,11], vec![vec![10], vec![11]])]
+    
+    #[case::cwnd_nak_already_fed(true, 4, 11, 2, 11, vec![8,9,10,11], 12, 10, 7, 8, vec![10], vec![8,9,10,11], vec![vec![10]])]
+    #[case::cwnd_two_naks(true, 20, 11, 5, 11, vec![8,9,10,11], 12, 10, 7, 8, vec![9,10], vec![8,9,10,11], vec![vec![9], vec![10]])]
+    #[case::cwnd_not_limited(true, 5, 11, 5, 12, vec![10,11], 12, 12, 7, 12, vec![], vec![], vec![])] //NB: slow start -> half utilized would be enough
     fn test_on_recv_sync(
         #[case] with_peer_generation: bool,
+        #[case] initial_cwnd: u32,
+        #[case] initial_fed_to_congestion_control_marker: u64,
+        #[case] expected_cwnd: u32,
+        #[case] expected_fed_to_congestion_control_marker: u64,
         #[case] initial_send_buffer_ids: Vec<u8>,
         #[case] next_unsent_packet_id: u64,
         #[case] msg_high_water_mark: u64,
@@ -538,12 +545,17 @@ mod tests {
                     inner.work_in_progress_packet_id = PacketId::from_raw(packet_id.safe_cast() + 1);
                 }
 
-                inner.next_unsent_packet_id = PacketId::from_raw(next_unsent_packet_id); //TODO unit test congestion window
+                inner.congestion_control.set_internals(0, initial_cwnd, 0);
+                inner.fed_to_congestion_control_marker = PacketId::from_raw(initial_fed_to_congestion_control_marker);
+                inner.next_unsent_packet_id = PacketId::from_raw(next_unsent_packet_id);
             }
 
             send_stream.on_recv_sync_message(msg).await;
 
-            assert_eq!(send_stream.inner.read().await.send_buffer.keys().cloned().collect::<Vec<_>>(), expected_send_buffer_ids);
+            let inner = send_stream.inner.read().await;
+            assert_eq!(inner.send_buffer.keys().cloned().collect::<Vec<_>>(), expected_send_buffer_ids);
+            assert_eq!(inner.congestion_control.cwnd(), expected_cwnd);
+            assert_eq!(inner.fed_to_congestion_control_marker, PacketId::from_raw(expected_fed_to_congestion_control_marker));
         });
     }
 
