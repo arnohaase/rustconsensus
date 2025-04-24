@@ -79,6 +79,8 @@ impl SendStreamInner {
     }
 
     async fn send_send_sync(&self) {
+        debug!("Sending send sync");
+        
         let header = PacketHeader::new(
             self.self_reply_to_addr,
             PacketKind::ControlSendSync { stream_id: self.stream_id },

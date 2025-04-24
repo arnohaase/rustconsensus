@@ -464,6 +464,7 @@ pub struct ReceiveStream {
 impl Drop for ReceiveStream {
     fn drop(&mut self) {
         if let Some(handle) = self.active_handle.take() {
+            debug!("shutting down active loop for receive stream");
             handle.abort();
         }
     }
