@@ -11,9 +11,9 @@ use cluster::cluster::heartbeat::downing_strategy::QuorumOfSeedNodesStrategy;
 
 fn init_logging() {
     tracing_subscriber::fmt()
-        // .with_max_level(Level::INFO)
+        .with_max_level(Level::INFO)
         // .with_max_level(Level::DEBUG)
-        .with_max_level(Level::TRACE)
+        // .with_max_level(Level::TRACE)
         .with_thread_ids(true)
         .try_init()
         .ok();
@@ -43,8 +43,6 @@ pub async fn main() -> anyhow::Result<()> {
     info!("simple cluster demo");
 
     select! {
-        // _ = new_node(3, 0) => {}
-        // _ = new_node(3, 1) => {}
         _ = new_node(25, 0) => {}
         _ = new_node(25, 1) => {}
         _ = new_node(25, 2) => {}
