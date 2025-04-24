@@ -49,6 +49,8 @@ impl SendStreamInner {
         PacketHeader::serialized_len_for_stream_header(self.self_reply_to_addr)
     }
 
+    /// tries to initialize the work in progress buffer, returning `true` on success and `false`
+    ///  if the send buffer has reached its configured upper bound
     #[must_use]
     fn init_wip(&mut self, first_message_offset: Option<u16>) -> bool {
         assert!(self.work_in_progress.is_none());
@@ -146,7 +148,6 @@ impl SendStreamInner {
             self.work_in_progress_late_send_handle = None;
         }
 
-        //TODO !!! send window size !!!
         if let Some(out_of_window) = self.work_in_progress_packet_id - self.config.send_window_size.safe_cast() {
             if let Some(dropped_buf) = self.send_buffer.remove(&out_of_window) {
                 debug!("unacknowledged packet moved out of the send window for stream {} with {:?}", self.stream_id, self.peer_addr);
