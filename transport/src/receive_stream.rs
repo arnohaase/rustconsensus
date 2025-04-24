@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{debug, trace, warn, Instrument, Span};
+use crate::exponential_backoff::ExponentialBackoff;
 
 struct ReceiveStreamInner {
     config: Arc<EffectiveReceiveStreamConfig>,
@@ -67,6 +68,8 @@ struct ReceiveStreamInner {
     ///  (potentially) sent after their absence is detected, but only from the second onward.
     missing_packet_buffer: BTreeMap<PacketId, u64>,
     missing_packet_tick_counter: u64,
+    synced_ack_threshold: PacketId,
+    should_send_sync: ExponentialBackoff,
 }
 impl ReceiveStreamInner {
     fn new(
@@ -104,15 +107,25 @@ impl ReceiveStreamInner {
             receive_buffer: Default::default(),
             missing_packet_buffer: Default::default(),
             missing_packet_tick_counter: 0,
+            synced_ack_threshold: PacketId::ZERO,
+            should_send_sync: ExponentialBackoff::new(),
         }
     }
 
     /// Send a NAK for the earliest N missing packets - the assumption is that if more packets are
     ///  missing, something is seriously wrong, and it is likely better to ask for the second batch
     ///  only when the first is re-delivered
-    async fn do_send_recv_sync(&mut self) {
+    async fn send_recv_sync_if_needed(&mut self) {
         self.missing_packet_tick_counter += 1;
-
+        
+        // if there is 'nothing new to send', reduce RECV_SYNC frequency
+        let something_to_send = self.missing_packet_buffer.is_empty() 
+            && self.synced_ack_threshold == self.high_water_mark();
+        if !self.should_send_sync.should_send(!something_to_send) {
+            trace!("skipping RECV_SYNC because there is nothing new to send");
+            return;
+        }
+        
         let mut nak_packets = Vec::new();
 
         for (&packet_id, &tick) in &self.missing_packet_buffer {
@@ -138,6 +151,8 @@ impl ReceiveStreamInner {
             packet_id_resend_set: nak_packets,
         }.ser(&mut send_buf);
 
+        self.synced_ack_threshold = self.high_water_mark();
+        
         self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
         self.buffer_pool.return_to_pool(send_buf);
     }
@@ -603,7 +618,7 @@ impl ReceiveStream {
             select! {
                 _ = sync_interval.tick() => {
                     inner.write().await
-                        .do_send_recv_sync().await;
+                        .send_recv_sync_if_needed().await;
                 }
             }
         }
@@ -630,17 +645,13 @@ mod tests {
 
     #[rstest]
     #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![], 0, 0, 0, vec![
-        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0],
-        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0]])]
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0]])] // first message is filtered out by exponential backoff
     #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), vec![], 0, 0, 0, vec![
-        vec![0,16, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0],
-        vec![0,16, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0]])]
+        vec![0,16, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0]])] // first message is filtered out by exponential backoff
     #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), vec![], 0, 0, 0, vec![
-        vec![0,17, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0],
-        vec![0,17, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0]])]
+        vec![0,17, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0]])] // first message is filtered out by exponential backoff
     #[case::actual_values(SocketAddr::from(([1,2,3,4], 8)), vec![], 9, 3, 4, vec![
-        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,9, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,4, 0],
-        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,9, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,4, 0]])]
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,9, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,4, 0]])] // first message is filtered out by exponential backoff
 
     #[case::nak_implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![(1,1)], 3, 0, 1, vec![
         vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1, 1, 0,0,0,0,0,0,0,1],
@@ -728,8 +739,8 @@ mod tests {
             }
             inner.ack_threshold = PacketId::from_raw(ack_threshold);
 
-            inner.do_send_recv_sync().await;
-            inner.do_send_recv_sync().await;
+            inner.send_recv_sync_if_needed().await;
+            inner.send_recv_sync_if_needed().await;
         });
 
     }

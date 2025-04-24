@@ -199,6 +199,7 @@ pub mod safe_converter;
 pub mod config;
 pub mod buffers;
 mod hs_congestion_control;
+mod exponential_backoff;
 
 #[cfg(test)]
 mod tests {
