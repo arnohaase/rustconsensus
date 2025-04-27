@@ -22,8 +22,12 @@ impl<K: Hash+Eq+Clone+Sync+Send, V:Clone+Sync+Send> AtomicMap<K,V> {
         }
     }
 
-    pub fn load(&self) -> Arc<FxHashMap<K,V>> {
-        unsafe { (*self.map.load(Ordering::Acquire)).clone() }
+    pub fn get(&self, key: &K) -> Option<V> {
+        unsafe { 
+            (*self.map.load(Ordering::Acquire))
+                .get(key)
+                .cloned()
+        }
     }
 
     pub fn update(&self, f: impl Fn(&mut FxHashMap<K,V>)) {
@@ -68,15 +72,15 @@ mod tests {
     #[test]
     fn test_update() {
         let map = AtomicMap::<u32, u32>::new();
-        assert!(map.load().is_empty());
 
         map.update(|m| {
             m.insert(1, 2);
         });
-        assert_eq!(1, map.load().len());
-        assert_eq!(Some(&2), map.load().get(&1));
+        assert_eq!(Some(2), map.get(&1));
     }
 
+    //TODO concurrent updates
+    
     // #[test]
     // fn test_update_no_leak() {
     //     let map = AtomicMap::<u64, u64>::new();

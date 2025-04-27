@@ -17,7 +17,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time;
-use tracing::{debug, span, trace, Instrument, Level, Span};
+use tracing::{debug, info, span, trace, Instrument, Level, Span};
 use uuid::Uuid;
 
 struct SendStreamInner {
@@ -77,7 +77,7 @@ impl SendStreamInner {
     }
 
     fn peer_generation(&self) -> Option<u64> {
-        self.peer_generations.load().get(&self.peer_addr).cloned()
+        self.peer_generations.get(&self.peer_addr)
     }
 
     async fn send_send_sync(&self) {
@@ -416,7 +416,9 @@ impl SendStream {
                     .await;
             }
         }
-
+        
+        info!("*** released send lock");
+        
         Ok(())
     }
 }

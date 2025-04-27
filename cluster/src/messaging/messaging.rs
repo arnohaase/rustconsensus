@@ -131,31 +131,29 @@ struct MessageDispatcherImpl {
 
 #[async_trait]
 impl MessageDispatcher for MessageDispatcherImpl {
-    async fn on_message(&self, sender_addr: SocketAddr, sender_generation: u64, _stream_id: Option<u16>, msg_buf: Vec<u8>) {
-        let message_modules = self.message_modules.load();
-
-        tokio::spawn(async move {
-            let mut msg_buf = msg_buf.as_ref();
-            match MessageModuleId::deser(&mut msg_buf) {
-                Ok(id) => {
-                    match message_modules.get(&id) {
-                        Some(message_module) => {
+    async fn on_message(&self, sender_addr: SocketAddr, sender_generation: u64, _stream_id: Option<u16>, full_msg_buf: Vec<u8>) {
+        let mut msg_buf = full_msg_buf.as_ref();
+        match MessageModuleId::deser(&mut msg_buf) {
+            Ok(id) => {
+                match self.message_modules.get(&id) {
+                    Some(message_module) => {
+                        tokio::spawn(async move {
                             message_module.on_message(NodeAddr {
                                 unique: sender_generation,
                                 socket_addr: sender_addr,
-                            }, msg_buf)
+                            }, &full_msg_buf[size_of::<MessageModuleId>()..])
                                 .instrument(Span::current())
                                 .await;
-                        }
-                        None => {
-                            warn!("received a message for message id {:?} which is not registered - skipping message", id);
-                        }
+                        });
+                    }
+                    None => {
+                        warn!("received a message for message id {:?} which is not registered - skipping message", id);
                     }
                 }
-                Err(_) => {
-                    warn!("received a message without a valid id - skipping");
-                }
             }
-        });
+            Err(_) => {
+                warn!("received a message without a valid id - skipping");
+            }
+        }
     }
 }

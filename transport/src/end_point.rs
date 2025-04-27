@@ -219,7 +219,7 @@ impl EndPoint {
 
     async fn send_ping(&self, to: SocketAddr) {
         let mut buf = self.buffer_pool.get_from_pool();
-        PacketHeader::new(self.get_reply_to_addr(to), PacketKind::Ping, self.generation, self.peer_generations.load().get(&to).cloned())
+        PacketHeader::new(self.get_reply_to_addr(to), PacketKind::Ping, self.generation, self.peer_generations.get(&to))
             .ser(&mut buf);
 
         self.get_send_pipeline(to)
@@ -236,13 +236,11 @@ impl EndPoint {
         peer_addr: SocketAddr,
         new_peer_generation: u64,
     ) -> bool {
-        let peer_generations = self.peer_generations.load();
-
-        if let Some(prev) = peer_generations.get(&peer_addr) {
-            if *prev == new_peer_generation {
+        if let Some(prev) = self.peer_generations.get(&peer_addr) {
+            if prev == new_peer_generation {
                 true
             }
-            else if *prev < new_peer_generation {
+            else if prev < new_peer_generation {
                 debug!("peer {:?}: received packet for old generation {} - discarding", peer_addr, new_peer_generation);
                 false
             }
@@ -306,8 +304,8 @@ impl EndPoint {
     }
 
     async fn get_send_stream(&self, addr: SocketAddr, stream_id: u16) -> Arc<SendStream> {
-        if let Some(stream) = self.send_streams.load().get(&(addr, stream_id)) {
-            return stream.clone();
+        if let Some(stream) = self.send_streams.get(&(addr, stream_id)) {
+            return stream;
         };
 
         debug!("initializing send stream {} for {:?}", stream_id, addr);
