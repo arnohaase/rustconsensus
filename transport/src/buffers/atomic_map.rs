@@ -39,7 +39,7 @@ impl<K: Hash+Eq+Clone+Sync+Send, V:Clone+Sync+Send> AtomicMap<K,V> {
                     unsafe { drop(Box::from_raw(prev)); }
                     return;
                 }
-                Err(new) => {
+                Err(_) => {
                     unsafe { drop(Box::from_raw(new)); }
                 }
             }
