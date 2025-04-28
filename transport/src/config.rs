@@ -73,7 +73,7 @@ impl RudpConfig {
             },
             specific_send_stream_configs: FxHashMap::default(),
             default_receive_stream_config: ReceiveStreamConfig {
-                sync_interval: Duration::from_millis(8),
+                sync_interval: Duration::from_millis(2), //TODO 1ms appears to deadlock
                 receive_window_size: 16 * 1024,
                 max_num_naks_per_packet: 150,
             },
