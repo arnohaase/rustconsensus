@@ -870,8 +870,8 @@ mod tests {
     }
     #[async_trait]
     impl MessageDispatcher for CollectingMessageDispatcher {
-        async fn on_message(&self, sender_addr: SocketAddr, _sender_generation: u64, stream_id: Option<u16>, msg_buf: &[u8]) {
-            self.messages.lock().await.push((sender_addr, stream_id, msg_buf.to_vec()));
+        async fn on_message(&self, sender_addr: SocketAddr, _sender_generation: u64, stream_id: Option<u16>, msg_buf: Vec<u8>) {
+            self.messages.lock().await.push((sender_addr, stream_id, msg_buf));
         }
     }
 
