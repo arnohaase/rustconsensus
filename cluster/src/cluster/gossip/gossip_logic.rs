@@ -69,11 +69,9 @@ impl <R: Random> Gossip<R> {
             .map(|n| n.addr)
         {
             if cluster_state.is_node_converged(candidate) {
-                debug!("+ {:?}", candidate);
                 maybe_same.push(candidate);
             }
             else {
-                debug!("- {:?}", candidate);
                 proven_different.push(candidate);
             }
         }
