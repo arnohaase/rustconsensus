@@ -12,8 +12,9 @@ use crate::cluster::gossip::run_gossip;
 use crate::cluster::heartbeat::downing_strategy::DowningStrategy;
 use crate::cluster::heartbeat::run_heartbeat;
 use crate::cluster::join_messages::{JoinMessage, JoinMessageModule};
-use crate::messaging::messaging::{MessageSender, Messaging, RudpMessagingImpl};
+use crate::messaging::messaging::{MessageSender, Messaging};
 use crate::messaging::node_addr::NodeAddr;
+use crate::messaging::rudp::RudpMessagingImpl;
 
 /// This is the cluster's public API
 pub struct Cluster<M: Messaging>  {
