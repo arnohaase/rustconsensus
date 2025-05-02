@@ -30,16 +30,17 @@ impl <M: MessageDispatcher> TcpEndpoint<M> {
     }
 
     pub async fn send_message<MSG: Message>(&self, to: NodeAddr, message: &MSG) -> anyhow::Result<()> {
+
         // message.module_id()
-        
-        
-        
-        
-        
-        
+
+
+
+
+
+
         todo!()
     }
-    
+
     pub async fn accept(&self) -> anyhow::Result<()>{
         loop {
             let (stream, addr) = self.server_socket.accept().await?;
@@ -47,7 +48,7 @@ impl <M: MessageDispatcher> TcpEndpoint<M> {
             let encryption = self.encryption.clone();
             let self_addr = self.self_addr.clone();
             let message_dispatcher = self.message_dispatcher.clone();
-            tokio::spawn(async move { //TODO termination: we shut down, clean up when they shut down, ... 
+            tokio::spawn(async move { //TODO termination: we shut down, clean up when they shut down, ...
                 match handle_connection_request(addr, stream, encryption, self_addr, message_dispatcher).await {
                     Ok(_) => {}
                     Err(e) => warn!("connection from {} broke with an error: {}", addr, e),
