@@ -62,20 +62,12 @@ impl MessageSender for TcpMessaging {
 impl Messaging for TcpMessaging {
     fn register_module(&self, message_module: Arc<dyn MessageModule>) {
         self.message_modules
-            .update(|m| {
-                if m.insert(message_module.id(), message_module.clone()).is_some() {
-                    warn!("Registering message module {:?} which was already registered", message_module.id());
-                };
-            });
+            .overwrite_entry(message_module.id(), message_module);
     }
 
     fn deregister_module(&self, id: MessageModuleId) {
         self.message_modules
-            .update(|m| {
-                if m.remove(&id).is_none() {
-                    warn!("Deregistering message module {:?} which was not registered", id);
-                };
-            });
+            .remove(&id);
     }
 
     async fn recv(&self) {

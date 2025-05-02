@@ -89,6 +89,28 @@ impl<K: Hash+Eq+Clone+Sync+Send, V:Clone+Sync+Send> AtomicMap<K,V> {
         }
     }
 
+    pub fn remove(&self, key: &K) {
+        loop {
+            let old_ptr = self.map.load(Ordering::Acquire);
+            let old_map: Arc<FxHashMap<K,V>> = unsafe { (*old_ptr).clone() };
+
+            let mut new_map = (*old_map).clone();
+            new_map.remove(key);
+
+            let new_ptr = Box::into_raw(Box::new(Arc::new(new_map)));
+
+            match self.map.compare_exchange(old_ptr, new_ptr, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => {
+                    unsafe { drop(Box::from_raw(old_ptr)); }
+                    return;
+                }
+                Err(_) => {
+                    unsafe { drop(Box::from_raw(new_ptr)); }
+                }
+            }
+        }
+    }
+
     pub fn remove_all(&self, key_predicate: impl Fn(&K) -> bool) {
         loop {
             let old_ptr = self.map.load(Ordering::Acquire);

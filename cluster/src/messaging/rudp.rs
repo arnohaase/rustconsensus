@@ -25,16 +25,18 @@ impl RudpMessagingImpl {
     pub async fn new(config: RudpConfig) -> anyhow::Result<RudpMessagingImpl> {
         let message_modules: Arc<AtomicMap<MessageModuleId, Arc<dyn MessageModule>>> = Default::default();
 
-        let message_dispatcher = crate::messaging::messaging::MessageDispatcherImpl {
-            message_modules: message_modules.clone(),
-        };
-
-        let end_point = EndPoint::new(Arc::new(message_dispatcher), Arc::new(config)).await?;
-
-        Ok(RudpMessagingImpl {
-            end_point,
-            message_modules,
-        })
+        todo!()
+        // 
+        // let message_dispatcher = crate::messaging::messaging::MessageDispatcherImpl {
+        //     message_modules: message_modules.clone(),
+        // };
+        // 
+        // let end_point = EndPoint::new(Arc::new(message_dispatcher), Arc::new(config)).await?;
+        // 
+        // Ok(RudpMessagingImpl {
+        //     end_point,
+        //     message_modules,
+        // })
     }
 }
 
@@ -78,21 +80,21 @@ impl MessageSender for RudpMessagingImpl {
 #[async_trait]
 impl Messaging for RudpMessagingImpl {
     fn register_module(&self, message_module: Arc<dyn MessageModule>) {
-        self.message_modules
-            .update(|m| {
-                if m.insert(message_module.id(), message_module.clone()).is_some() {
-                    warn!("Registering message module {:?} which was already registered", message_module.id());
-                };
-            });
+        // self.message_modules
+        //     .update(|m| {
+        //         if m.insert(message_module.id(), message_module.clone()).is_some() {
+        //             warn!("Registering message module {:?} which was already registered", message_module.id());
+        //         };
+        //     });
     }
 
     fn deregister_module(&self, id: MessageModuleId) {
-        self.message_modules
-            .update(|m| {
-                if m.remove(&id).is_none() {
-                    warn!("Deregistering message module {:?} which was not registered", id);
-                };
-            });
+        // self.message_modules
+        //     .update(|m| {
+        //         if m.remove(&id).is_none() {
+        //             warn!("Deregistering message module {:?} which was not registered", id);
+        //         };
+        //     });
     }
 
     async fn recv(&self) {
