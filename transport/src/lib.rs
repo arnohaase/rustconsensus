@@ -1,3 +1,7 @@
+//TODO send SEND_SYNC periodically, if the send buffer is non-empty, if it changed, ...
+//TODO clean up NAK / RECV_SYNC sending
+//TODO merge / clean up unit tests for NAK / RECV_SYNC
+
 //TODO remove in-the-middle acknowledged packets
 
 //! This transport protocol is designed as a compromise between TCP and UDP, providing some
@@ -76,8 +80,6 @@
 //!     * bit 2-4: kind of frame:
 //!       * 000 regular sequenced
 //!       * 001 fire-and-forget for single-packet application-level messages
-//!       * 010 INIT
-//!       * 011 NAK
 //!       * 100 RECV_SYNC
 //!       * 101 SEND_SYNC
 //!       * 110 PING
@@ -113,25 +115,6 @@
 //!
 //! ## Control messages
 //!
-//! *INIT*
-//!
-//! This control message, sent by a receiver, requests the peer to clear its send buffer (*without*
-//!  resetting packet id markers, to allow handling of packets that are in flight).
-//! Apart from that, this message is equivalent to a RECV_SYNC message with all three values set to
-//!  ZERO, requesting a SEND_SYNC message - note that this is an approximation only, but it should
-//!  be close enough to the truth to be meaningful, i.e. INIT may only be sent initially.
-//!  TODO is this the right granularity and abstraction?
-//!
-//! This message is one way (though not the only reasonable one) to start a conversation.
-//!
-//!  NB: This message is sent *for one specific stream*.
-//!  NB: If this message gets lost, peers will still sync up eventually through periodically sent
-//!       SYNC messages, but that incurs a delay and uses network bandwidth unnecessarily
-//!
-//! ```ascii
-//! [no payload]
-//! ```
-//!
 //! *RECV_SYNC*
 //!
 //! This control message is sent periodically by a receiver of a stream to sync with the sender
@@ -165,37 +148,6 @@
 //! ```
 //!
 //! TODO timestamp / RTT
-//! TODO notify client of lost packets
-//!
-//! TODO serialize message acceptance
-//! TODO congestion control: AIMD / cubic; slow start or not?
-//! TODO shared congestion window per peer
-//! TODO Receiver's advertised window: upper bound for the send buffer / congestion window
-//!
-//! *NAK*
-//!
-//! TODO merge NAK with RECV_SYNC?
-//!
-//! Request that the peer re-send a specific set of packets that got dropped or corrupted, or
-//!  were not delivered in a timely fashion for some reason. This is the protocol's primary
-//!  means of acknowledging packets and ensuring a gap-free in-sequence dispatch of messages on
-//!  the receiver side. It is possible and intended to tune this to the quality criteria of
-//!  the underlying network, especially in a data center.
-//!
-//! NB: The criteria for sending this message are configurable, and the protocol is robust
-//!      with regard to differing configurations. It is desirable to let some grace period pass
-//!      before NAK'ing a gap to give regular out-of-order arrival a chance before requesting
-//!      a re-send. Other possible criteria are the number of missing packets, or a grace period
-//!      before re-requesting packets that were NAK'ed before.
-//!
-//! NB: This is a control message, so it must fit into a single packet. It is the sender's
-//!      responsibility to ensure this, and split the NAK'ed packet ids into several NAK messages
-//!      if necessary
-//!
-//! ```ascii
-//! 0: number of NAK'ed packet ids (varint u16)
-//! *: (repeated) packet id to be re-sent (u64 BE)
-//! ```
 //!
 //! *PING*
 //!
@@ -215,6 +167,7 @@
 //!   * single channel
 //!   * backpressure, i.e. slow down sending on congestion
 //!   * optimized for sending large data volumes / streams over fast but unreliable networks
+//! * SCTP
 //! * QUIC
 //!   * connection based - initial handshake
 //!   * enforces encryption (TLS 1.3)
@@ -228,6 +181,7 @@
 //!   * designed for minimum latency
 //!   * dedicated, pre-allocated buffers per peer
 //!   * back pressure, never drop messages
+//!   * no congestion control
 //! * AVB2 / TSN: https://en.wikipedia.org/wiki/Time-Sensitive_Networking#IEEE_802.1Qav
 //!   * builds directly on Layer 2 with dedicated wires
 //!   * interesting prioritising algorithm for rate limitation and traffic shaping
@@ -244,6 +198,8 @@ mod message_header;
 pub mod safe_converter;
 pub mod config;
 pub mod buffers;
+mod hs_congestion_control;
+mod exponential_backoff;
 
 #[cfg(test)]
 mod tests {

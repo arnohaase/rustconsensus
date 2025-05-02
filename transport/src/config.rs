@@ -73,8 +73,7 @@ impl RudpConfig {
             },
             specific_send_stream_configs: FxHashMap::default(),
             default_receive_stream_config: ReceiveStreamConfig {
-                nak_interval: Duration::from_millis(4),
-                sync_interval: Duration::from_millis(500),
+                sync_interval: Duration::from_millis(8),
                 receive_window_size: 16 * 1024,
                 max_num_naks_per_packet: 150,
             },
@@ -111,7 +110,6 @@ impl RudpConfig {
             .unwrap_or(&self.default_receive_stream_config);
 
         EffectiveReceiveStreamConfig {
-            nak_interval: raw.nak_interval,
             sync_interval: raw.sync_interval,
             receive_window_size: raw.receive_window_size,
             max_num_naks_per_packet: raw.max_num_naks_per_packet, //TODO calculate this based on packet size
@@ -129,8 +127,8 @@ pub struct SendStreamConfig {
     ///  are never combined and sent in a single packet.
     pub send_delay: Option<Duration>,
 
-    /// This is the maximum number of *packets* (not bytes) stored on the sender side pending an
-    ///  ack message
+    /// This is the maximum difference in *packets* (not bytes) between the highest the lowest
+    ///  buffered packet
     pub send_window_size: u32,
 }
 
@@ -148,16 +146,15 @@ pub struct EffectiveSendStreamConfig {
 
 #[derive(Clone, Debug)]
 pub struct ReceiveStreamConfig {
-    pub nak_interval: Duration, // configure to roughly 2x RTT
-    pub sync_interval: Duration, // configure on the order of seconds
+    /// configure to roughly 2x RTT
+    pub sync_interval: Duration,
 
     pub receive_window_size: u32,
     pub max_num_naks_per_packet: usize, //TODO limit so it fits into a single packet
 }
 
 pub struct EffectiveReceiveStreamConfig {
-    pub nak_interval: Duration, // configure to roughly 2x RTT
-    pub sync_interval: Duration, // configure on the order of seconds
+    pub sync_interval: Duration,
 
     pub receive_window_size: u32,
     pub max_num_naks_per_packet: usize, //TODO limit so it fits into a single packet

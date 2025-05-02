@@ -1,7 +1,7 @@
 use crate::buffers::atomic_map::AtomicMap;
 use crate::buffers::buffer_pool::SendBufferPool;
 use crate::config::RudpConfig;
-use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
+use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::packet_header::{PacketHeader, PacketKind};
 use crate::receive_stream::ReceiveStream;
@@ -210,10 +210,8 @@ impl EndPoint {
                         .on_packet(packet_sequence_number, first_message_offset, parse_buf).instrument(Span::current()).await
                 },
                 PacketKind::FireAndForget => self.message_dispatcher.on_message(peer_addr, packet_header.sender_generation, None, parse_buf.to_vec()).instrument(Span::current()).await,
-                PacketKind::ControlInit { stream_id } => Self::handle_init_message(self.get_send_stream(peer_addr, stream_id).await).instrument(Span::current()).await,
                 PacketKind::ControlRecvSync { stream_id } => Self::handle_recv_sync(parse_buf, self.get_send_stream(peer_addr, stream_id).await).instrument(Span::current()).await,
                 PacketKind::ControlSendSync { stream_id } => Self::handle_send_sync(parse_buf, self.get_receive_stream(&mut receive_streams, packet_header.sender_generation, peer_addr, stream_id)).instrument(Span::current()).await,
-                PacketKind::ControlNak { stream_id } => Self::handle_nak(parse_buf, self.get_send_stream(peer_addr, stream_id).await).instrument(Span::current()).await,
                 PacketKind::Ping => {} // nothing to be done, just syncing generations
             }
         }
@@ -221,7 +219,7 @@ impl EndPoint {
 
     async fn send_ping(&self, to: SocketAddr) {
         let mut buf = self.buffer_pool.get_from_pool();
-        PacketHeader::new(self.get_reply_to_addr(to), PacketKind::Ping, self.generation, self.peer_generations.load().get(&to).cloned())
+        PacketHeader::new(self.get_reply_to_addr(to), PacketKind::Ping, self.generation, self.peer_generations.get(&to))
             .ser(&mut buf);
 
         self.get_send_pipeline(to)
@@ -238,13 +236,11 @@ impl EndPoint {
         peer_addr: SocketAddr,
         new_peer_generation: u64,
     ) -> bool {
-        let peer_generations = self.peer_generations.load();
-
-        if let Some(prev) = peer_generations.get(&peer_addr) {
-            if *prev == new_peer_generation {
+        if let Some(prev) = self.peer_generations.get(&peer_addr) {
+            if prev == new_peer_generation {
                 true
             }
-            else if *prev < new_peer_generation {
+            else if prev < new_peer_generation {
                 debug!("peer {:?}: received packet for old generation {} - discarding", peer_addr, new_peer_generation);
                 false
             }
@@ -308,8 +304,8 @@ impl EndPoint {
     }
 
     async fn get_send_stream(&self, addr: SocketAddr, stream_id: u16) -> Arc<SendStream> {
-        if let Some(stream) = self.send_streams.load().get(&(addr, stream_id)) {
-            return stream.clone();
+        if let Some(stream) = self.send_streams.get(&(addr, stream_id)) {
+            return stream;
         };
 
         debug!("initializing send stream {} for {:?}", stream_id, addr);
@@ -328,10 +324,6 @@ impl EndPoint {
             map.insert((addr, stream_id), stream.clone());
         });
         stream
-    }
-
-    async fn handle_init_message(send_stream: Arc<SendStream>) {
-        send_stream.on_init_message().await
     }
 
     async fn handle_recv_sync(mut parse_buf: &[u8], send_stream: Arc<SendStream>) {
@@ -356,17 +348,5 @@ impl EndPoint {
         };
 
         receive_stream.on_send_sync_message(sync_message).await
-    }
-
-    async fn handle_nak(mut parse_buf: &[u8], send_stream: Arc<SendStream>) {
-        let nak_message = match ControlMessageNak::deser(&mut parse_buf) {
-            Ok(msg) => msg,
-            Err(_) => {
-                warn!("received unparseable NAK message from {:?}", send_stream.peer_addr().await);
-                return;
-            }
-        };
-
-        send_stream.on_nak_message(nak_message).await;
     }
 }

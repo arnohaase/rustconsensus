@@ -50,13 +50,15 @@ impl SendPipeline {
     }
 
     pub async fn finalize_and_send_packet(&self, to: SocketAddr, packet_buf: &mut FixedBuf) {
+        self.finalize_packet(packet_buf).await;
+        self.do_send_packet(to, packet_buf.as_ref()).await;
+    }
+
+    pub async fn finalize_packet(&self, packet_buf: &mut FixedBuf) {
         self.encryption.encrypt_buffer(packet_buf);
-        self.socket.do_send_packet(to, packet_buf.as_ref())
-            .await;
     }
 
     pub async fn do_send_packet(&self, to: SocketAddr, packet_buf: &[u8]) {
-        //TODO traffic shaping
         self.socket.do_send_packet(to, packet_buf).await;
     }
 }

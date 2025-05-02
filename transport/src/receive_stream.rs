@@ -1,6 +1,6 @@
 use crate::buffers::buffer_pool::SendBufferPool;
 use crate::config::EffectiveReceiveStreamConfig;
-use crate::control_messages::{ControlMessageNak, ControlMessageRecvSync, ControlMessageSendSync};
+use crate::control_messages::{ControlMessageRecvSync, ControlMessageSendSync};
 use crate::message_dispatcher::MessageDispatcher;
 use crate::message_header::MessageHeader;
 use crate::packet_header::{PacketHeader, PacketKind};
@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{debug, trace, warn, Instrument, Span};
+use crate::exponential_backoff::ExponentialBackoff;
 
 struct ReceiveStreamInner {
     config: Arc<EffectiveReceiveStreamConfig>,
@@ -67,6 +68,8 @@ struct ReceiveStreamInner {
     ///  (potentially) sent after their absence is detected, but only from the second onward.
     missing_packet_buffer: BTreeMap<PacketId, u64>,
     missing_packet_tick_counter: u64,
+    synced_ack_threshold: PacketId,
+    should_send_sync: ExponentialBackoff,
 }
 impl ReceiveStreamInner {
     fn new(
@@ -104,44 +107,25 @@ impl ReceiveStreamInner {
             receive_buffer: Default::default(),
             missing_packet_buffer: Default::default(),
             missing_packet_tick_counter: 0,
+            synced_ack_threshold: PacketId::ZERO,
+            should_send_sync: ExponentialBackoff::new(),
         }
-    }
-
-    async fn do_send_init(&self) {
-        debug!("sending INIT");
-        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlInit { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
-
-        let mut send_buf = self.buffer_pool.get_from_pool();
-        header.ser(&mut send_buf);
-
-        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
-        self.buffer_pool.return_to_pool(send_buf);
-    }
-
-    async fn do_send_recv_sync(&self) {
-        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlRecvSync { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
-
-        let mut send_buf = self.buffer_pool.get_from_pool();
-        header.ser(&mut send_buf);
-
-        let msg = ControlMessageRecvSync {
-            receive_buffer_high_water_mark: self.high_water_mark(),
-            receive_buffer_low_water_mark: self.low_water_mark(),
-            receive_buffer_ack_threshold: self.ack_threshold,
-        };
-        trace!("sending RECV_SYNC: {:?}", msg);
-        msg.ser(&mut send_buf);
-
-        self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
-        self.buffer_pool.return_to_pool(send_buf);
     }
 
     /// Send a NAK for the earliest N missing packets - the assumption is that if more packets are
     ///  missing, something is seriously wrong, and it is likely better to ask for the second batch
     ///  only when the first is re-delivered
-    async fn do_send_nak(&mut self) {
+    async fn send_recv_sync_if_needed(&mut self) {
         self.missing_packet_tick_counter += 1;
-
+        
+        // if there is 'nothing new to send', reduce RECV_SYNC frequency
+        let something_to_send = self.missing_packet_buffer.is_empty() 
+            && self.synced_ack_threshold == self.high_water_mark();
+        if !self.should_send_sync.should_send(!something_to_send) {
+            trace!("skipping RECV_SYNC because there is nothing new to send");
+            return;
+        }
+        
         let mut nak_packets = Vec::new();
 
         for (&packet_id, &tick) in &self.missing_packet_buffer {
@@ -154,19 +138,21 @@ impl ReceiveStreamInner {
             }
         }
 
-        if nak_packets.is_empty() {
-            // trace!("no missing packets to NAK");
-            return;
-        }
-
-        let header = PacketHeader::new(self.self_reply_to_addr, PacketKind::ControlNak { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
+        let header = PacketHeader::new(
+            self.self_reply_to_addr, 
+            PacketKind::ControlRecvSync { stream_id: self.stream_id }, self.self_generation, Some(self.peer_generation));
 
         let mut send_buf = self.buffer_pool.get_from_pool();
         header.ser(&mut send_buf);
-        ControlMessageNak {
+        ControlMessageRecvSync {
+            receive_buffer_high_water_mark: self.high_water_mark(),
+            receive_buffer_low_water_mark: self.low_water_mark(),
+            receive_buffer_ack_threshold: self.ack_threshold,
             packet_id_resend_set: nak_packets,
         }.ser(&mut send_buf);
 
+        self.synced_ack_threshold = self.high_water_mark();
+        
         self.send_pipeline.finalize_and_send_packet(self.peer_addr, &mut send_buf).await;
         self.buffer_pool.return_to_pool(send_buf);
     }
@@ -493,6 +479,7 @@ pub struct ReceiveStream {
 impl Drop for ReceiveStream {
     fn drop(&mut self) {
         if let Some(handle) = self.active_handle.take() {
+            debug!("shutting down active loop for receive stream");
             handle.abort();
         }
     }
@@ -539,11 +526,6 @@ impl ReceiveStream {
 
     pub async fn peer_addr(&self) -> SocketAddr {
         self.inner.read().await.peer_addr
-    }
-
-    pub async fn do_send_init(&self) {
-        self.inner.read().await
-            .do_send_init().await;
     }
 
     pub async fn on_send_sync_message(&self, message: ControlMessageSendSync) {
@@ -630,23 +612,13 @@ impl ReceiveStream {
     async fn do_loop(config: Arc<EffectiveReceiveStreamConfig>, inner: Arc<RwLock<ReceiveStreamInner>>) {
         //TODO test this
 
-        let mut nak_interval = interval(config.nak_interval);
         let mut sync_interval = interval(config.sync_interval);
 
         loop {
             select! {
-                _ = nak_interval.tick() => {
-                    //TODO sending NAKs at fixed intervals rather than every N received packets avoids thrashing, but
-                    // it requires big send windows to avoid permanent message loss if a bulk of packets get
-                    // lost rather than the sporadic more or less isolated packet - which may or may not be
-                    // a good trade-off.
-                    // --> this could do with some thinking and failure scenario modeling
-                    inner.write().await
-                       .do_send_nak().await;
-                }
                 _ = sync_interval.tick() => {
                     inner.write().await
-                        .do_send_recv_sync().await;
+                        .send_recv_sync_if_needed().await;
                 }
             }
         }
@@ -672,131 +644,47 @@ mod tests {
     use tokio::sync::Mutex;
 
     #[rstest]
-    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![0,10, 0,0,0,0,0,3, 0,0,0,0,0,8, 0,25])]
-    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), vec![0,8, 0,0,0,0,0,3, 0,0,0,0,0,8, 1,2,3,4, 0,1, 0,25])]
-    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), vec![0,9, 0,0,0,0,0,3, 0,0,0,0,0,8, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25])]
-    fn test_do_send_init(#[case] self_address: SocketAddr, #[case] expected_buf: Vec<u8>) {
-        let rt = Builder::new_current_thread().enable_all().build().unwrap();
-        rt.block_on(async {
-            let mut send_socket = MockSendSocket::new();
-            send_socket.expect_local_addr()
-                .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
-            send_socket.expect_do_send_packet()
-                .once()
-                .withf(move |addr, buf|
-                    addr == &SocketAddr::from(([1, 2, 3, 4], 9)) &&
-                        buf == expected_buf.as_slice()
-                )
-                .returning(|_, _| ())
-            ;
+    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![], 0, 0, 0, vec![
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0]])] // first message is filtered out by exponential backoff
+    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), vec![], 0, 0, 0, vec![
+        vec![0,16, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0]])] // first message is filtered out by exponential backoff
+    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), vec![], 0, 0, 0, vec![
+        vec![0,17, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0]])] // first message is filtered out by exponential backoff
+    #[case::actual_values(SocketAddr::from(([1,2,3,4], 8)), vec![], 9, 3, 4, vec![
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,9, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,4, 0]])] // first message is filtered out by exponential backoff
 
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}));
-
-            let message_dispatcher = MockMessageDispatcher::new();
-
-            let receive_stream = ReceiveStream::new(
-                Arc::new(EffectiveReceiveStreamConfig {
-                    nak_interval: Duration::from_millis(100),
-                    sync_interval: Duration::from_millis(100),
-                    receive_window_size: 32,
-                    max_num_naks_per_packet: 10,
-                    max_message_len: 10,
-                }),
-                Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
-                3,
-                8,
-                25,
-                SocketAddr::from(([1, 2, 3, 4], 9)),
-                Arc::new(send_pipeline),
-                self_address,
-                Arc::new(message_dispatcher),
-            );
-
-            receive_stream.do_send_init().await;
-        });
-    }
-
-    #[rstest]
-    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), 0, 0, 0, vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
-    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), 0, 0, 0, vec![0,16, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
-    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), 0, 0, 0, vec![0,17, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])]
-    #[case::actual_values(SocketAddr::from(([1,2,3,4], 8)), 9, 3, 4, vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,9, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,4])]
-    fn test_do_send_recv_sync(#[case] self_address: SocketAddr, #[case] high_water_mark: u64, #[case] low_water_mark: u64, #[case] ack_threshold: u64, #[case] expected_buf: Vec<u8>) {
-        let rt = Builder::new_current_thread().enable_all().build().unwrap();
-        rt.block_on(async {
-            let mut send_socket = MockSendSocket::new();
-            send_socket.expect_local_addr()
-                .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
-            send_socket.expect_do_send_packet()
-                .once()
-                .withf(move |addr, buf|
-                    addr == &SocketAddr::from(([1, 2, 3, 4], 9)) &&
-                        buf == expected_buf.as_slice()
-                )
-                .returning(|_, _| ())
-            ;
-
-            let send_pipeline = SendPipeline::new(Arc::new(send_socket), Arc::new(crate::buffers::encryption::NoEncryption {}));
-
-            let message_dispatcher = MockMessageDispatcher::new();
-
-            let receive_stream = ReceiveStream::new(
-                Arc::new(EffectiveReceiveStreamConfig {
-                    nak_interval: Duration::from_millis(100),
-                    sync_interval: Duration::from_millis(100),
-                    receive_window_size: 32,
-                    max_num_naks_per_packet: 10,
-                    max_message_len: 10,
-                }),
-                Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
-                4,
-                9,
-                25,
-                SocketAddr::from(([1, 2, 3, 4], 9)),
-                Arc::new(send_pipeline),
-                self_address,
-                Arc::new(message_dispatcher),
-            );
-
-            let mut inner = receive_stream.inner.write().await;
-            if high_water_mark > 0 {
-                inner.receive_buffer.insert(PacketId::from_raw(high_water_mark-1), (None, vec![]));
-            }
-            if low_water_mark < high_water_mark {
-                inner.receive_buffer.insert(PacketId::from_raw(low_water_mark), (None, vec![]));
-            }
-            inner.ack_threshold = PacketId::from_raw(ack_threshold);
-
-            inner.do_send_recv_sync().await;
-        });
-    }
-
-    #[rstest]
-    #[case::implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![(1,1)], vec![
-        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 1, 0,0,0,0,0,0,0,1],
-        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 1, 0,0,0,0,0,0,0,1]])]
-    #[case::v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), vec![(1,1)], vec![
-        vec![0,12, 0,0,0,0,0,11, 0,0,0,0,0,8, 1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1],
-        vec![0,12, 0,0,0,0,0,11, 0,0,0,0,0,8, 1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1]])]
-    #[case::v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), vec![(1,1)], vec![
-        vec![0,13, 0,0,0,0,0,11, 0,0,0,0,0,8, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1],
-        vec![0,13, 0,0,0,0,0,11, 0,0,0,0,0,8, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 1, 0,0,0,0,0,0,0,1]])]
-    #[case::empty(SocketAddr::from(([1,2,3,4], 8)), vec![], vec![])]
-    #[case::two(SocketAddr::from(([1,2,3,4], 8)), vec![(1,1), (3,1)], vec![
-        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 2, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,3],
-        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 2, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,3]])]
-    #[case::three(SocketAddr::from(([1,2,3,4], 8)), vec![(2,1), (3,1), (5,1)], vec![ // cut off after configured limit of two NAKs per message
-        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3],
-        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
-    #[case::one_filtered(SocketAddr::from(([1,2,3,4], 8)), vec![(2,2)], vec![ // send only after tick increase
-        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 1, 0,0,0,0,0,0,0,2]])]
-    #[case::two_filtered(SocketAddr::from(([1,2,3,4], 8)), vec![(2,1), (3,2)], vec![
-        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 1, 0,0,0,0,0,0,0,2],
-        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
-    #[case::three_filtered(SocketAddr::from(([1,2,3,4], 8)), vec![(2,1), (3,2), (5,2)], vec![
-        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 1, 0,0,0,0,0,0,0,2],
-        vec![0,14, 0,0,0,0,0,11, 0,0,0,0,0,8, 0,25, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
-    fn test_do_send_nak(#[case] self_address: SocketAddr, #[case] missing: Vec<(u64, u64)>, #[case] expected_bufs: Vec<Vec<u8>>) {
+    #[case::nak_implicit_reply_to(SocketAddr::from(([1,2,3,4], 8)), vec![(1,1)], 3, 0, 1, vec![
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1, 1, 0,0,0,0,0,0,0,1],
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1, 1, 0,0,0,0,0,0,0,1]])]
+    #[case::nak_v4_reply_to(SocketAddr::from(([1,2,3,4], 1)), vec![(1,1)], 3, 0, 1, vec![
+        vec![0,16, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1, 1, 0,0,0,0,0,0,0,1],
+        vec![0,16, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1, 1, 0,0,0,0,0,0,0,1]])]
+    #[case::nak_v6_reply_to(SocketAddr::from(([1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4], 1)), vec![(1,1)], 3, 0, 1, vec![
+        vec![0,17, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1, 1, 0,0,0,0,0,0,0,1],
+        vec![0,17, 0,0,0,0,0,4, 0,0,0,0,0,9, 1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4, 0,1, 0,25, 0,0,0,0,0,0,0,3, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1, 1, 0,0,0,0,0,0,0,1]])]
+    #[case::nak_two(SocketAddr::from(([1,2,3,4], 8)), vec![(1,1), (3,1)], 4, 0, 1, vec![
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,4, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1, 2, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,3],
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,4, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1, 2, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,3]])]
+    #[case::nak_three_cut_off(SocketAddr::from(([1,2,3,4], 8)), vec![(2,1), (3,1), (5,1)], 6, 0, 1, vec![ // cut off after configured limit of two NAKs per message
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,6, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3],
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,6, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
+    #[case::nak_one_filtered(SocketAddr::from(([1,2,3,4], 8)), vec![(2,2)], 5, 1, 2, vec![ // send only after tick increase
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,5, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,2, 0],
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,5, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,2, 1, 0,0,0,0,0,0,0,2]])]
+    #[case::nak_two_filtered(SocketAddr::from(([1,2,3,4], 8)), vec![(2,1), (3,2)], 5, 1, 2, vec![
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,5, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,2, 1, 0,0,0,0,0,0,0,2],
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,5, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,2, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
+    #[case::nak_three_filtered_cut_off(SocketAddr::from(([1,2,3,4], 8)), vec![(2,1), (3,2), (5,2)], 6, 1, 2, vec![
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,6, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,2, 1, 0,0,0,0,0,0,0,2],
+        vec![0,18, 0,0,0,0,0,4, 0,0,0,0,0,9, 0,25, 0,0,0,0,0,0,0,6, 0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0,2, 2, 0,0,0,0,0,0,0,2, 0,0,0,0,0,0,0,3]])]
+    fn test_do_send_recv_sync(
+        #[case] self_address: SocketAddr,
+        #[case] missing: Vec<(u64, u64)>,
+        #[case] high_water_mark: u64,
+        #[case] low_water_mark: u64,
+        #[case] ack_threshold: u64,
+        #[case] expected_messages: Vec<Vec<u8>>,
+    ) {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let mut send_socket = MockSendSocket::new();
@@ -804,8 +692,7 @@ mod tests {
                 .return_const(SocketAddr::from(([1, 2, 3, 4], 8)));
 
             let mut sequence = Sequence::new();
-
-            for b in expected_bufs {
+            for b in expected_messages {
                 send_socket.expect_do_send_packet()
                     .once()
                     .in_sequence(&mut sequence)
@@ -823,15 +710,14 @@ mod tests {
 
             let receive_stream = ReceiveStream::new(
                 Arc::new(EffectiveReceiveStreamConfig {
-                    nak_interval: Duration::from_millis(100),
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 32,
                     max_num_naks_per_packet: 2,
                     max_message_len: 10,
                 }),
                 Arc::new(SendBufferPool::new(1000, 1, Arc::new(crate::buffers::encryption::NoEncryption {}))),
-                11,
-                8,
+                4,
+                9,
                 25,
                 SocketAddr::from(([1, 2, 3, 4], 9)),
                 Arc::new(send_pipeline),
@@ -845,9 +731,18 @@ mod tests {
             }
             inner.missing_packet_tick_counter = 2;
 
-            inner.do_send_nak().await;
-            inner.do_send_nak().await; // second call is with increased tick
+            if high_water_mark > 0 {
+                inner.receive_buffer.insert(PacketId::from_raw(high_water_mark-1), (None, vec![]));
+            }
+            if low_water_mark < high_water_mark && !inner.missing_packet_buffer.contains_key(&PacketId::from_raw(low_water_mark)) {
+                inner.receive_buffer.insert(PacketId::from_raw(low_water_mark), (None, vec![]));
+            }
+            inner.ack_threshold = PacketId::from_raw(ack_threshold);
+
+            inner.send_recv_sync_if_needed().await;
+            inner.send_recv_sync_if_needed().await;
         });
+
     }
 
     struct CollectingMessageDispatcher {
@@ -871,7 +766,7 @@ mod tests {
     #[async_trait]
     impl MessageDispatcher for CollectingMessageDispatcher {
         async fn on_message(&self, sender_addr: SocketAddr, _sender_generation: u64, stream_id: Option<u16>, msg_buf: Vec<u8>) {
-            self.messages.lock().await.push((sender_addr, stream_id, msg_buf));
+            self.messages.lock().await.push((sender_addr, stream_id, msg_buf.to_vec()));
         }
     }
 
@@ -965,7 +860,6 @@ mod tests {
 
             let receive_stream = ReceiveStream::new(
                 Arc::new(EffectiveReceiveStreamConfig {
-                    nak_interval: Duration::from_millis(100),
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 4,
                     max_num_naks_per_packet: 10,
@@ -1048,7 +942,6 @@ mod tests {
 
             let receive_stream = ReceiveStream::new(
                 Arc::new(EffectiveReceiveStreamConfig {
-                    nak_interval: Duration::from_millis(100),
                     sync_interval: Duration::from_millis(100),
                     receive_window_size: 4,
                     max_num_naks_per_packet: 10,
@@ -1113,7 +1006,6 @@ mod tests {
 
         let mut inner = ReceiveStreamInner::new(
             Arc::new(EffectiveReceiveStreamConfig {
-                nak_interval: Duration::from_millis(100),
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 32,
                 max_num_naks_per_packet: 2,
@@ -1153,7 +1045,6 @@ mod tests {
 
         let mut inner = ReceiveStreamInner::new(
             Arc::new(EffectiveReceiveStreamConfig {
-                nak_interval: Duration::from_millis(100),
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 32,
                 max_num_naks_per_packet: 2,
@@ -1269,7 +1160,6 @@ mod tests {
 
         let mut inner = ReceiveStreamInner::new(
             Arc::new(EffectiveReceiveStreamConfig {
-                nak_interval: Duration::from_millis(100),
                 sync_interval: Duration::from_millis(100),
                 receive_window_size: 4,
                 max_num_naks_per_packet: 2,

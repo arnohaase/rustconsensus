@@ -59,8 +59,8 @@ impl FixedBuf {
     /// This is a convenience function for test code. It derives the buffer's capacity from the
     ///  slice used for initialization, which is a shortcut not intended for production usage.
     #[cfg(test)]
-    pub fn from_slice(data: &[u8]) -> FixedBuf {
-        let mut result = FixedBuf::new(data.len());
+    pub fn from_slice(len: usize, data: &[u8]) -> FixedBuf {
+        let mut result = FixedBuf::new(len);
         bytes::BufMut::put_slice(&mut result, data);
         result
     }
@@ -423,10 +423,10 @@ mod tests {
 
     #[test]
     fn test_from_slice() {
-        let buf = FixedBuf::from_slice(b"hello");
+        let buf = FixedBuf::from_slice(20, b"hello");
         assert_eq!(buf.len(), 5);
         assert_eq!(buf.as_ref(), b"hello");
-        assert_eq!(buf.capacity(), 5);
+        assert_eq!(buf.capacity(), 20);
     }
 
     #[rstest]
