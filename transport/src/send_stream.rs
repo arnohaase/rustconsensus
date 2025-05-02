@@ -216,6 +216,10 @@ impl SendStream {
     }
 
     pub async fn on_recv_sync_message(&self, message: ControlMessageRecvSync) {
+        if message.packet_id_resend_set.len() > 0 {
+            info!("*** #NAKs {}", message.packet_id_resend_set.len());
+        }
+        
         let mut inner = self.inner.write().await;
         trace!("received RECV_SYNC message from {:?} for stream {}: {:?}", inner.peer_addr, inner.stream_id, message);
 
@@ -267,6 +271,8 @@ impl SendStream {
     pub async fn send_message(&self, required_peer_generation: Option<u64>, mut message: &[u8]) -> anyhow::Result<()> {
         let mut send_lock = self.send_lock.lock().await;
 
+        info!("*** acquired send lock");
+        
         if message.len() > self.config.max_message_len {
             debug!("message has length {}, configured max length is {}", message.len(), self.config.max_message_len);
             bail!("message has length {}, configured max length is {}", message.len(), self.config.max_message_len);
@@ -417,7 +423,11 @@ impl SendStream {
             }
         }
         
-        info!("*** released send lock");
+        info!("*** released send lock: send_buffer: {}, cwnd {}, unsent {:?}", 
+            inner.send_buffer.len(),
+            inner.congestion_control.cwnd(),
+            inner.next_unsent_packet_id.to_raw() - inner.low_water_mark().to_raw(),
+        );
         
         Ok(())
     }
@@ -439,7 +449,7 @@ mod tests {
         }
 
         let map: AtomicMap<SocketAddr, u64> = Default::default();
-        map.update(|m| { m.insert(([1,2,3,4], 9).into(), 4); });
+        map.ensure_init(([1,2,3,4], 9).into(), ||4);
         Arc::new(map)
     }
 
