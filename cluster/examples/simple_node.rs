@@ -1,19 +1,18 @@
+use anyhow::anyhow;
 use clap::Parser;
 use clap_derive::Parser;
+use cluster::cluster::cluster::Cluster;
+use cluster::cluster::cluster_config::ClusterConfig;
+use cluster::cluster::discovery_strategy::SeedNodesStrategy;
+use cluster::cluster::heartbeat::downing_strategy::QuorumOfSeedNodesStrategy;
 use http_body_util::Full;
 use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Error, Response};
 use hyper_util::rt::TokioIo;
-use cluster::cluster::cluster::Cluster;
-use cluster::cluster::cluster_config::ClusterConfig;
-use cluster::cluster::discovery_strategy::SeedNodesStrategy;
-use cluster::cluster::heartbeat::downing_strategy::QuorumOfSeedNodesStrategy;
-use cluster::messaging::messaging::Messaging;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use anyhow::anyhow;
 use tokio::net::TcpListener;
 use tokio::select;
 use tracing::{error, info, Level};
@@ -74,7 +73,7 @@ pub async fn main() -> anyhow::Result<()> {
 }
 
 
-async fn run_http_server<M: Messaging>(addr: SocketAddr, cluster: Arc<Cluster<M>>) -> anyhow::Result<()> {
+async fn run_http_server(addr: SocketAddr, cluster: Arc<Cluster>) -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr).await?;
     info!("Listening on http://{}", addr);
     loop {

@@ -10,12 +10,11 @@ use num_enum::TryFromPrimitive;
 use tokio::sync::mpsc;
 use tracing::error;
 
-use transport::safe_converter::*;
-
 use crate::cluster::cluster_state::{MembershipState, NodeReachability, NodeState};
 use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::buf::{put_string, try_get_string};
+use crate::util::safe_converter::{PrecheckedCast, SafeCast};
 
 pub(crate) const GOSSIP_MESSAGE_MODULE_ID: MessageModuleId = MessageModuleId::new(b"CtrGossp");
 

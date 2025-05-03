@@ -9,13 +9,13 @@ use rustc_hash::FxHasher;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 use tracing::{debug, trace};
-use transport::safe_converter::{PrecheckedCast, SafeCast};
 use super::gossip_messages::*;
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::{ClusterState, NodeState};
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::random::{Random, RngRandom};
+use crate::util::safe_converter::{PrecheckedCast, SafeCast};
 
 pub struct Gossip<R: Random> {
     config: Arc<ClusterConfig>,

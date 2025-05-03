@@ -1,9 +1,3 @@
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{broadcast, mpsc, RwLock};
-use tokio::{select, time};
-use tokio::sync::broadcast::error::RecvError;
-use tracing::debug;
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_events::ClusterEvent;
 use crate::cluster::cluster_state::ClusterState;
@@ -15,6 +9,12 @@ use crate::cluster::heartbeat::reachability_decider::ReachabilityDecider;
 use crate::cluster::heartbeat::unreachable_tracker::UnreachableTracker;
 use crate::messaging::messaging::{MessageSender, Messaging};
 use crate::messaging::node_addr::NodeAddr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::{select, time};
+use tracing::debug;
 
 mod heartbeat_messages;
 mod heartbeat_logic;
@@ -71,7 +71,7 @@ async fn on_heartbeat_message<M: MessageSender, D: ReachabilityDecider>(sender: 
             let response = HeartbeatMessage::HeartbeatResponse(HeartbeatResponseData {
                 timestamp_nanos: data.timestamp_nanos,
             });
-            messaging.send_raw_fire_and_forget(sender.socket_addr, Some(sender.unique), &response).await
+            messaging.send_to_node(sender, &response).await
                 .expect("HEARTBEAT should fit into a single packet");
         }
         HeartbeatMessage::HeartbeatResponse(data) => {
@@ -95,28 +95,28 @@ async fn do_heartbeat<M: MessageSender, D: ReachabilityDecider>(cluster_state: &
     let recipients = heart_beat.heartbeat_recipients(&*cluster_state.read().await);
     debug!("sending heartbeat message to {:?}", recipients);
     for recipient in recipients {
-        messaging.send_raw_fire_and_forget(recipient.socket_addr, Some(recipient.unique), &msg).await
+        messaging.send_to_node(recipient, &msg).await
             .expect("HEARTBEAT RESPONSE should fit into a single packet");
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::cluster::cluster_config::ClusterConfig;
+    use crate::cluster::cluster_events::ClusterEventNotifier;
+    use crate::cluster::cluster_state::MembershipState::Up;
+    use crate::cluster::cluster_state::*;
+    use crate::cluster::heartbeat::heartbeat_logic::HeartBeat;
+    use crate::cluster::heartbeat::heartbeat_messages::{HeartbeatData, HeartbeatMessage, HeartbeatResponseData};
+    use crate::cluster::heartbeat::reachability_decider::fixed_timeout::FixedTimeoutDecider;
+    use crate::cluster::heartbeat::{do_heartbeat, on_heartbeat_message, update_reachability_from_here};
+    use crate::node_state;
+    use crate::test_util::message::TrackingMockMessageSender;
+    use crate::test_util::node::test_node_addr_from_number;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::RwLock;
     use tokio::time;
-    use crate::cluster::cluster_config::ClusterConfig;
-    use crate::cluster::cluster_events::ClusterEventNotifier;
-    use crate::cluster::cluster_state::*;
-    use crate::cluster::cluster_state::MembershipState::Up;
-    use crate::cluster::heartbeat::heartbeat_logic::HeartBeat;
-    use crate::cluster::heartbeat::heartbeat_messages::{HeartbeatData, HeartbeatMessage, HeartbeatResponseData};
-    use crate::cluster::heartbeat::{do_heartbeat, on_heartbeat_message, update_reachability_from_here};
-    use crate::cluster::heartbeat::reachability_decider::fixed_timeout::FixedTimeoutDecider;
-    use crate::node_state;
-    use crate::test_util::message::TrackingMockMessageSender;
-    use crate::test_util::node::test_node_addr_from_number;
 
     #[tokio::test]
     async fn test_on_heartbeat_message_heartbeat() {

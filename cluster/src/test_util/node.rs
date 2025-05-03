@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use crate::messaging::node_addr::NodeAddr;
 
 
@@ -42,5 +42,12 @@ pub fn test_node_addr_from_number(number: u16) -> NodeAddr {
     NodeAddr {
         unique: number.into(),
         socket_addr: SocketAddrV4::new(Ipv4Addr::LOCALHOST, number).into(),
+    }
+}
+
+pub fn test_node_addr_from_number_ipv6(number: u16) -> NodeAddr {
+    NodeAddr {
+        unique: number.into(),
+        socket_addr: SocketAddrV6::new(Ipv6Addr::LOCALHOST, number, 0, 0).into(),
     }
 }

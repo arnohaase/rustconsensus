@@ -2,11 +2,11 @@ use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::time::Duration;
 use rustc_hash::FxHashSet;
-use transport::config::RudpConfig;
+use crate::messaging::udp::udp_config::UdpConfig;
 
 #[derive(Debug)]
 pub struct ClusterConfig {
-    pub transport_config: RudpConfig,
+    pub transport_config: UdpConfig,
 
     pub roles: BTreeSet<String>,
 
@@ -44,7 +44,7 @@ pub struct ClusterConfig {
 impl ClusterConfig {
     pub fn new(self_addr: SocketAddr, encryption_key: Option<Vec<u8>>) -> ClusterConfig {
         ClusterConfig {
-            transport_config: RudpConfig::default(self_addr, encryption_key),
+            transport_config: UdpConfig::default(self_addr, encryption_key),
             roles: Default::default(),
             num_gossip_partners: 3,
             gossip_with_differing_state_min_probability: 0.8,
