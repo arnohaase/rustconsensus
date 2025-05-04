@@ -49,7 +49,7 @@ impl NodeAddr {
     }
 
     pub fn ser(&self, buf: &mut impl BufMut) {
-        // unique part is u48, as per RUDP spec
+        //TODO unique part is u48, as per RUDP spec
         buf.put_u16((self.unique >> 32) as u16);
         buf.put_u32(self.unique as u32);
 

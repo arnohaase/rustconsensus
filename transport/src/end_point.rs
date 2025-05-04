@@ -229,6 +229,7 @@ impl EndPoint {
         self.buffer_pool.return_to_pool(buf);
     }
 
+    /// return `true` to keep processing the packet, `false` to discard it
     #[must_use]
     fn check_peer_generation(
         &self,
@@ -236,28 +237,25 @@ impl EndPoint {
         peer_addr: SocketAddr,
         new_peer_generation: u64,
     ) -> bool {
-        if let Some(prev) = self.peer_generations.get(&peer_addr) {
-            if prev == new_peer_generation {
-                true
-            }
-            else if prev < new_peer_generation {
-                debug!("peer {:?}: received packet for old generation {} - discarding", peer_addr, new_peer_generation);
-                false
-            }
-            else {
-                debug!("peer {:?} restarted (@{}), re-initializing local per-peer state", peer_addr, new_peer_generation);
-                self.peer_generations.update(|m| {m.insert(peer_addr, new_peer_generation); });
-                self.send_streams
-                    .update(|map| {
-                        map.retain(|(s, _), _| s != &peer_addr);
-                    });
-                receive_streams
-                    .retain(|(s, _), _| s != &peer_addr);
-                true
-            }
+        let prev = self.peer_generations.ensure_init(peer_addr, || new_peer_generation);
+        
+        if prev == new_peer_generation {
+            true
+        }
+        else if prev < new_peer_generation {
+            debug!("peer {:?}: received packet for old generation {} - discarding", peer_addr, new_peer_generation);
+            false
         }
         else {
-            self.peer_generations.update(|m| { m.insert(peer_addr, new_peer_generation); });
+            //NB: 'check_peer_generation() is called sequentially, so the following is not racy 
+            
+            debug!("peer {:?} restarted (@{}), re-initializing local per-peer state", peer_addr, new_peer_generation);
+            self.peer_generations.overwrite_entry(peer_addr, new_peer_generation);
+            self.send_streams
+                .remove_all(|(s,_)| s == &peer_addr);
+
+            receive_streams
+                .retain(|(s, _), _| s != &peer_addr);
             true
         }
     }
@@ -304,26 +302,19 @@ impl EndPoint {
     }
 
     async fn get_send_stream(&self, addr: SocketAddr, stream_id: u16) -> Arc<SendStream> {
-        if let Some(stream) = self.send_streams.get(&(addr, stream_id)) {
-            return stream;
-        };
-
-        debug!("initializing send stream {} for {:?}", stream_id, addr);
-        let stream = Arc::new(SendStream::new(
-            Arc::new(self.config.get_effective_send_stream_config(stream_id, self.encryption.as_ref())),
-            self.generation,
-            self.peer_generations.clone(),
-            stream_id,
-            self.get_send_pipeline(addr),
-            addr,
-            self.get_reply_to_addr(addr),
-            self.buffer_pool.clone(),
-        ));
-
-        self.send_streams.update(|map| {
-            map.insert((addr, stream_id), stream.clone());
-        });
-        stream
+        self.send_streams.ensure_init((addr, stream_id), || {
+            debug!("initializing send stream {} for {:?}", stream_id, addr);
+            Arc::new(SendStream::new(
+                Arc::new(self.config.get_effective_send_stream_config(stream_id, self.encryption.as_ref())),
+                self.generation,
+                self.peer_generations.clone(),
+                stream_id,
+                self.get_send_pipeline(addr),
+                addr,
+                self.get_reply_to_addr(addr),
+                self.buffer_pool.clone(),
+            ))
+        })
     }
 
     async fn handle_recv_sync(mut parse_buf: &[u8], send_stream: Arc<SendStream>) {

@@ -140,7 +140,7 @@ impl  UnreachableTracker {
             // This is a best effort to notify all affected nodes of the downing decision.
             //  We cannot reach all nodes anyway, and there may be network problems, so this is
             //  *not* a reliable notification - but it may help in the face of problems
-            messaging.send_raw_fire_and_forget(n.socket_addr, Some(n.unique), &GossipMessage::DownYourself).await
+            messaging.send_to_node(n, &GossipMessage::DownYourself).await
                 .expect("DownYourself should fit into a single packet");
         }
     }
@@ -152,18 +152,18 @@ mod tests {
     use crate::cluster::cluster_events::ClusterEventNotifier;
     use crate::cluster::cluster_state::MembershipState::Up;
     use crate::cluster::cluster_state::*;
+    use crate::cluster::gossip::gossip_messages::GossipMessage;
     use crate::cluster::heartbeat::downing_strategy::{DowningStrategyDecision, MockDowningStrategy};
     use crate::cluster::heartbeat::unreachable_tracker::UnreachableTracker;
     use crate::node_state;
     use crate::test_util::message::TrackingMockMessageSender;
     use crate::test_util::node::test_node_addr_from_number;
+    use rstest::rstest;
     use std::sync::Arc;
     use std::time::Duration;
-    use rstest::rstest;
     use tokio::runtime::Builder;
     use tokio::sync::RwLock;
     use tokio::time;
-    use crate::cluster::gossip::gossip_messages::GossipMessage;
 
     #[tokio::test(start_paused = true)]
     async fn test_update_unreachable_set() {

@@ -1,0 +1,9 @@
+todo
+----
+* apparently full reachability for a node keeps being propagated via gossip (but removed on merge?)
+    merging external node state
+    NodeState { addr: [127.0.0.1:9813@1746359334054], membership_state: Joining, roles: {}, reachability: {[127.0.0.1:9828@1746359334054]: true@4}, seen_by: {[127.0.0.1:9827@1746359334054], [127.0.0.1:9828@1746359334054], [127.0.0.1:9816@1746359334055]} }
+    into existing state
+    NodeState { addr: [127.0.0.1:9813@1746359334054], membership_state: Joining, roles: {}, reachability: {}, seen_by: {[127.0.0.1:9831@1746359334054]} }
+    2025-05-04T11:49:02.522391Z TRACE ThreadId(01) Cluster{n=21}: cluster::cluster::cluster_events: event: NodeUpdated(NodeUpdatedData { addr: [127.0.0.1:9813@1746359334054] })
+

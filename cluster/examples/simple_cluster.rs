@@ -11,9 +11,9 @@ use cluster::cluster::heartbeat::downing_strategy::QuorumOfSeedNodesStrategy;
 
 fn init_logging() {
     tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
+        // .with_max_level(Level::INFO)
         // .with_max_level(Level::DEBUG)
-        // .with_max_level(Level::TRACE)
+        .with_max_level(Level::TRACE)
         .with_thread_ids(true)
         .try_init()
         .ok();
@@ -25,6 +25,7 @@ fn addr(n: usize) -> SocketAddr {
 
 #[tracing::instrument(name="Cluster", skip(num_nodes))]
 async fn new_node(num_nodes: usize, n: usize) -> anyhow::Result<()> {
+    // let config = ClusterConfig::new(addr(n), None);
     let config = ClusterConfig::new(addr(n), Some(b"1234567_1234567_1234567_1234567_".to_vec()));
     let cluster = Cluster::new(Arc::new(config)).await?;
 

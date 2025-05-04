@@ -14,19 +14,19 @@ use crate::cluster::heartbeat::run_heartbeat;
 use crate::cluster::join_messages::{JoinMessage, JoinMessageModule};
 use crate::messaging::messaging::{MessageSender, Messaging};
 use crate::messaging::node_addr::NodeAddr;
-use crate::messaging::rudp::RudpMessagingImpl;
+use crate::messaging::udp::udp_messaging::UdpMessaging;
 
 /// This is the cluster's public API
-pub struct Cluster<M: Messaging>  {
+pub struct Cluster  {
     pub config: Arc<ClusterConfig>,
-    pub messaging: Arc<M>,
+    pub messaging: Arc<UdpMessaging>,
     event_notifier: Arc<ClusterEventNotifier>,
     cluster_state: Arc<RwLock<ClusterState>>,
 }
 
-impl Cluster<RudpMessagingImpl> {
-    pub async fn new(config: Arc<ClusterConfig>) -> anyhow::Result<Cluster<RudpMessagingImpl>> {
-        let messaging = Arc::new(RudpMessagingImpl::new(config.transport_config.clone()).await?);
+impl Cluster {
+    pub async fn new(config: Arc<ClusterConfig>) -> anyhow::Result<Cluster> {
+        let messaging = Arc::new(UdpMessaging::new(&config.transport_config).await?);
         let myself = messaging.get_self_addr();
         let event_notifier = Arc::new(ClusterEventNotifier::new());
         let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), event_notifier.clone())));
@@ -43,7 +43,7 @@ impl Cluster<RudpMessagingImpl> {
         })
     }
 }
-impl <M: Messaging> Cluster<M> {
+impl Cluster {
     pub async fn run(&self, discovery_strategy: impl DiscoveryStrategy, downing_strategy: impl DowningStrategy + 'static) -> anyhow::Result<()> {
         //TODO make discovery strategy and downing strategy part of the cluster's config - that should include seed nodes
 

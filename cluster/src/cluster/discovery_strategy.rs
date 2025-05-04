@@ -186,7 +186,7 @@ async fn send_join_message_loop<M: MessageSender>(other_seed_nodes: &[SocketAddr
     loop {
         for seed_node in other_seed_nodes {
             debug!("trying to join cluster at {}", seed_node); //TODO clearer logging
-            messaging.send_raw_fire_and_forget(seed_node.clone(), None, &join_msg).await
+            messaging.send_to_addr(seed_node.clone(), &join_msg).await
                 .expect("JOIN should fit into a single packet");
         }
         sleep(config.discovery_seed_node_retry_interval).await;
@@ -253,7 +253,7 @@ mod tests {
         let cluster_state = Arc::new(RwLock::new(cluster_state));
 
         let mut message_sender = MockMessageSender::new();
-        message_sender.expect_send_raw_fire_and_forget::<JoinMessage>()
+        message_sender.expect_send_to_addr::<JoinMessage>()
             .never();
 
         let discovery_result = StartAsClusterDiscoveryStrategy{}

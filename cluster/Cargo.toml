@@ -16,9 +16,11 @@ tokio = { version = "*", features = ["full", "test-util"]}
 tracing-subscriber = "*"
 
 [dependencies]
-transport = { path = "../transport" }
+#transport = { path = "../transport" }
 
 #TODO version numbers
+aead = { version = "*", features = ["bytes"] }
+aes-gcm = "*"
 anyhow = "*"
 async-trait = "*"
 bit-set = "*"
