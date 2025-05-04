@@ -86,8 +86,8 @@ impl UdpMessaging {
             return atomic_counter.fetch_add(1, Ordering::AcqRel);
         }
         
-        sequence_numbers.insert(to, AtomicU64::new(1));
-        0
+        sequence_numbers.insert(to, AtomicU64::new(0));
+        1
     }
 
     async fn do_send<T: Message>(&self, to_addr: SocketAddr, to_unique: Option<u64>, msg: &T) -> anyhow::Result<()> {
@@ -116,7 +116,7 @@ impl UdpMessaging {
         Ok(())
     }
     
-    async fn do_on_raw_message(&self, message: BytesMut) {
+    async fn do_on_raw_message(&self, mut message: BytesMut) {
         if let Err(e) = self._do_on_raw_message(message).await {
             error!("error unwrapping message: {}", e);
         }
@@ -124,7 +124,7 @@ impl UdpMessaging {
     
     async fn _do_on_raw_message(&self, mut buf: BytesMut) -> anyhow::Result<()> {
         self.encryption.decrypt_buffer(&mut buf)?; //TODO error message
-        
+
         let mut decrypted = buf.as_ref();
         let parse_buf = &mut decrypted;
         let header = UdpMessageHeader::deser(parse_buf)?;
@@ -174,12 +174,12 @@ impl Messaging for UdpMessaging {
         }
 
     async fn recv(&self) {
+        let mut buf = vec![0u8; 16*1024*1024]; //TODO use configured max message size
         loop {
-            let mut buf = BytesMut::new();
-            match self.receive_socket.recv_buf(&mut buf).await {
+            match self.receive_socket.recv(buf.as_mut()).await {
                 Ok(n) => {
                     debug!("received raw message, len {}", n);
-                    self.do_on_raw_message(buf).await;
+                    self.do_on_raw_message(BytesMut::from(&buf[..n])).await;
                 }
                 Err(e) => {
                     error!("error receiving raw message: {}", e);

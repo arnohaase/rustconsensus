@@ -25,7 +25,8 @@ fn addr(n: usize) -> SocketAddr {
 
 #[tracing::instrument(name="Cluster", skip(num_nodes))]
 async fn new_node(num_nodes: usize, n: usize) -> anyhow::Result<()> {
-    let config = ClusterConfig::new(addr(n), Some(b"1234567_1234567_1234567_1234567_".to_vec()));
+    let config = ClusterConfig::new(addr(n), None);
+    // let config = ClusterConfig::new(addr(n), Some(b"1234567_1234567_1234567_1234567_".to_vec()));
     let cluster = Cluster::new(Arc::new(config)).await?;
 
     let seed_nodes = (0..num_nodes).map(|n| addr(n)).collect::<Vec<_>>();
@@ -43,31 +44,31 @@ pub async fn main() -> anyhow::Result<()> {
     info!("simple cluster demo");
 
     select! {
-        _ = new_node(25, 0) => {}
-        _ = new_node(25, 1) => {}
-        _ = new_node(25, 2) => {}
-        _ = new_node(25, 3) => {}
-        _ = new_node(25, 4) => {}
-        _ = new_node(25, 5) => {}
-        _ = new_node(25, 6) => {}
-        _ = new_node(25, 7) => {}
-        _ = new_node(25, 8) => {}
-        _ = new_node(25, 9) => {}
-        _ = new_node(25, 10) => {}
-        _ = new_node(25, 11) => {}
-        _ = new_node(25, 12) => {}
-        _ = new_node(25, 13) => {}
-        _ = new_node(25, 14) => {}
-        _ = new_node(25, 15) => {}
-        _ = new_node(25, 16) => {}
-        _ = new_node(25, 17) => {}
-        _ = new_node(25, 18) => {}
-        _ = new_node(25, 19) => {}
-        _ = new_node(25, 20) => {}
-        _ = new_node(25, 21) => {}
-        _ = new_node(25, 22) => {}
-        _ = new_node(25, 23) => {}
-        _ = new_node(25, 24) => {}
+        _ = new_node(3, 0) => {}
+        _ = new_node(3, 1) => {}
+        _ = new_node(3, 2) => {}
+        // _ = new_node(25, 3) => {}
+        // _ = new_node(25, 4) => {}
+        // _ = new_node(25, 5) => {}
+        // _ = new_node(25, 6) => {}
+        // _ = new_node(25, 7) => {}
+        // _ = new_node(25, 8) => {}
+        // _ = new_node(25, 9) => {}
+        // _ = new_node(25, 10) => {}
+        // _ = new_node(25, 11) => {}
+        // _ = new_node(25, 12) => {}
+        // _ = new_node(25, 13) => {}
+        // _ = new_node(25, 14) => {}
+        // _ = new_node(25, 15) => {}
+        // _ = new_node(25, 16) => {}
+        // _ = new_node(25, 17) => {}
+        // _ = new_node(25, 18) => {}
+        // _ = new_node(25, 19) => {}
+        // _ = new_node(25, 20) => {}
+        // _ = new_node(25, 21) => {}
+        // _ = new_node(25, 22) => {}
+        // _ = new_node(25, 23) => {}
+        // _ = new_node(25, 24) => {}
     }
 
     Ok(())

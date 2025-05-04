@@ -1,6 +1,6 @@
 use crate::messaging::message_module::MessageModuleId;
 use crate::messaging::node_addr::NodeAddr;
-use bytes::{Buf, BufMut};
+use bytes::{Buf, BufMut, BytesMut};
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct UdpMessageHeader {
@@ -15,7 +15,7 @@ pub struct UdpMessageHeader {
 }
 
 impl UdpMessageHeader {
-    pub fn ser(&self, buf: &mut impl BufMut) {
+    pub fn ser(&self, buf: &mut BytesMut) {
         self.sender_addr.ser(buf);
         buf.put_u64(self.recipient_unique_part.unwrap_or(0));
         buf.put_u64(self.sequence_number);
@@ -53,8 +53,11 @@ mod tests {
     fn test_ser_deser(#[case] header: UdpMessageHeader) {
         let mut buf = BytesMut::new();
         header.ser(&mut buf);
-        let deser = UdpMessageHeader::deser(&mut buf).unwrap();
+
+        let mut b: &[u8] = &buf;
+        let deser = UdpMessageHeader::deser(&mut b).unwrap();
         
+        assert!(b.is_empty());
         assert_eq!(header, deser);
     }
 }
