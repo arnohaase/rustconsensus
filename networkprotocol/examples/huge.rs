@@ -1,13 +1,13 @@
-use transport::end_point::EndPoint;
-use transport::message_dispatcher::MessageDispatcher;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, span, Instrument, Level};
-use transport::config::RudpConfig;
+use networkprotocol::config::RudpConfig;
+use networkprotocol::end_point::EndPoint;
+use networkprotocol::message_dispatcher::MessageDispatcher;
 
 fn init_logging() {
     tracing_subscriber::fmt()

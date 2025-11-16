@@ -116,7 +116,7 @@ impl UdpMessaging {
         Ok(())
     }
     
-    async fn do_on_raw_message(&self, mut message: BytesMut) {
+    async fn do_on_raw_message(&self, message: BytesMut) {
         if let Err(e) = self._do_on_raw_message(message).await {
             error!("error unwrapping message: {}", e);
         }

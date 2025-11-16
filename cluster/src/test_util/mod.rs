@@ -17,8 +17,9 @@ use tracing::Level;
 fn init_test_logging() {
     tracing_subscriber::fmt()
         .with_test_writer()
-        // .with_max_level(Level::DEBUG)
-        .with_max_level(Level::TRACE)
+        .with_thread_ids(true)
+        .with_max_level(Level::DEBUG)
+        // .with_max_level(Level::TRACE)
         .try_init()
         .ok();
 }

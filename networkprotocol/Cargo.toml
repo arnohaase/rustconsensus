@@ -1,5 +1,5 @@
 [package]
-name = "transport"
+name = "networkprotocol"
 edition.workspace = true
 version.workspace = true
 

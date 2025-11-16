@@ -1,6 +1,6 @@
 use bytes::BufMut;
-use transport::buffers::encryption::{Aes256GcmEncryption, RudpEncryption};
-use transport::buffers::fixed_buffer::FixedBuf;
+use networkprotocol::buffers::encryption::{Aes256GcmEncryption, RudpEncryption};
+use networkprotocol::buffers::fixed_buffer::FixedBuf;
 
 fn main() {
     let mut buf = FixedBuf::new(1000);

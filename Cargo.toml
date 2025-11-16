@@ -2,7 +2,7 @@
 [workspace]
 members = [
     "cluster",
-    "transport",
+    "networkprotocol",
 ]
 resolver = "2"
 
