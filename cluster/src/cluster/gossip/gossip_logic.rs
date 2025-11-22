@@ -213,7 +213,7 @@ impl <R: Random> Gossip<R> {
 
         // my own data for nodes that hash differently from the gossip partner's hash
         let differing: Vec<NodeState> = own_digest.nodes.iter()
-            .filter(|(addr, &hash)| Some(&hash) != other_digest.nodes.get(addr))
+            .filter(|(addr, hash)| Some(*hash) != other_digest.nodes.get(addr))
             .flat_map(|(addr, _)| cluster_state.get_node_state(addr))
             .cloned()
             .collect();
