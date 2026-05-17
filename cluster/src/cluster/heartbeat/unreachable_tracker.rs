@@ -278,7 +278,6 @@ mod tests {
 
         messaging.assert_message_sent(test_node_addr_from_number(1), GossipMessage::DownYourself).await;
         messaging.assert_message_sent(test_node_addr_from_number(3), GossipMessage::DownYourself).await;
-        messaging.assert_message_sent(test_node_addr_from_number(2), GossipMessage::DownYourself).await;
         messaging.assert_no_remaining_messages().await;
 
         let membership_state = cluster_state.read().await
@@ -289,7 +288,7 @@ mod tests {
         let membership_state = cluster_state.read().await
             .get_node_state(&test_node_addr_from_number(2)).unwrap()
             .membership_state;
-        assert_eq!(membership_state, MembershipState::Down);
+        assert_eq!(membership_state, MembershipState::Up);
 
         let membership_state = cluster_state.read().await
             .get_node_state(&test_node_addr_from_number(3)).unwrap()

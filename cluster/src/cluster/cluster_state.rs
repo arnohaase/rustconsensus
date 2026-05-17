@@ -279,10 +279,11 @@ impl ClusterState {
     }
 
     /// when a node is removed from gossip (i.e. it becomes 'Down' or 'Removed'), it needs to be
-    ///  removed from all 'seen by' sets
+    ///  removed from all 'seen by' sets and its reachability observations must be cleaned up
     fn on_node_removed_from_gossip(&mut self, addr: &NodeAddr) {
         for s in self.nodes_with_state.values_mut() {
             s.seen_by.remove(addr);
+            s.reachability.remove(addr);
         }
     }
 
@@ -897,13 +898,13 @@ mod tests {
     #[case::single_reg_them(vec![node_state!(1[]:Up->[]@[1])], DownThem, vec![], vec![node_state!(1[]:Up->[]@[1])], vec![])]
     #[case::two_reg_us(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], DownUs, vec![1,2], vec![node_state!(1[]:Down->[]@[]), node_state!(2[]:Down->[]@[])], vec![test_updated_evt(1), test_state_evt(1, Up, Down), test_updated_evt(2), test_state_evt(2, Up, Down)])]
     #[case::two_reg_them(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], DownThem, vec![], vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1,2])], vec![])]
-    #[case::split_us(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[1:false@5]@[1])], DownUs, vec![1], vec![node_state!(1[]:Down->[]@[]), node_state!(2[]:Up->[1:false@5]@[])], vec![test_updated_evt(1), test_state_evt(1, Up, Down)])]
+    #[case::split_us(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[1:false@5]@[1])], DownUs, vec![1], vec![node_state!(1[]:Down->[]@[]), node_state!(2[]:Up->[]@[])], vec![test_updated_evt(1), test_state_evt(1, Up, Down)])]
     #[case::split_them(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[1:false@5]@[1])], DownThem, vec![2], vec![node_state!(1[]:Up->[]@[1]), node_state!(2[]:Down->[1:false@5]@[1])], vec![test_updated_evt(2), test_state_evt(2, Up, Down)])]
-    #[case::explicit_us(vec![node_state!(1[]:Up->[2:true@6]@[1,2]), node_state!(2[]:Up->[1:false@5]@[1])], DownUs, vec![1], vec![node_state!(1[]:Down->[2:true@6]@[]), node_state!(2[]:Up->[1:false@5]@[])], vec![test_updated_evt(1), test_state_evt(1, Up, Down)])]
-    #[case::explicit_them(vec![node_state!(1[]:Up->[2:true@6]@[1,2]), node_state!(2[]:Up->[1:false@5]@[1])], DownThem, vec![2], vec![node_state!(1[]:Up->[2:true@6]@[1]), node_state!(2[]:Down->[1:false@5]@[1])], vec![test_updated_evt(2), test_state_evt(2, Up, Down)])]
+    #[case::explicit_us(vec![node_state!(1[]:Up->[2:true@6]@[1,2]), node_state!(2[]:Up->[1:false@5]@[1])], DownUs, vec![1], vec![node_state!(1[]:Down->[2:true@6]@[]), node_state!(2[]:Up->[]@[])], vec![test_updated_evt(1), test_state_evt(1, Up, Down)])]
+    #[case::explicit_them(vec![node_state!(1[]:Up->[2:true@6]@[1,2]), node_state!(2[]:Up->[1:false@5]@[1])], DownThem, vec![2], vec![node_state!(1[]:Up->[]@[1]), node_state!(2[]:Down->[1:false@5]@[1])], vec![test_updated_evt(2), test_state_evt(2, Up, Down)])]
     // somewhat pathological corner case - more to check robustness than anything else
     #[case::two_unreachable_us(vec![node_state!(1[]:Up->[2:false@3]@[1,2]), node_state!(2[]:Up->[1:false@4]@[1,2])], DownUs, vec![], vec![node_state!(1[]:Up->[2:false@3]@[1,2]), node_state!(2[]:Up->[1:false@4]@[1,2])], vec![])]
-    #[case::two_unreachable_them(vec![node_state!(1[]:Up->[2:false@3]@[1,2]), node_state!(2[]:Up->[1:false@4]@[1,2])], DownThem, vec![1,2], vec![node_state!(1[]:Down->[2:false@3]@[]), node_state!(2[]:Down->[1:false@4]@[])], vec![test_updated_evt(1), test_state_evt(1, Up, Down), test_updated_evt(2), test_state_evt(2, Up, Down)])]
+    #[case::two_unreachable_them(vec![node_state!(1[]:Up->[2:false@3]@[1,2]), node_state!(2[]:Up->[1:false@4]@[1,2])], DownThem, vec![1,2], vec![node_state!(1[]:Down->[]@[]), node_state!(2[]:Down->[]@[])], vec![test_updated_evt(1), test_state_evt(1, Up, Down), test_updated_evt(2), test_state_evt(2, Up, Down)])]
     fn test_apply_downing_decision(
         #[case] initial_nodes: Vec<NodeState>,
         #[case] downing_strategy_decision: DowningStrategyDecision,
@@ -1064,8 +1065,8 @@ mod tests {
     #[case::joining_not_converged(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Joining->[]@[1])], Some(1), vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Joining->[]@[1])], vec![])]
     #[case::weakly_up(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:WeaklyUp->[]@[1,2])], Some(1), vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Up->[]@[1])], vec![test_updated_evt(2), test_state_evt(2, WeaklyUp, Up)])]
     #[case::leaving(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Leaving->[]@[1,2])], Some(1), vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Exiting->[]@[1])], vec![test_updated_evt(2), test_state_evt(2, Leaving, Exiting)])]
-    #[case::exiting(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Exiting->[]@[1,2])], Some(1), vec![node_state!(1[]:Up->[]@[1]), node_state!(2[]:Removed->[]@[1])], vec![test_updated_evt(2), test_state_evt(2, Exiting, Removed)])]
-    #[case::down(vec![node_state!(1[]:Up->[]@[1]), node_state!(2[]:Down->[]@[1])], Some(1), vec![node_state!(1[]:Up->[]@[1]), node_state!(2[]:Removed->[]@[1])], vec![test_updated_evt(2), test_state_evt(2, Down, Removed)])]
+    #[case::exiting(vec![node_state!(1[]:Up->[]@[1,2]), node_state!(2[]:Exiting->[]@[1,2])], Some(1), vec![node_state!(1[]:Up->[]@[1]), node_state!(2[]:Removed->[]@[1])], vec![test_updated_evt(2), test_state_evt(2, Exiting, Removed), test_removed_evt(2)])]
+    #[case::down(vec![node_state!(1[]:Up->[]@[1]), node_state!(2[]:Down->[]@[1])], Some(1), vec![node_state!(1[]:Up->[]@[1]), node_state!(2[]:Removed->[]@[1])], vec![test_updated_evt(2), test_state_evt(2, Down, Removed), test_removed_evt(2)])]
     #[case::not_leader(vec![node_state!(0[]:Up->[]@[0,1,2]), node_state!(1[]:Up->[]@[1,2,3]), node_state!(2[]:Joining->[]@[1,2,3])],
                        None,
                        vec![node_state!(0[]:Up->[]@[0,1,2]), node_state!(1[]:Up->[]@[1,2,3]), node_state!(2[]:Joining->[]@[1,2,3])],
@@ -1145,12 +1146,14 @@ mod tests {
             let myself = test_node_addr_from_number(1);
             let mut cluster_state = ClusterState::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)), Arc::new(ClusterEventNotifier::new()));
 
-            // node 3 is in node 2's 'seen by' set
+            // node 3 is in node 2's 'seen by' set, and node 3 reported node 2 as unreachable
             cluster_state.merge_node_state(NodeState {
                 addr: test_node_addr_from_number(2),
                 membership_state: Up,
                 roles: Default::default(),
-                reachability: Default::default(),
+                reachability: BTreeMap::from([
+                    (test_node_addr_from_number(3), NodeReachability { counter_of_reporter: 5, is_reachable: false }),
+                ]),
                 seen_by: [test_node_addr_from_number(1), test_node_addr_from_number(3)].into(),
             }).await;
 
@@ -1171,8 +1174,15 @@ mod tests {
                     .seen_by,
                 BTreeSet::from([test_node_addr_from_number(1), test_node_addr_from_number(3)])
             );
+            assert_eq!(
+                cluster_state.nodes_with_state.get(&test_node_addr_from_number(2))
+                    .unwrap()
+                    .reachability.get(&test_node_addr_from_number(3)),
+                Some(&NodeReachability { counter_of_reporter: 5, is_reachable: false }),
+            );
 
             // promote node 3 to terminal state -> should remove it from node 2's 'seen by' set
+            //  and also remove node 3's reachability observation from node 2
             cluster_state.merge_node_state(NodeState {
                 addr: test_node_addr_from_number(3),
                 membership_state: terminal_state,
@@ -1186,6 +1196,13 @@ mod tests {
                     .unwrap()
                     .seen_by,
                 BTreeSet::from([test_node_addr_from_number(1)])
+            );
+            assert_eq!(
+                cluster_state.nodes_with_state.get(&test_node_addr_from_number(2))
+                    .unwrap()
+                    .reachability.get(&test_node_addr_from_number(3)),
+                None,
+                "node 3's reachability observation should be removed when node 3 leaves gossip",
             );
         })
     }
