@@ -150,7 +150,6 @@ impl  UnreachableTracker {
 mod tests {
     use crate::cluster::cluster_config::ClusterConfig;
     use crate::cluster::cluster_events::ClusterEventNotifier;
-    use crate::cluster::cluster_state::MembershipState::Up;
     use crate::cluster::cluster_state::*;
     use crate::cluster::gossip::gossip_messages::GossipMessage;
     use crate::cluster::heartbeat::downing_strategy::{DowningStrategyDecision, MockDowningStrategy};
@@ -164,6 +163,7 @@ mod tests {
     use tokio::runtime::Builder;
     use tokio::sync::RwLock;
     use tokio::time;
+    use crate::cluster::cluster_state::MembershipState::Up;
 
     #[tokio::test(start_paused = true)]
     async fn test_update_unreachable_set() {
@@ -278,6 +278,7 @@ mod tests {
 
         messaging.assert_message_sent(test_node_addr_from_number(1), GossipMessage::DownYourself).await;
         messaging.assert_message_sent(test_node_addr_from_number(3), GossipMessage::DownYourself).await;
+        messaging.assert_message_sent(test_node_addr_from_number(2), GossipMessage::DownYourself).await;
         messaging.assert_no_remaining_messages().await;
 
         let membership_state = cluster_state.read().await
@@ -288,7 +289,7 @@ mod tests {
         let membership_state = cluster_state.read().await
             .get_node_state(&test_node_addr_from_number(2)).unwrap()
             .membership_state;
-        assert_eq!(membership_state, MembershipState::Up);
+        assert_eq!(membership_state, MembershipState::Down);
 
         let membership_state = cluster_state.read().await
             .get_node_state(&test_node_addr_from_number(3)).unwrap()
