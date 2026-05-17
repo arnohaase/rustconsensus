@@ -6,4 +6,31 @@ todo
     into existing state
     NodeState { addr: [127.0.0.1:9813@1746359334054], membership_state: Joining, roles: {}, reachability: {}, seen_by: {[127.0.0.1:9831@1746359334054]} }
     2025-05-04T11:49:02.522391Z TRACE ThreadId(01) Cluster{n=21}: cluster::cluster::cluster_events: event: NodeUpdated(NodeUpdatedData { addr: [127.0.0.1:9813@1746359334054] })
-
+* review 2026-05-17
+  * DownYourself message is accepted without authorization
+  * gossip: roles are part of summary digest but not detailed digest - immutability of roles is not enforced
+  * on_summary_digest() (gossip_logic.rs, ca. #200) releases lock between computing and sending - "partner receives mutually inconsistent snapshot" (on_detailed_digest avaoids this)
+  * gossip_logic.rs#296 uses FxHasher + 32bit nonce -> vulnerable to adversarial collisions
+  * test_ser_gossip_message deserializes but does not assert equality
+  * QuorumOfRoleStrategy logs arguments in wrong order
+  * heartbeat_logic.rs#113-117: reference_time reset on 128->64 bit leaves in-flight responses with negative RTT that are dropped; no registry cleanup
+  * node_addr.rs: unique is only 48bit on the wire - todo comment is present
+  * gossip_logic.rs#136-170: three locks, writers can interleave creating mutually inconsistent state
+  * on_differing_and_missing_nodes() holds lock across N merge_node_state() calls, each notifying observers. serialilzes gossip while events fan out (?)
+  * unreachability_tracker: wakeup race between stability and thrashing tracker threads
+  * heartbeat.rs#57-58: ClusterEvent broadcast is logged but not recovered. UnreachableTracker then has a stale view of the unreachable set with no resync mechanism
+  * cluster.rs#50-54: TODO comment at #51; recv() returning Ok(()) ends the cluster
+  * gossip/mod.rs#99, 110, 116, 122: any send error panics the gossip loop, not just oversize ones
+  * heartbeat/mod.rs#75, 99: same for heartbeat
+  * unreachable_tracker.rs#152: a partitioned target trivially fails, causing panic
+  * discovery_strategy.rs#190: "JOIN should fit into a single packet"
+  * udp_encrytion.rs - panic on encryption failure
+  * ClusterState: use snapshotting instead of fine-grained locks for consistency; use single-writer actor pattern (mpsc) instead of current RwLock
+  * split cluster_state.rs - >1400 LOC in one file
+  * next_sequence_number off-by-one (udp_messaging 75-93)
+  * observability
+    * Metrics trait or tracing spans
+    * gossip cycles (push vs. pull, partner count, divergence %, ...)
+    * heartbeat RTT (histogram)
+    * broadcast lag
+    * downing decisions and their inputs
