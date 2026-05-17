@@ -9,7 +9,7 @@ use tokio::{select, spawn, time};
 use tracing::{debug, info, instrument, trace, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
+use crate::cluster::cluster_events::{ClusterEvent, ClusterEventNotifier, LeaderChangedData, NodeAddedData, NodeRemovedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
 use crate::cluster::heartbeat::downing_strategy::DowningStrategyDecision;
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::crdt::{Crdt, CrdtOrdering};
@@ -220,6 +220,12 @@ impl ClusterState {
         }
 
         event_notifier.send_event(ClusterEvent::NodeUpdated(NodeUpdatedData { addr: s.addr }));
+        if old_state.is_none() {
+            event_notifier.send_event(ClusterEvent::NodeAdded(NodeAddedData {
+                addr: s.addr,
+                state: s.membership_state
+            }));
+        }
         if let Some(old_state) = old_state {
             if old_state != s.membership_state {
                 event_notifier.send_event(ClusterEvent::NodeStateChanged(NodeStateChangedData {
@@ -227,13 +233,13 @@ impl ClusterState {
                     old_state,
                     new_state: s.membership_state,
                 }));
+
+                if s.membership_state == MembershipState::Removed {
+                    event_notifier.send_event(ClusterEvent::NodeRemoved(NodeRemovedData {
+                        addr: s.addr,
+                    }));
+                }
             }
-        }
-        else {
-            event_notifier.send_event(ClusterEvent::NodeAdded(NodeAddedData {
-                addr: s.addr,
-                state: s.membership_state
-            }));
         }
         if was_reachable != s.is_reachable() {
             event_notifier.send_event(ClusterEvent::ReachabilityChanged(ReachabilityChangedData {

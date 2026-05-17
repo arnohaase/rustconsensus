@@ -33,7 +33,7 @@ impl Cluster {
 
         debug!("registering cluster join module");
         let join_messaging = JoinMessageModule::new(cluster_state.clone());
-        messaging.register_module(join_messaging.clone());
+        messaging.register_module(join_messaging.clone()).await;
 
         Ok(Cluster {
             config,
@@ -71,7 +71,7 @@ impl Cluster {
         }
 
         debug!("deregistering cluster join module");
-        self.messaging.deregister_module(JoinMessage::JOIN_MESSAGE_MODULE_ID);
+        self.messaging.deregister_module(JoinMessage::JOIN_MESSAGE_MODULE_ID).await;
 
         Ok(())
     }

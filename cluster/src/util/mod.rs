@@ -1,4 +1,3 @@
-pub mod atomic_map;
 pub mod buf;
 pub mod crdt;
 pub mod random;

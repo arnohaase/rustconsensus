@@ -20,6 +20,7 @@ tracing-subscriber = "*"
 aead = { version = "*", features = ["bytes"] }
 aes-gcm = "*"
 anyhow = "*"
+arc-swap = "*"
 async-trait = "*"
 bit-set = "*"
 bytemuck = "*"

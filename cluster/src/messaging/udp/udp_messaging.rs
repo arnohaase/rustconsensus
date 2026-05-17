@@ -11,15 +11,16 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
+use arc_swap::ArcSwap;
 use rustc_hash::FxHashMap;
 use tokio::net::UdpSocket;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, warn};
-use crate::util::atomic_map::AtomicMap;
 use crate::util::safe_converter::PrecheckedCast;
 
 pub struct UdpMessaging {
-    message_modules: Arc<AtomicMap<MessageModuleId, Arc<dyn MessageModule>>>,
+    message_modules: ArcSwap<FxHashMap<MessageModuleId, Arc<dyn MessageModule>>>,
+    message_modules_write_lock: Mutex<()>,
     self_addr: NodeAddr,
     receive_socket: UdpSocket,
     ipv4_send_socket: Arc<UdpSocket>,
@@ -46,7 +47,8 @@ impl UdpMessaging {
         };
 
         Ok(UdpMessaging {
-            message_modules: Arc::new(Default::default()),
+            message_modules: ArcSwap::from_pointee(FxHashMap::default()),
+            message_modules_write_lock: Mutex::new(()),
             self_addr: NodeAddr {
                 unique: Self::generation_from_timestamp()?,
                 socket_addr: config.self_addr,
@@ -142,7 +144,7 @@ impl UdpMessaging {
     }
     
     fn get_message_module(&self, id: MessageModuleId) -> Option<Arc<dyn MessageModule>> {
-        self.message_modules.get(&id)
+        self.message_modules.load().get(&id).cloned()
     }
 }
 
@@ -163,14 +165,26 @@ impl MessageSender for UdpMessaging {
 
 #[async_trait]
 impl Messaging for UdpMessaging {
-        fn register_module(&self, message_module: Arc<dyn MessageModule>) {
-            self.message_modules
-                .ensure_init(message_module.id(), || message_module.clone());
+        async fn register_module(&self, message_module: Arc<dyn MessageModule>) {
+            let _guard = self.message_modules_write_lock.lock().await;
+
+            let mut map = self.message_modules.load()
+                .as_ref()
+                .clone();
+            map.insert(message_module.id(), message_module);
+
+            self.message_modules.store(Arc::new(map));
         }
     
-        fn deregister_module(&self, id: MessageModuleId) {
-            self.message_modules
-                .remove_all(|k| k == &id);
+        async fn deregister_module(&self, id: MessageModuleId) {
+            let _guard = self.message_modules_write_lock.lock().await;
+
+            let mut map = self.message_modules.load()
+                .as_ref()
+                .clone();
+            map.remove(&id);
+
+            self.message_modules.store(Arc::new(map));
         }
 
     async fn recv(&self) {

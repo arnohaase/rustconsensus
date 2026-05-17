@@ -32,7 +32,7 @@ pub async fn run_heartbeat<M: Messaging>(config: Arc<ClusterConfig>, messaging: 
     let (send, mut recv) = mpsc::channel(1024);
 
     let heartbeat_message_module = HeartbeatMessageModule::new(send);
-    messaging.register_module(heartbeat_message_module.clone());
+    messaging.register_module(heartbeat_message_module.clone()).await;
 
     let mut update_reachability_ticks = time::interval(Duration::from_millis(10)); //TODO configurable?
     let mut heartbeat_ticks = time::interval(config.heartbeat_interval);

@@ -22,7 +22,7 @@ pub trait MessageSender: Debug + Send + Sync + 'static {
 
 #[async_trait]
 pub trait Messaging: MessageSender {
-    fn register_module(&self, message_module: Arc<dyn MessageModule>);
-    fn deregister_module(&self, id: MessageModuleId);
+    async fn register_module(&self, message_module: Arc<dyn MessageModule>);
+    async fn deregister_module(&self, id: MessageModuleId);
     async fn recv(&self);
 }
