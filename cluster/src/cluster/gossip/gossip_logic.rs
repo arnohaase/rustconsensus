@@ -437,7 +437,7 @@ mod tests {
     #[case(0.9, vec![5,6], |msg| {matches!(msg, GossipMessage::GossipSummaryDigest(_))})]
     fn test_gossip_partners(#[case] random_f64: f64, #[case] expected_addrs: Vec<u16>, #[case] expected_message: impl Fn(GossipMessage) -> bool) {
         let expected_addrs = expected_addrs.into_iter()
-            .map(|n| (test_node_addr_from_number(n)))
+            .map(|n| test_node_addr_from_number(n))
             .collect::<Vec<_>>();
 
         let rt = Builder::new_current_thread().enable_all().build().unwrap();

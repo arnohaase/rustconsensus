@@ -155,7 +155,7 @@ impl ClusterState {
         }
 
         to_be_downed
-        //TODO shut down this node if state is 'down' or 'Removed' + special handling if this is the last node
+        //TODO shut down this node if state is 'Down' or 'Removed' + special handling if this is the last node
     }
 
     /// extracted as API for use by [super::heartbeat::downing_strategy::DowningStrategy] implementations

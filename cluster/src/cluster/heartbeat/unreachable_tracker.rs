@@ -5,7 +5,7 @@ use rustc_hash::FxHashSet;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterState;
@@ -84,7 +84,7 @@ impl  UnreachableTracker {
             self.stability_period_handle = Some(tokio::spawn(async move {
                 time::sleep(stability_period).await;
 
-                info!("unreachble set {:?} remained stable for {:?}: deferring to downing strategy {:?} for a decision", unreachable_nodes, stability_period, downing_strategy);
+                info!("unreachable set {:?} remained stable for {:?}: deferring to downing strategy {:?} for a decision", unreachable_nodes, stability_period, downing_strategy);
 
                 let mut lock = unstable_thrashing_timeout_handle.write().await;
                 if let Some(handle) = lock.as_ref() {
@@ -109,26 +109,34 @@ impl  UnreachableTracker {
         //  trigger the downing provider.
 
         if was_fully_reachable {
+            // reachable -> abort and remove thrashing timer
             let mut lock = self.unstable_thrashing_timeout_handle.write().await;
             if let Some(handle) = lock.as_ref() {
                 handle.abort();
+                *lock = None;
             }
+        }
+        else {
+            // unreachable -> start thrashing timer if it does not run already
+            let mut lock = self.unstable_thrashing_timeout_handle.write().await;
+            if lock.is_none() {
+                let timeout_period = self.config.unstable_thrashing_timeout;
+                let cluster_state = self.cluster_state.clone();
+                let messaging = messaging.clone();
 
-            let timeout_period = self.config.unstable_thrashing_timeout;
-            let cluster_state = self.cluster_state.clone();
-            let messaging = messaging.clone();
+                *lock = Some(tokio::spawn(async move {
+                    time::sleep(timeout_period).await;
 
-            *lock = Some(tokio::spawn(async move {
-                time::sleep(timeout_period).await;
+                    // not canceled -> shut down the whole cluster
+                    warn!("unreachable for {:?} without reaching a stable configuration: shutting down the entire cluster", timeout_period);
 
-                // not canceled -> shut down the whole cluster
-                warn!("unreachable for {:?} without reaching a stable configuration: shutting down the entire cluster", timeout_period);
-
-                // we want the downing of all nodes to be atomic, so we keep the lock across both calls
-                let mut cs_lock = cluster_state.write().await;
-                Self::on_downing_decision(cs_lock.deref_mut(), DowningStrategyDecision::DownUs, messaging.as_ref()).await;
-                Self::on_downing_decision(cs_lock.deref_mut(), DowningStrategyDecision::DownThem, messaging.as_ref()).await;
-            }));
+                    // we want the downing of all nodes to be atomic, so we keep the lock across both calls
+                    let mut cs_lock = cluster_state.write().await;
+                    //NB: down 'them' first becuause after downing 'us', there is no 'them' left
+                    Self::on_downing_decision(cs_lock.deref_mut(), DowningStrategyDecision::DownThem, messaging.as_ref()).await;
+                    Self::on_downing_decision(cs_lock.deref_mut(), DowningStrategyDecision::DownUs, messaging.as_ref()).await;
+                }));
+            }
         }
     }
 
@@ -163,6 +171,7 @@ mod tests {
     use tokio::runtime::Builder;
     use tokio::sync::RwLock;
     use tokio::time;
+    use tracing::error;
     use crate::cluster::cluster_state::MembershipState::Up;
 
     #[tokio::test(start_paused = true)]
@@ -262,6 +271,9 @@ mod tests {
         tracker.update_reachability(test_node_addr_from_number(2), true, messaging.clone()).await;
         time::sleep(Duration::from_secs(4)).await;
 
+        // node 2 becomes and stays unreachable while node 3 flips between reachability and unreachability. This
+        //  prevents the reachability tracker from become 'stable', triggering its 'thrashing' path that should
+        //  shut down the entire cluster on a best-effort bases.
         tracker.update_reachability(test_node_addr_from_number(2), false, messaging.clone()).await;
         time::sleep(Duration::from_secs(4)).await;
         tracker.update_reachability(test_node_addr_from_number(3), false, messaging.clone()).await;
@@ -271,14 +283,16 @@ mod tests {
         tracker.update_reachability(test_node_addr_from_number(3), false, messaging.clone()).await;
         time::sleep(Duration::from_secs(4)).await;
         tracker.update_reachability(test_node_addr_from_number(3), true, messaging.clone()).await;
+        time::sleep(Duration::from_secs(4)).await;
+        tracker.update_reachability(test_node_addr_from_number(3), false, messaging.clone()).await;
 
         messaging.assert_no_remaining_messages().await;
 
         time::sleep(Duration::from_millis(4001)).await;
 
+        messaging.assert_message_sent(test_node_addr_from_number(2), GossipMessage::DownYourself).await;
         messaging.assert_message_sent(test_node_addr_from_number(1), GossipMessage::DownYourself).await;
         messaging.assert_message_sent(test_node_addr_from_number(3), GossipMessage::DownYourself).await;
-        messaging.assert_message_sent(test_node_addr_from_number(2), GossipMessage::DownYourself).await;
         messaging.assert_no_remaining_messages().await;
 
         let membership_state = cluster_state.read().await
