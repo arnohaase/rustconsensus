@@ -1,4 +1,5 @@
-use crate::messaging::message_module::Message;
+use crate::messaging::large_stream::LargeSendStream;
+use crate::messaging::message_module::{Message, MessageModuleId};
 use crate::messaging::messaging::{Delivery, MessageSender};
 use crate::messaging::node_addr::NodeAddr;
 use async_trait::async_trait;
@@ -67,5 +68,13 @@ impl MessageSender for TrackingMockMessageSender {
     async fn send_to_addr<T: Message + ?Sized>(&self, to: SocketAddr, msg: &T) -> anyhow::Result<()> {
         self.tracker.write().await.push((NodeAddr { unique: 0, socket_addr: to}, msg.box_clone()));
         Ok(())
+    }
+
+    async fn open_large_stream(
+        &self,
+        _to: NodeAddr,
+        _module_id: MessageModuleId,
+    ) -> anyhow::Result<LargeSendStream> {
+        anyhow::bail!("TrackingMockMessageSender does not support large streams")
     }
 }

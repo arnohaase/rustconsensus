@@ -2,6 +2,8 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use bytes::{Buf, BufMut, BytesMut};
+use tracing::warn;
+use crate::messaging::large_stream::LargeRecvStream;
 use crate::messaging::node_addr::NodeAddr;
 
 pub trait Message: Send + Sync + Debug + Any {
@@ -67,6 +69,25 @@ pub trait MessageModule: 'static + Sync + Send {
     ///  probably be offloaded to some asynchronous processing, but it is up to the module
     ///  implementation to decide and do this.
     async fn on_message(&self, sender: NodeAddr, buf: &[u8]);
+
+    /// Called when a peer opens a large streaming transfer addressed to this
+    /// module (see `MessageSender::open_large_stream`). The default
+    /// implementation logs a warning and drops the stream, which causes the
+    /// underlying `quinn::RecvStream::Drop` to send `stop(0)` so the sender's
+    /// next write/finish errors out — modules that don't override this are
+    /// therefore safe by default.
+    ///
+    /// Implementations MUST drive the stream to completion (e.g. via
+    /// `tokio::io::AsyncReadExt::read_to_end`) or drop it; holding it idle
+    /// will pin a uni-stream slot on the connection.
+    async fn on_stream(&self, _sender: NodeAddr, stream: LargeRecvStream) {
+        warn!(
+            module_id = ?self.id(),
+            sender = ?stream.sender(),
+            "MessageModule received a streamed message but did not override on_stream; dropping it."
+        );
+        drop(stream);
+    }
 }
 
 #[cfg(test)]

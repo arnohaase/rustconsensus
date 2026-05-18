@@ -7,26 +7,34 @@
 //!     idle-timeout (configured via `QuicConfig::idle_timeout`).
 //!
 //! Reliable-lane model:
-//!   - Three reliable lanes share a connection but have two different
+//!   - Two *persistent* reliable lanes (`LowLatency`, `Regular`) and one
+//!     *streaming* path (`Large`) share a connection but have different
 //!     stream-management strategies:
-//!     * `LowLatency` and `Regular` use a *single long-lived uni-stream* per
+//!     * Persistent lanes use a *single long-lived uni-stream* per
 //!       (peer, lane). The receiver delivers messages in send order by
 //!       construction (per-(peer, lane) FIFO). The sender holds a per-(peer,
 //!       lane) mutex across the framed write so concurrent senders interleave
 //!       message-by-message, never byte-by-byte. A failure poisons the lane
 //!       until the connection is re-established.
-//!     * `Large` opens a *fresh uni-stream per message*, writes the message,
-//!       and finishes the stream. There is **no ordering guarantee** between
-//!       Large messages, no lane mutex, no poisoning: each transfer is
-//!       independent so a failure on one cannot affect a successor. This
-//!       avoids head-of-line blocking when a 256 MiB transfer would otherwise
-//!       stall the next bulk send behind it.
+//!     * The Large lane is exposed through `MessageSender::open_large_stream`
+//!       rather than `send_to_node`. Each call opens a *fresh* uni-stream,
+//!       writes a 17-byte transport header (lane-id + sender-unique +
+//!       module-id), and hands the raw stream to the caller as a
+//!       `LargeSendStream`. There is **no ordering guarantee** between Large
+//!       transfers, no lane mutex, no poisoning, and **no size cap** — each
+//!       transfer is independent so a failure on one cannot affect a
+//!       successor, and the only back-pressure is QUIC's
+//!       `max_concurrent_uni_streams` limit. Trust is provided by SPKI
+//!       authentication; without it a peer could exhaust local memory by
+//!       opening many large transfers.
 //!   - QUIC guarantees streams cannot head-of-line-block one another, so the
-//!     three lanes remain independent on the wire regardless of strategy.
+//!     lanes remain independent on the wire regardless of strategy.
 //!   - Each lane has a configured stream priority forwarded to quinn once at
 //!     stream open; when bytes contend for the wire, higher-priority lanes
-//!     ship first.
-//!   - Each lane enforces its own size cap before bytes hit the network.
+//!     ship first. Large streams use a fixed low priority constant so bulk
+//!     traffic never starves the persistent lanes.
+//!   - Persistent lanes enforce their configured size cap before bytes hit
+//!     the network; the Large lane does not.
 //!
 //! Wire format:
 //!   datagram           : `[sender_unique:u64 BE][module_id:u64 BE][body...]`
@@ -35,9 +43,10 @@
 //!                                           [module_id:u64 BE][body...]`
 //!                        where `len` counts bytes after the length field.
 //!   large stream       : `[lane_id:u8 = 3][sender_unique:u64 BE]
-//!                         [module_id:u64 BE][body...]`, exactly one message,
-//!                        then `finish()`. No length prefix; the stream end
-//!                        delimits the message.
+//!                         [module_id:u64 BE][streamed body...]`. No length
+//!                        prefix; the receiver hands the raw `RecvStream`
+//!                        wrapped in `LargeRecvStream` to the module's
+//!                        `on_stream` and the module decides when to stop.
 //! The lane id is the very first byte so the inbound accept loop can route
 //! a newly-opened stream to its handler after a single 1-byte read, without
 //! parsing the rest of the header.
@@ -59,10 +68,11 @@ use rustc_hash::FxHashMap;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, warn};
 
+use crate::messaging::large_stream::{LargeRecvStream, LargeSendStream};
 use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::messaging::{Delivery, MessageSender, Messaging};
 use crate::messaging::node_addr::NodeAddr;
-use crate::messaging::quic::quic_config::{LaneConfig, QuicConfig};
+use crate::messaging::quic::quic_config::{PersistentLaneConfig, QuicConfig};
 use crate::messaging::quic::spki_verifier::{
     SpkiClientVerifier, SpkiServerVerifier, TrustedSpki,
 };
@@ -71,6 +81,11 @@ use crate::util::safe_converter::PrecheckedCast;
 const COMMON_HEADER_LEN: usize = 16; // u64 unique + u64 module_id
 const LEN_PREFIX_LEN: usize = 4; // u32 BE frame length
 const FRAME_HEADER_LEN: usize = LEN_PREFIX_LEN + COMMON_HEADER_LEN;
+
+/// Stream priority for Large transfers. Hard-coded (no `LaneConfig`) and set
+/// strictly lower than every persistent lane so bulk traffic never delays
+/// control traffic.
+const LARGE_STREAM_PRIORITY: i32 = -10;
 
 /// Lane identifier carried as the first byte of every reliable stream.
 /// Stable across versions; do not renumber. New lanes get new ids.
@@ -97,7 +112,6 @@ impl LaneId {
             Delivery::Datagram => None,
             Delivery::ReliableLowLatency => Some(LaneId::LowLatency),
             Delivery::Reliable => Some(LaneId::Regular),
-            Delivery::ReliableLarge => Some(LaneId::Large),
         }
     }
 
@@ -150,11 +164,11 @@ struct Inner {
     message_modules: ArcSwap<FxHashMap<MessageModuleId, Arc<dyn MessageModule>>>,
     message_modules_write_lock: Mutex<()>,
 
-    lane_low_latency: LaneConfig,
-    lane_regular: LaneConfig,
-    lane_large: LaneConfig,
-    /// Cached `max(lane caps)` — the global ceiling enforced on inbound streams.
-    inbound_max: usize,
+    lane_low_latency: PersistentLaneConfig,
+    lane_regular: PersistentLaneConfig,
+    /// Cached `max(persistent lane caps)` — the global ceiling enforced on
+    /// inbound persistent streams. Large streams do not consult this.
+    persistent_inbound_max: usize,
 }
 
 pub struct QuicMessaging {
@@ -223,8 +237,7 @@ impl QuicMessaging {
             message_modules_write_lock: Mutex::new(()),
             lane_low_latency: config.lane_low_latency,
             lane_regular: config.lane_regular,
-            lane_large: config.lane_large,
-            inbound_max: config.max_inbound_message_size(),
+            persistent_inbound_max: config.max_persistent_inbound_message_size(),
         });
         Ok(QuicMessaging { inner })
     }
@@ -317,17 +330,6 @@ impl Inner {
         buf
     }
 
-    /// Build a Large-lane frame: `[sender_unique:u64][module_id:u64][body...]`.
-    /// No length prefix — each Large stream carries exactly one message and is
-    /// delimited by `finish()` / stream end.
-    fn build_large_frame<T: Message + ?Sized>(&self, msg: &T) -> BytesMut {
-        let mut buf = BytesMut::with_capacity(COMMON_HEADER_LEN + 256);
-        buf.put_u64(self.self_addr.unique);
-        buf.put_u64(msg.module_id().0);
-        msg.ser(&mut buf);
-        buf
-    }
-
     async fn send_datagram_inner<T: Message + ?Sized>(
         &self,
         addr: SocketAddr,
@@ -353,31 +355,21 @@ impl Inner {
         }
     }
 
+    /// Persistent-stream send path: reuse the single uni-stream for
+    /// (peer, lane); hold the lane mutex to serialize concurrent senders so
+    /// the receiver observes per-lane FIFO. A failure poisons the lane.
     async fn send_reliable_on_lane<T: Message + ?Sized>(
         &self,
         addr: SocketAddr,
         msg: &T,
         lane_id: LaneId,
-        lane: &LaneConfig,
+        lane: &PersistentLaneConfig,
     ) -> anyhow::Result<()> {
-        if lane_id.is_persistent() {
-            self.send_reliable_persistent(addr, msg, lane_id, lane).await
-        } else {
-            self.send_reliable_stream_per_message(addr, msg, lane_id, lane)
-                .await
-        }
-    }
+        debug_assert!(
+            lane_id.is_persistent(),
+            "send_reliable_on_lane is for persistent lanes only"
+        );
 
-    /// Persistent-stream path: reuse the single uni-stream for (peer, lane);
-    /// hold the lane mutex to serialize concurrent senders so the receiver
-    /// observes per-lane FIFO. A failure poisons the lane.
-    async fn send_reliable_persistent<T: Message + ?Sized>(
-        &self,
-        addr: SocketAddr,
-        msg: &T,
-        lane_id: LaneId,
-        lane: &LaneConfig,
-    ) -> anyhow::Result<()> {
         // Build + size-check BEFORE acquiring the lane lock: oversize is a
         // caller bug, not a transport failure, so it must not poison the lane.
         // Cap is checked against the on-wire frame *body* (everything after
@@ -444,52 +436,43 @@ impl Inner {
         }
     }
 
-    /// Stream-per-message path (Large lane): open a fresh uni-stream per
-    /// message, write `[lane_id][unique][module_id][body]`, finish. No lane
-    /// mutex, no `LaneSendState`, no poisoning — each transfer is independent
-    /// so QUIC can ship them in parallel and a failure on one cannot affect
-    /// any other.
-    async fn send_reliable_stream_per_message<T: Message + ?Sized>(
+    /// Open a fresh uni-stream for a Large transfer and write the 17-byte
+    /// transport header `[lane_id=3][sender_unique][module_id]`. The returned
+    /// stream is unframed — the application writes the body and calls
+    /// `finish()` or `cancel()`.
+    async fn open_large_stream_inner(
         &self,
         addr: SocketAddr,
-        msg: &T,
-        lane_id: LaneId,
-        lane: &LaneConfig,
-    ) -> anyhow::Result<()> {
-        let buf = self.build_large_frame(msg);
-        if buf.len() > lane.max_msg_size {
-            anyhow::bail!(
-                "reliable message of {} bytes exceeds lane cap {}",
-                buf.len(),
-                lane.max_msg_size
-            );
-        }
-
+        module_id: MessageModuleId,
+    ) -> anyhow::Result<LargeSendStream> {
         let conn = self.connection_for(addr).await?;
 
-        let res: anyhow::Result<()> = async {
+        let res: anyhow::Result<SendStream> = async {
             let mut stream = conn.open_uni().await?;
-            let _ = stream.set_priority(lane.priority);
-            stream.write_all(&[lane_id as u8]).await?;
-            stream.write_all(&buf).await?;
-            stream.finish()?;
-            Ok(())
+            let _ = stream.set_priority(LARGE_STREAM_PRIORITY);
+            let mut header = [0u8; 1 + COMMON_HEADER_LEN];
+            header[0] = LaneId::Large as u8;
+            header[1..9].copy_from_slice(&self.self_addr.unique.to_be_bytes());
+            header[9..17].copy_from_slice(&module_id.0.to_be_bytes());
+            stream.write_all(&header).await?;
+            Ok(stream)
         }
         .await;
 
-        if let Err(e) = res {
-            self.evict_if_closed(addr).await;
-            return Err(e);
+        match res {
+            Ok(stream) => Ok(LargeSendStream::new(stream)),
+            Err(e) => {
+                self.evict_if_closed(addr).await;
+                Err(e)
+            }
         }
-        Ok(())
     }
 
-    fn lane_for(&self, delivery: Delivery) -> Option<&LaneConfig> {
+    fn lane_for(&self, delivery: Delivery) -> Option<&PersistentLaneConfig> {
         match delivery {
             Delivery::Datagram => None,
             Delivery::ReliableLowLatency => Some(&self.lane_low_latency),
             Delivery::Reliable => Some(&self.lane_regular),
-            Delivery::ReliableLarge => Some(&self.lane_large),
         }
     }
 
@@ -540,6 +523,43 @@ impl Inner {
                 "received QUIC message for unregistered module {:?} from {:?}; dropping",
                 module_id, sender
             );
+        }
+    }
+
+    /// Read the 16-byte transport header from a freshly-accepted Large stream
+    /// (the 1-byte lane id has already been consumed by the accept loop) and
+    /// hand the remaining raw stream to the registered module's `on_stream`.
+    /// If no module is registered, the stream is dropped, which causes
+    /// `quinn::RecvStream::Drop` to send `stop(0)` — the sender sees an
+    /// error on its next write/finish.
+    async fn dispatch_large_stream(&self, remote_addr: SocketAddr, mut stream: RecvStream) {
+        let mut header = [0u8; COMMON_HEADER_LEN];
+        if let Err(e) = stream.read_exact(&mut header).await {
+            warn!(
+                "large-lane stream header read error from {}: {}",
+                remote_addr, e
+            );
+            return;
+        }
+        let sender_unique = u64::from_be_bytes(header[0..8].try_into().unwrap());
+        let module_id = MessageModuleId(u64::from_be_bytes(header[8..16].try_into().unwrap()));
+        let sender = NodeAddr {
+            unique: sender_unique,
+            socket_addr: remote_addr,
+        };
+        match self.get_message_module(module_id) {
+            Some(module) => {
+                let recv = LargeRecvStream::new(stream, sender, module_id);
+                module.on_stream(sender, recv).await;
+            }
+            None => {
+                warn!(
+                    "received large stream for unregistered module {:?} from {:?}; dropping",
+                    module_id, sender
+                );
+                // explicit drop for clarity — RecvStream::Drop calls stop(0).
+                drop(stream);
+            }
         }
     }
 }
@@ -604,6 +624,16 @@ impl MessageSender for QuicMessaging {
             .send_reliable_on_lane(to, msg, LaneId::LowLatency, &self.inner.lane_low_latency)
             .await
     }
+
+    async fn open_large_stream(
+        &self,
+        to: NodeAddr,
+        module_id: MessageModuleId,
+    ) -> anyhow::Result<LargeSendStream> {
+        self.inner
+            .open_large_stream_inner(to.socket_addr, module_id)
+            .await
+    }
 }
 
 #[async_trait]
@@ -649,13 +679,14 @@ async fn pump_inbound_connection(inner: Arc<Inner>, incoming: quinn::Incoming) {
     };
     let remote = conn.remote_address();
     debug!("inbound QUIC connection from {}", remote);
-    let inbound_max = inner.inbound_max;
+    let persistent_inbound_max = inner.persistent_inbound_max;
 
     // One serial reader task per *persistent* lane on this connection. The
     // accept loop peeks the 1-byte lane prologue off each newly-opened stream
     // and either forwards persistent-lane streams to their reader task (which
     // loops length-prefixed frames), or spawns a one-shot per-stream task for
-    // the Large lane that reads the entire payload to end.
+    // the Large lane that reads the 16-byte transport header and hands the
+    // raw stream to the registered module.
     let mut lane_txs: FxHashMap<LaneId, mpsc::UnboundedSender<RecvStream>> = FxHashMap::default();
     for lane in LaneId::all().into_iter().filter(|l| l.is_persistent()) {
         let (tx, mut rx) = mpsc::unbounded_channel::<RecvStream>();
@@ -680,10 +711,10 @@ async fn pump_inbound_connection(inner: Arc<Inner>, incoming: quinn::Incoming) {
                         }
                     }
                     let body_len = u32::from_be_bytes(len_buf) as usize;
-                    if body_len > inbound_max {
+                    if body_len > persistent_inbound_max {
                         warn!(
                             "frame of {} bytes from {} on lane {:?} exceeds inbound cap {}; dropping stream",
-                            body_len, remote, lane, inbound_max
+                            body_len, remote, lane, persistent_inbound_max
                         );
                         break;
                     }
@@ -731,21 +762,15 @@ async fn pump_inbound_connection(inner: Arc<Inner>, incoming: quinn::Incoming) {
                                     let _ = tx.send(stream);
                                 }
                             } else {
-                                // Large lane: one stream = one message.
+                                // Large lane: one stream = one transfer.
                                 // Spawn a fresh task so multiple Large
                                 // transfers can proceed concurrently with
-                                // no per-lane serialization.
+                                // no per-lane serialization. The task reads
+                                // the 16-byte transport header and hands the
+                                // raw stream to the module via `on_stream`.
                                 let inner = inner.clone();
                                 tokio::spawn(async move {
-                                    match stream.read_to_end(inbound_max).await {
-                                        Ok(buf) => {
-                                            inner.dispatch_reliable(remote, &buf).await;
-                                        }
-                                        Err(e) => warn!(
-                                            "large-lane stream read error from {}: {}",
-                                            remote, e
-                                        ),
-                                    }
+                                    inner.dispatch_large_stream(remote, stream).await;
                                 });
                             }
                         }
@@ -808,16 +833,34 @@ mod tests {
     }
 
     /// Records every received message's (tag, len) and signals on each arrival.
+    /// Also supports streaming `on_stream` for Large transfers: drains the
+    /// stream and records `(tag, payload_len)` identically to `on_message`,
+    /// or — if `cancel_after` is set — drops the stream after that many bytes
+    /// to exercise receiver-side abort.
     struct Recorder {
         events: StdMutex<Vec<(u32, usize)>>,
         notify: Notify,
+        /// If `Some(n)`, `on_stream` drops the stream after reading `n` bytes.
+        cancel_after: Option<usize>,
     }
     impl Recorder {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 events: StdMutex::new(Vec::new()),
                 notify: Notify::new(),
+                cancel_after: None,
             })
+        }
+        fn with_cancel_after(n: usize) -> Arc<Self> {
+            Arc::new(Self {
+                events: StdMutex::new(Vec::new()),
+                notify: Notify::new(),
+                cancel_after: Some(n),
+            })
+        }
+        fn record(&self, tag: u32, payload_len: usize) {
+            self.events.lock().unwrap().push((tag, payload_len));
+            self.notify.notify_waiters();
         }
     }
     #[async_trait]
@@ -827,8 +870,34 @@ mod tests {
         }
         async fn on_message(&self, _sender: NodeAddr, buf: &[u8]) {
             let tag = u32::from_be_bytes(buf[..4].try_into().unwrap());
-            self.events.lock().unwrap().push((tag, buf.len() - 4));
-            self.notify.notify_waiters();
+            self.record(tag, buf.len() - 4);
+        }
+        async fn on_stream(&self, _sender: NodeAddr, mut stream: LargeRecvStream) {
+            use tokio::io::AsyncReadExt;
+            if let Some(limit) = self.cancel_after {
+                let mut buf = vec![0u8; limit];
+                let _ = stream.read_exact(&mut buf).await;
+                // dropping `stream` resets the receive side (stop(0));
+                // the sender's next write/finish errors out.
+                drop(stream);
+                return;
+            }
+            let mut buf = Vec::new();
+            match stream.read_to_end(&mut buf).await {
+                Ok(_) => {
+                    if buf.len() >= 4 {
+                        let tag = u32::from_be_bytes(buf[..4].try_into().unwrap());
+                        self.record(tag, buf.len() - 4);
+                    } else {
+                        // record a sentinel so the test can observe partial
+                        // arrivals if any
+                        self.record(u32::MAX, buf.len());
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("recorder on_stream read error: {}", e);
+                }
+            }
         }
     }
 
@@ -886,18 +955,16 @@ mod tests {
 
         let small = BlobMsg { tag: 1, payload: vec![0xAB; 64] };
         let medium = BlobMsg { tag: 2, payload: vec![0xAB; 256 * 1024] };
-        let large = BlobMsg { tag: 3, payload: vec![0xAB; 2 * 1024 * 1024] };
 
         sender.send_to_node(to, Delivery::ReliableLowLatency, &small).await.unwrap();
         sender.send_to_node(to, Delivery::Reliable, &medium).await.unwrap();
-        sender.send_to_node(to, Delivery::ReliableLarge, &large).await.unwrap();
 
-        assert!(wait_for(&recorder, 3, Duration::from_secs(10)).await,
-            "did not receive 3 messages in time, got {:?}", recorder.events.lock().unwrap());
+        assert!(wait_for(&recorder, 2, Duration::from_secs(10)).await,
+            "did not receive 2 messages in time, got {:?}", recorder.events.lock().unwrap());
 
         let mut events = recorder.events.lock().unwrap().clone();
         events.sort_by_key(|e| e.0);
-        assert_eq!(events, vec![(1, 64), (2, 256 * 1024), (3, 2 * 1024 * 1024)]);
+        assert_eq!(events, vec![(1, 64), (2, 256 * 1024)]);
     }
 
     #[tokio::test]
@@ -1012,12 +1079,55 @@ mod tests {
         assert_eq!(tags, expected);
     }
 
-    /// Large lane uses stream-per-message with no ordering guarantee. Many
-    /// concurrent transfers should all arrive, exactly once each, and should
-    /// genuinely run in parallel (so the receiver must spawn per-stream
-    /// tasks rather than serialize them on one lane reader).
+    /// Helper: build a payload that starts with `[tag:u32 BE]` followed by
+    /// `payload_len` bytes of 0xAB, matching the on-wire `BlobMsg` layout
+    /// the recorder expects when reading from a stream.
+    fn tagged_body(tag: u32, payload_len: usize) -> Vec<u8> {
+        let mut v = Vec::with_capacity(4 + payload_len);
+        v.extend_from_slice(&tag.to_be_bytes());
+        v.resize(4 + payload_len, 0xAB);
+        v
+    }
+
+    const BLOB_MODULE_ID: MessageModuleId = MessageModuleId::new(b"blobblob");
+
+    /// End-to-end streaming roundtrip: 8 MiB written in 64 KiB chunks, received
+    /// via `MessageModule::on_stream` and assembled with `read_to_end`.
     #[tokio::test]
-    async fn large_lane_concurrent_streams_all_deliver() {
+    async fn large_streaming_roundtrip() {
+        use tokio::io::AsyncWriteExt;
+        let (sender, receiver) = make_pair().await;
+        let recorder = Recorder::new();
+        receiver.register_module(recorder.clone()).await;
+        let receiver_addr = receiver.get_self_addr();
+        tokio::spawn(async move {
+            receiver.recv().await;
+        });
+
+        let to = NodeAddr {
+            unique: receiver_addr.unique,
+            socket_addr: receiver_addr.socket_addr,
+        };
+
+        let payload_len = 8 * 1024 * 1024;
+        let body = tagged_body(7, payload_len);
+
+        let mut stream = sender.open_large_stream(to, BLOB_MODULE_ID).await.unwrap();
+        for chunk in body.chunks(64 * 1024) {
+            stream.write_all(chunk).await.unwrap();
+        }
+        stream.finish().await.unwrap();
+
+        assert!(wait_for(&recorder, 1, Duration::from_secs(30)).await);
+        let events = recorder.events.lock().unwrap().clone();
+        assert_eq!(events, vec![(7, payload_len)]);
+    }
+
+    /// Many concurrent large transfers must all arrive exactly once and run
+    /// in parallel (the inbound accept loop spawns a fresh task per stream).
+    #[tokio::test]
+    async fn large_streaming_concurrent() {
+        use tokio::io::AsyncWriteExt;
         let (sender, receiver) = make_pair().await;
         let sender = Arc::new(sender);
         let recorder = Recorder::new();
@@ -1032,36 +1142,172 @@ mod tests {
             socket_addr: receiver_addr.socket_addr,
         };
 
-        const N: u32 = 20;
+        const N: u32 = 10;
+        let payload_len = 1024 * 1024;
         let mut handles = Vec::new();
         for i in 0..N {
             let s = sender.clone();
             handles.push(tokio::spawn(async move {
-                let msg = BlobMsg {
-                    tag: i,
-                    payload: vec![0xAB; 1 * 1024 * 1024],
-                };
-                s.send_to_node(to, Delivery::ReliableLarge, &msg)
-                    .await
-                    .unwrap();
+                let body = tagged_body(i, payload_len);
+                let mut stream = s.open_large_stream(to, BLOB_MODULE_ID).await.unwrap();
+                stream.write_all(&body).await.unwrap();
+                stream.finish().await.unwrap();
             }));
         }
-        for h in handles {
-            h.await.unwrap();
-        }
+        for h in handles { h.await.unwrap(); }
 
-        assert!(
-            wait_for(&recorder, N as usize, Duration::from_secs(30)).await,
-            "did not receive all {} large messages", N
-        );
-
+        assert!(wait_for(&recorder, N as usize, Duration::from_secs(30)).await);
         let events = recorder.events.lock().unwrap().clone();
         let mut tags: Vec<u32> = events.iter().map(|e| e.0).collect();
         tags.sort();
-        let expected: Vec<u32> = (0..N).collect();
-        assert_eq!(tags, expected, "every large message must arrive exactly once");
-        for (_tag, len) in &events {
-            assert_eq!(*len, 1024 * 1024);
+        assert_eq!(tags, (0..N).collect::<Vec<_>>());
+        for (_t, len) in &events { assert_eq!(*len, payload_len); }
+    }
+
+    /// Sender cancels mid-stream. The receiver task observes a read error
+    /// (the stream is reset), so nothing should be recorded.
+    #[tokio::test]
+    async fn large_streaming_sender_cancel() {
+        use tokio::io::AsyncWriteExt;
+        let (sender, receiver) = make_pair().await;
+        let recorder = Recorder::new();
+        receiver.register_module(recorder.clone()).await;
+        let receiver_addr = receiver.get_self_addr();
+        tokio::spawn(async move {
+            receiver.recv().await;
+        });
+
+        let to = NodeAddr {
+            unique: receiver_addr.unique,
+            socket_addr: receiver_addr.socket_addr,
+        };
+
+        let mut stream = sender.open_large_stream(to, BLOB_MODULE_ID).await.unwrap();
+        // Write a small prefix then cancel: receiver must NOT record a (tag, len)
+        // event because the body is incomplete and read_to_end errors.
+        stream.write_all(&tagged_body(42, 1024)[..512]).await.unwrap();
+        stream.cancel();
+
+        // Give the receiver some time to observe and process the reset.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            recorder.events.lock().unwrap().is_empty(),
+            "expected no events after sender cancel, got {:?}",
+            recorder.events.lock().unwrap()
+        );
+    }
+
+    /// Receiver stops the stream mid-transfer. The sender's subsequent
+    /// write/finish must fail (broken pipe / stopped).
+    #[tokio::test]
+    async fn large_streaming_receiver_stop() {
+        use tokio::io::AsyncWriteExt;
+        let (sender, receiver) = make_pair().await;
+        // Receiver reads 1 KiB then drops the stream → stop(0).
+        let recorder = Recorder::with_cancel_after(1024);
+        receiver.register_module(recorder.clone()).await;
+        let receiver_addr = receiver.get_self_addr();
+        tokio::spawn(async move {
+            receiver.recv().await;
+        });
+
+        let to = NodeAddr {
+            unique: receiver_addr.unique,
+            socket_addr: receiver_addr.socket_addr,
+        };
+
+        let mut stream = sender.open_large_stream(to, BLOB_MODULE_ID).await.unwrap();
+        // Keep writing until the peer's stop propagates back as an error.
+        let chunk = vec![0xAB; 64 * 1024];
+        let mut saw_err = false;
+        for _ in 0..200 {
+            match stream.write_all(&chunk).await {
+                Ok(()) => {}
+                Err(_) => { saw_err = true; break; }
+            }
         }
+        if !saw_err {
+            // Finishing should report the peer stop.
+            saw_err = stream.finish().await.is_err();
+        }
+        assert!(saw_err, "expected sender to see an error after receiver stop");
+    }
+
+    /// Opening a large stream to a module-id that nobody registered must
+    /// cause the receiver to drop the stream (stop(0)), so the sender's
+    /// finish errors out and the recorder sees nothing.
+    #[tokio::test]
+    async fn large_streaming_unregistered_module_stops() {
+        use tokio::io::AsyncWriteExt;
+        let (sender, receiver) = make_pair().await;
+        // NB: no register_module here.
+        let receiver_addr = receiver.get_self_addr();
+        tokio::spawn(async move {
+            receiver.recv().await;
+        });
+
+        let to = NodeAddr {
+            unique: receiver_addr.unique,
+            socket_addr: receiver_addr.socket_addr,
+        };
+
+        let mut stream = sender
+            .open_large_stream(to, MessageModuleId::new(b"noonereg"))
+            .await
+            .unwrap();
+        // Try to write enough to overcome any local send buffer so we
+        // observe the stop. The exact byte at which the error surfaces is
+        // implementation-defined; we only need ONE error eventually.
+        let chunk = vec![0xAB; 64 * 1024];
+        let mut saw_err = false;
+        for _ in 0..200 {
+            if stream.write_all(&chunk).await.is_err() { saw_err = true; break; }
+        }
+        if !saw_err {
+            saw_err = stream.finish().await.is_err();
+        }
+        assert!(saw_err, "sender to unregistered module should observe an error");
+    }
+
+    /// If a module does NOT override `on_stream`, the default impl logs +
+    /// drops, which causes the same behavior as the unregistered case from
+    /// the sender's perspective.
+    #[tokio::test]
+    async fn large_streaming_default_on_stream_drops() {
+        use tokio::io::AsyncWriteExt;
+
+        /// Module with `on_message` overridden but `on_stream` left as default.
+        struct DefaultOnly;
+        #[async_trait]
+        impl MessageModule for DefaultOnly {
+            fn id(&self) -> MessageModuleId { BLOB_MODULE_ID }
+            async fn on_message(&self, _s: NodeAddr, _b: &[u8]) {}
+        }
+
+        let (sender, receiver) = make_pair().await;
+        receiver.register_module(Arc::new(DefaultOnly)).await;
+        let receiver_addr = receiver.get_self_addr();
+        tokio::spawn(async move {
+            receiver.recv().await;
+        });
+
+        let to = NodeAddr {
+            unique: receiver_addr.unique,
+            socket_addr: receiver_addr.socket_addr,
+        };
+
+        let mut stream = sender.open_large_stream(to, BLOB_MODULE_ID).await.unwrap();
+        let chunk = vec![0xAB; 64 * 1024];
+        let mut saw_err = false;
+        for _ in 0..200 {
+            if stream.write_all(&chunk).await.is_err() {
+                saw_err = true;
+                break;
+            }
+        }
+        if !saw_err {
+            saw_err = stream.finish().await.is_err();
+        }
+        assert!(saw_err, "default on_stream must reset the sender's stream");
     }
 }

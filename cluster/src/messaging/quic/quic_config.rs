@@ -12,14 +12,20 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 use crate::messaging::quic::spki_verifier::SpkiHash;
 
-/// Per-lane policy for reliable sends. Each `Delivery::Reliable*` variant maps
-/// to one of these. The `priority` is forwarded to `quinn::SendStream::set_priority`
-/// so that the QUIC scheduler favors higher-priority lanes when bytes contend
-/// for the wire; `max_msg_size` is enforced before any bytes hit the network.
+/// Per-lane policy for the *persistent* reliable lanes (`ReliableLowLatency`
+/// and `Reliable`). Each `Delivery::Reliable*` variant maps to one of these.
+/// The `priority` is forwarded to `quinn::SendStream::set_priority` so that
+/// the QUIC scheduler favors higher-priority lanes when bytes contend for the
+/// wire; `max_msg_size` is enforced before any bytes hit the network.
+///
+/// Large streaming transfers (`MessageSender::open_large_stream`) do NOT use
+/// this config: they have no per-message cap and use a hard-coded stream
+/// priority lower than every persistent lane.
 #[derive(Debug, Clone, Copy)]
-pub struct LaneConfig {
+pub struct PersistentLaneConfig {
     /// Hard upper bound on serialized message size for this lane (bytes,
-    /// including the 16-byte wire header).
+    /// excluding the 4-byte length prefix; the cap matches the on-wire frame
+    /// body length).
     pub max_msg_size: usize,
     /// Stream priority forwarded to quinn. Higher means scheduled earlier.
     pub priority: i32,
@@ -48,17 +54,15 @@ pub struct QuicConfig {
     /// Per-connection datagram buffers (bytes).
     pub datagram_buffer_size: u32,
 
-    /// Low-latency reliable lane (e.g. gossip delta, DownYourself).
-    pub lane_low_latency: LaneConfig,
+    /// Low-latency persistent reliable lane (e.g. gossip delta, DownYourself).
+    pub lane_low_latency: PersistentLaneConfig,
 
-    /// Default reliable lane (general cluster control traffic).
-    pub lane_regular: LaneConfig,
+    /// Default persistent reliable lane (general cluster control traffic).
+    pub lane_regular: PersistentLaneConfig,
 
-    /// Large reliable lane (bulk application payloads).
-    pub lane_large: LaneConfig,
-
-    /// Per-connection cap on concurrent inbound uni-streams. Bounds the
-    /// in-flight memory a peer can pin via the (256 MiB by default) large lane.
+    /// Per-connection cap on concurrent inbound uni-streams. The only
+    /// transport-level back-pressure on large streaming transfers, so peers
+    /// must be authenticated (SPKI pinning) to use this safely.
     pub max_concurrent_uni_streams: u32,
 }
 
@@ -76,28 +80,27 @@ impl QuicConfig {
             trusted_spki,
             idle_timeout: Duration::from_secs(30),
             datagram_buffer_size: 64 * 1024,
-            lane_low_latency: LaneConfig {
+            lane_low_latency: PersistentLaneConfig {
                 max_msg_size: 16 * 1024 * 1024,
                 priority: 10,
             },
-            lane_regular: LaneConfig {
+            lane_regular: PersistentLaneConfig {
                 max_msg_size: 16 * 1024 * 1024,
                 priority: 0,
-            },
-            lane_large: LaneConfig {
-                max_msg_size: 256 * 1024 * 1024,
-                priority: -10,
             },
             max_concurrent_uni_streams: 64,
         }
     }
 
-    /// Inbound stream byte ceiling — the largest payload any lane permits.
-    /// The receiver is lane-agnostic so it enforces a single global cap.
-    pub fn max_inbound_message_size(&self) -> usize {
+    /// Inbound stream byte ceiling for persistent reliable lanes — the
+    /// largest single frame any persistent lane permits. The receiver is
+    /// lane-agnostic so it enforces a single global cap for the framed
+    /// persistent path. Large streaming transfers are NOT subject to this
+    /// cap; they are bounded only by `max_concurrent_uni_streams` and by
+    /// receiver back-pressure.
+    pub fn max_persistent_inbound_message_size(&self) -> usize {
         self.lane_low_latency
             .max_msg_size
             .max(self.lane_regular.max_msg_size)
-            .max(self.lane_large.max_msg_size)
     }
 }
