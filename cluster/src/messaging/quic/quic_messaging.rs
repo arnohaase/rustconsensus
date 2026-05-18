@@ -7,35 +7,40 @@
 //!     idle-timeout (configured via `QuicConfig::idle_timeout`).
 //!
 //! Reliable-lane model:
-//!   - Three reliable lanes (low-latency, regular, large) share a connection
-//!     but each lane has a *single long-lived uni-stream* per (peer, lane).
-//!     QUIC guarantees streams cannot head-of-line-block one another, so the
-//!     three lanes remain independent on the wire.
+//!   - Three reliable lanes share a connection but have two different
+//!     stream-management strategies:
+//!     * `LowLatency` and `Regular` use a *single long-lived uni-stream* per
+//!       (peer, lane). The receiver delivers messages in send order by
+//!       construction (per-(peer, lane) FIFO). The sender holds a per-(peer,
+//!       lane) mutex across the framed write so concurrent senders interleave
+//!       message-by-message, never byte-by-byte. A failure poisons the lane
+//!       until the connection is re-established.
+//!     * `Large` opens a *fresh uni-stream per message*, writes the message,
+//!       and finishes the stream. There is **no ordering guarantee** between
+//!       Large messages, no lane mutex, no poisoning: each transfer is
+//!       independent so a failure on one cannot affect a successor. This
+//!       avoids head-of-line blocking when a 256 MiB transfer would otherwise
+//!       stall the next bulk send behind it.
+//!   - QUIC guarantees streams cannot head-of-line-block one another, so the
+//!     three lanes remain independent on the wire regardless of strategy.
 //!   - Each lane has a configured stream priority forwarded to quinn once at
 //!     stream open; when bytes contend for the wire, higher-priority lanes
 //!     ship first.
 //!   - Each lane enforces its own size cap before bytes hit the network.
-//!   - Per `(peer, lane)` FIFO ordering falls out of the design: messages are
-//!     framed `[len:u32][...]` and concatenated on the single stream, so the
-//!     receiver delivers them in send order by construction.
-//!       * sender holds a per-(peer, lane) mutex across the entire framed
-//!         write so concurrent senders interleave message-by-message, never
-//!         byte-by-byte;
-//!       * receiver runs one serial reader task per inbound (peer, lane),
-//!         reading length-prefixed frames until the stream ends.
-//!   - A send that fails (oversize excepted) poisons the lane and drops the
-//!     stream until the underlying connection is re-established. A successor
-//!     message can never overtake a failed predecessor.
 //!
 //! Wire format:
-//!   datagram        : `[sender_unique:u64 BE][module_id:u64 BE][body...]`
-//!   reliable stream : prologue `[lane_id:u8]`,
-//!                     then 0..N frames: `[len:u32 BE][sender_unique:u64 BE]
-//!                                        [module_id:u64 BE][body...]`
-//!                     where `len` counts bytes after the length field.
+//!   datagram           : `[sender_unique:u64 BE][module_id:u64 BE][body...]`
+//!   persistent stream  : prologue `[lane_id:u8]` (LowLatency=1, Regular=2),
+//!                        then 0..N frames: `[len:u32 BE][sender_unique:u64 BE]
+//!                                           [module_id:u64 BE][body...]`
+//!                        where `len` counts bytes after the length field.
+//!   large stream       : `[lane_id:u8 = 3][sender_unique:u64 BE]
+//!                         [module_id:u64 BE][body...]`, exactly one message,
+//!                        then `finish()`. No length prefix; the stream end
+//!                        delimits the message.
 //! The lane id is the very first byte so the inbound accept loop can route
-//! a newly-opened stream to its per-lane reader after a single 1-byte read,
-//! without parsing the rest of the header.
+//! a newly-opened stream to its handler after a single 1-byte read, without
+//! parsing the rest of the header.
 
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
@@ -98,6 +103,16 @@ impl LaneId {
 
     fn all() -> [LaneId; 3] {
         [LaneId::LowLatency, LaneId::Regular, LaneId::Large]
+    }
+
+    /// `true` for lanes that use a single long-lived stream per (peer, lane)
+    /// with per-lane FIFO. `false` for lanes that open a fresh stream per
+    /// message with no ordering guarantee (currently just `Large`).
+    fn is_persistent(self) -> bool {
+        match self {
+            LaneId::LowLatency | LaneId::Regular => true,
+            LaneId::Large => false,
+        }
     }
 }
 
@@ -302,6 +317,17 @@ impl Inner {
         buf
     }
 
+    /// Build a Large-lane frame: `[sender_unique:u64][module_id:u64][body...]`.
+    /// No length prefix — each Large stream carries exactly one message and is
+    /// delimited by `finish()` / stream end.
+    fn build_large_frame<T: Message + ?Sized>(&self, msg: &T) -> BytesMut {
+        let mut buf = BytesMut::with_capacity(COMMON_HEADER_LEN + 256);
+        buf.put_u64(self.self_addr.unique);
+        buf.put_u64(msg.module_id().0);
+        msg.ser(&mut buf);
+        buf
+    }
+
     async fn send_datagram_inner<T: Message + ?Sized>(
         &self,
         addr: SocketAddr,
@@ -328,6 +354,24 @@ impl Inner {
     }
 
     async fn send_reliable_on_lane<T: Message + ?Sized>(
+        &self,
+        addr: SocketAddr,
+        msg: &T,
+        lane_id: LaneId,
+        lane: &LaneConfig,
+    ) -> anyhow::Result<()> {
+        if lane_id.is_persistent() {
+            self.send_reliable_persistent(addr, msg, lane_id, lane).await
+        } else {
+            self.send_reliable_stream_per_message(addr, msg, lane_id, lane)
+                .await
+        }
+    }
+
+    /// Persistent-stream path: reuse the single uni-stream for (peer, lane);
+    /// hold the lane mutex to serialize concurrent senders so the receiver
+    /// observes per-lane FIFO. A failure poisons the lane.
+    async fn send_reliable_persistent<T: Message + ?Sized>(
         &self,
         addr: SocketAddr,
         msg: &T,
@@ -398,6 +442,46 @@ impl Inner {
                 Err(e)
             }
         }
+    }
+
+    /// Stream-per-message path (Large lane): open a fresh uni-stream per
+    /// message, write `[lane_id][unique][module_id][body]`, finish. No lane
+    /// mutex, no `LaneSendState`, no poisoning — each transfer is independent
+    /// so QUIC can ship them in parallel and a failure on one cannot affect
+    /// any other.
+    async fn send_reliable_stream_per_message<T: Message + ?Sized>(
+        &self,
+        addr: SocketAddr,
+        msg: &T,
+        lane_id: LaneId,
+        lane: &LaneConfig,
+    ) -> anyhow::Result<()> {
+        let buf = self.build_large_frame(msg);
+        if buf.len() > lane.max_msg_size {
+            anyhow::bail!(
+                "reliable message of {} bytes exceeds lane cap {}",
+                buf.len(),
+                lane.max_msg_size
+            );
+        }
+
+        let conn = self.connection_for(addr).await?;
+
+        let res: anyhow::Result<()> = async {
+            let mut stream = conn.open_uni().await?;
+            let _ = stream.set_priority(lane.priority);
+            stream.write_all(&[lane_id as u8]).await?;
+            stream.write_all(&buf).await?;
+            stream.finish()?;
+            Ok(())
+        }
+        .await;
+
+        if let Err(e) = res {
+            self.evict_if_closed(addr).await;
+            return Err(e);
+        }
+        Ok(())
     }
 
     fn lane_for(&self, delivery: Delivery) -> Option<&LaneConfig> {
@@ -567,15 +651,13 @@ async fn pump_inbound_connection(inner: Arc<Inner>, incoming: quinn::Incoming) {
     debug!("inbound QUIC connection from {}", remote);
     let inbound_max = inner.inbound_max;
 
-    // One serial reader task per lane on this connection. The accept loop
-    // peeks the 1-byte lane prologue off each newly-opened stream and
-    // forwards the still-open stream to the matching lane task, which then
-    // reads length-prefixed frames off it in a loop. With persistent
-    // streams there is normally exactly one stream per lane per connection,
-    // but the task is written to handle reconnect-like sequences (one
-    // stream ends, another arrives) without dropping frames.
+    // One serial reader task per *persistent* lane on this connection. The
+    // accept loop peeks the 1-byte lane prologue off each newly-opened stream
+    // and either forwards persistent-lane streams to their reader task (which
+    // loops length-prefixed frames), or spawns a one-shot per-stream task for
+    // the Large lane that reads the entire payload to end.
     let mut lane_txs: FxHashMap<LaneId, mpsc::UnboundedSender<RecvStream>> = FxHashMap::default();
-    for lane in LaneId::all() {
+    for lane in LaneId::all().into_iter().filter(|l| l.is_persistent()) {
         let (tx, mut rx) = mpsc::unbounded_channel::<RecvStream>();
         lane_txs.insert(lane, tx);
         let inner = inner.clone();
@@ -632,9 +714,8 @@ async fn pump_inbound_connection(inner: Arc<Inner>, incoming: quinn::Incoming) {
             uni = conn.accept_uni() => match uni {
                 Ok(mut stream) => {
                     // Peek the 1-byte lane id. Read inline because it is
-                    // tiny and we need it to route — but this read happens
-                    // in stream-id order across all lanes, which is the
-                    // crucial property we rely on for ordering.
+                    // tiny and we need it to route the stream to either a
+                    // persistent-lane reader or a one-shot Large reader.
                     let mut lane_buf = [0u8; 1];
                     match stream.read_exact(&mut lane_buf).await {
                         Ok(()) => {
@@ -642,10 +723,30 @@ async fn pump_inbound_connection(inner: Arc<Inner>, incoming: quinn::Incoming) {
                                 warn!("unknown lane id {} from {}; dropping stream", lane_buf[0], remote);
                                 continue;
                             };
-                            // forwarding is infallible: tx is alive as long
-                            // as this pump task is, which outlives accept.
-                            if let Some(tx) = lane_txs.get(&lane) {
-                                let _ = tx.send(stream);
+                            if lane.is_persistent() {
+                                // forwarding is infallible: tx is alive as
+                                // long as this pump task is, which outlives
+                                // accept.
+                                if let Some(tx) = lane_txs.get(&lane) {
+                                    let _ = tx.send(stream);
+                                }
+                            } else {
+                                // Large lane: one stream = one message.
+                                // Spawn a fresh task so multiple Large
+                                // transfers can proceed concurrently with
+                                // no per-lane serialization.
+                                let inner = inner.clone();
+                                tokio::spawn(async move {
+                                    match stream.read_to_end(inbound_max).await {
+                                        Ok(buf) => {
+                                            inner.dispatch_reliable(remote, &buf).await;
+                                        }
+                                        Err(e) => warn!(
+                                            "large-lane stream read error from {}: {}",
+                                            remote, e
+                                        ),
+                                    }
+                                });
                             }
                         }
                         Err(e) => {
@@ -909,5 +1010,58 @@ mod tests {
         tags.sort();
         let expected: Vec<u32> = (0..N).collect();
         assert_eq!(tags, expected);
+    }
+
+    /// Large lane uses stream-per-message with no ordering guarantee. Many
+    /// concurrent transfers should all arrive, exactly once each, and should
+    /// genuinely run in parallel (so the receiver must spawn per-stream
+    /// tasks rather than serialize them on one lane reader).
+    #[tokio::test]
+    async fn large_lane_concurrent_streams_all_deliver() {
+        let (sender, receiver) = make_pair().await;
+        let sender = Arc::new(sender);
+        let recorder = Recorder::new();
+        receiver.register_module(recorder.clone()).await;
+        let receiver_addr = receiver.get_self_addr();
+        tokio::spawn(async move {
+            receiver.recv().await;
+        });
+
+        let to = NodeAddr {
+            unique: receiver_addr.unique,
+            socket_addr: receiver_addr.socket_addr,
+        };
+
+        const N: u32 = 20;
+        let mut handles = Vec::new();
+        for i in 0..N {
+            let s = sender.clone();
+            handles.push(tokio::spawn(async move {
+                let msg = BlobMsg {
+                    tag: i,
+                    payload: vec![0xAB; 1 * 1024 * 1024],
+                };
+                s.send_to_node(to, Delivery::ReliableLarge, &msg)
+                    .await
+                    .unwrap();
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        assert!(
+            wait_for(&recorder, N as usize, Duration::from_secs(30)).await,
+            "did not receive all {} large messages", N
+        );
+
+        let events = recorder.events.lock().unwrap().clone();
+        let mut tags: Vec<u32> = events.iter().map(|e| e.0).collect();
+        tags.sort();
+        let expected: Vec<u32> = (0..N).collect();
+        assert_eq!(tags, expected, "every large message must arrive exactly once");
+        for (_tag, len) in &events {
+            assert_eq!(*len, 1024 * 1024);
+        }
     }
 }
