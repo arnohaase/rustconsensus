@@ -10,7 +10,7 @@ use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::cluster_state::ClusterStateHandle;
 use crate::cluster::gossip::gossip_messages::GossipMessage;
 use crate::cluster::heartbeat::downing_strategy::{DowningStrategy, DowningStrategyDecision};
-use crate::messaging::messaging::MessageSender;
+use crate::messaging::messaging::{MessageSender, MessageSenderExt};
 use crate::messaging::node_addr::NodeAddr;
 
 
@@ -154,8 +154,9 @@ impl  UnreachableTracker {
             // This is a best effort to notify all affected nodes of the downing decision.
             //  We cannot reach all nodes anyway, and there may be network problems, so this is
             //  *not* a reliable notification - but it may help in the face of problems
-            messaging.send_to_node(n, &GossipMessage::DownYourself).await
-                .expect("DownYourself should fit into a single packet");
+            if let Err(e) = messaging.send_low_latency(n, &GossipMessage::DownYourself).await {
+                warn!("failed to send DownYourself to {:?}: {}", n, e);
+            }
         }
     }
 
@@ -217,7 +218,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_update_unreachable_set() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
         let handle = handle_for_new(myself, config.clone());
 
         let downing_strategy = Arc::new(MockDowningStrategy::new());
@@ -250,7 +251,7 @@ mod tests {
             time::pause();
 
             let myself = test_node_addr_from_number(1);
-            let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+            let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
             let handle = handle_for_new(myself, config.clone());
             handle.cmd_merge_node_state(node_state!(2[]:Up->[3:false@9]@[1,2,3])).await;
             handle.cmd_merge_node_state(node_state!(3[]:Up->[]@[1,2,3])).await;
@@ -293,7 +294,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_unstable_shutdown() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
         let handle = handle_for_new(myself, config.clone());
         handle.cmd_merge_node_state(node_state!(2[]:Up->[3:false@9]@[1,2,3])).await;
         handle.cmd_merge_node_state(node_state!(3[]:Up->[]@[1,2,3])).await;

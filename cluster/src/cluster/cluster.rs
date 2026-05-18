@@ -16,12 +16,12 @@ use crate::cluster::cluster_state::ClusterStateHandle;
 use crate::cluster::state::node_state::NodeState;
 use crate::messaging::messaging::{MessageSender, Messaging};
 use crate::messaging::node_addr::NodeAddr;
-use crate::messaging::udp::udp_messaging::UdpMessaging;
+use crate::messaging::quic::quic_messaging::QuicMessaging;
 
 /// This is the cluster's public API
 pub struct Cluster  {
     pub config: Arc<ClusterConfig>,
-    pub messaging: Arc<UdpMessaging>,
+    pub messaging: Arc<QuicMessaging>,
     /// Lock-free snapshot view of cluster state, published by the
     /// single-writer actor inside `ClusterStateHandle`. Public read methods
     /// on `Cluster` (`get_nodes`, `get_node_state`, `is_converged`,
@@ -34,7 +34,7 @@ pub struct Cluster  {
 
 impl Cluster {
     pub async fn new(config: Arc<ClusterConfig>) -> anyhow::Result<Cluster> {
-        let messaging = Arc::new(UdpMessaging::new(&config.transport_config).await?);
+        let messaging = Arc::new(QuicMessaging::new(&config.transport_config).await?);
         let myself = messaging.get_self_addr();
         let state_handle = ClusterStateHandle::new(myself, config.clone());
 

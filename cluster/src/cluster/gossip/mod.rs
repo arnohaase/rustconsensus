@@ -2,13 +2,13 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::{select, time};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
 use crate::cluster::gossip::gossip_logic::Gossip;
 use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipMessage, GossipMessageModule, GossipNodesData, GossipSummaryDigestData};
 use crate::cluster::cluster_state::ClusterStateHandle;
-use crate::messaging::messaging::{MessageSender, Messaging};
+use crate::messaging::messaging::{MessageSender, MessageSenderExt, Messaging};
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::random::Random;
 
@@ -101,8 +101,9 @@ async fn do_gossip<M: MessageSender>(gossip: &impl GossipApi, messaging: &M) { /
     let gossip_partners = gossip.gossip_partners().await;
     for (addr, msg) in gossip_partners {
         debug!("sending gossip message to {:?}", addr);
-        messaging.send_to_node(addr, msg.as_ref()).await
-            .expect("message length upper bound should be configured big enough for gossip");
+        if let Err(e) = messaging.send_datagram(addr, msg.as_ref()).await {
+            warn!("failed to send gossip summary datagram to {:?}: {}", addr, e);
+        }
     }
 }
 
@@ -112,20 +113,23 @@ async fn on_gossip_message<M: MessageSender>(msg: GossipMessage, sender: NodeAdd
     match msg {
         GossipSummaryDigest(digest) => {
             if let Some(response) = gossip.on_summary_digest(&digest).await {
-                messaging.send_to_node(sender, &GossipDetailedDigest(response)).await
-                    .expect("message length upper bound should be configured big enough for gossip");
+                if let Err(e) = messaging.send_low_latency(sender, &GossipDetailedDigest(response)).await {
+                    warn!("failed to send gossip detailed digest to {:?}: {}", sender, e);
+                }
             }
         }
         GossipDetailedDigest(digest) => {
             if let Some(response) = gossip.on_detailed_digest(&digest).await {
-                messaging.send_to_node(sender, &GossipDifferingAndMissingNodes(response)).await
-                    .expect("message length upper bound should be configured big enough for gossip");
+                if let Err(e) = messaging.send_low_latency(sender, &GossipDifferingAndMissingNodes(response)).await {
+                    warn!("failed to send gossip differing-and-missing-nodes to {:?}: {}", sender, e);
+                }
             }
         }
         GossipDifferingAndMissingNodes(data) => {
             if let Some(response) = gossip.on_differing_and_missing_nodes(data).await {
-                messaging.send_to_node(sender, &GossipNodes(response)).await
-                    .expect("message length upper bound should be configured big enough for gossip");
+                if let Err(e) = messaging.send_low_latency(sender, &GossipNodes(response)).await {
+                    warn!("failed to send gossip nodes to {:?}: {}", sender, e);
+                }
             }
         }
         GossipNodes(data) => {

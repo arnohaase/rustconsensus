@@ -205,7 +205,7 @@ mod tests {
     #[tokio::test]
     async fn test_heartbeat_recipients() {
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr, None);
+        let mut config = ClusterConfig::new_for_test(myself.socket_addr);
         config.num_heartbeat_partners_per_node = 3;
         let config = Arc::new(config);
         let mut cluster_state = ClusterStateSnapshot::new(myself, config.clone());
@@ -260,7 +260,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_on_heartbeat_response() {
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr, None);
+        let mut config = ClusterConfig::new_for_test(myself.socket_addr);
         config.ignore_heartbeat_response_after = Duration::from_secs(1);
         // config.num_heartbeat_partners_per_node = 3;
         let config = Arc::new(config);
@@ -292,7 +292,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_registry() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
 
         let mut registry = HeartbeatRegistry::<FixedTimeoutDecider> {
             config: config.clone(),

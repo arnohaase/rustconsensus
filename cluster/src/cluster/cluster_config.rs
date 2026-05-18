@@ -1,12 +1,14 @@
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::time::Duration;
-use rustc_hash::FxHashSet;
-use crate::messaging::udp::udp_config::UdpConfig;
+use rustc_hash::{FxHashSet};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use crate::messaging::quic::quic_config::QuicConfig;
+use crate::messaging::quic::spki_verifier::SpkiHash;
 
 #[derive(Debug)]
 pub struct ClusterConfig {
-    pub transport_config: UdpConfig,
+    pub transport_config: QuicConfig,
 
     pub roles: BTreeSet<String>,
 
@@ -42,9 +44,21 @@ pub struct ClusterConfig {
 }
 
 impl ClusterConfig {
-    pub fn new(self_addr: SocketAddr, encryption_key: Option<Vec<u8>>) -> ClusterConfig {
+    /// Construct a default cluster config.
+    ///
+    /// Peer authentication uses self-signed certs and SPKI pinning:
+    /// `cert_der` / `key_der` is this node's long-lived identity, and
+    /// `trusted_spki` is the set of SPKI SHA-256 hashes of all peers'
+    /// certificates that this node will accept. The peer set is operator-
+    /// managed (no CA, no hostnames, no chain validation).
+    pub fn new(
+        self_addr: SocketAddr,
+        cert_der: CertificateDer<'static>,
+        key_der: PrivateKeyDer<'static>,
+        trusted_spki: FxHashSet<SpkiHash>,
+    ) -> ClusterConfig {
         ClusterConfig {
-            transport_config: UdpConfig::default(self_addr, encryption_key),
+            transport_config: QuicConfig::new(self_addr, cert_der, key_der, trusted_spki),
             roles: Default::default(),
             num_gossip_partners: 3,
             gossip_with_differing_state_min_probability: 0.8,
@@ -70,4 +84,30 @@ impl ClusterConfig {
     pub fn self_addr(&self) -> SocketAddr {
         self.transport_config.self_addr
     }
+}
+
+#[cfg(test)]
+impl ClusterConfig {
+    /// Test convenience: mint a throwaway self-signed cert and a trust set
+    /// containing only that cert's SPKI. Equivalent to the old
+    /// `ClusterConfig::new(self_addr, None)`.
+    pub fn new_for_test(self_addr: SocketAddr) -> ClusterConfig {
+        let (cert, key, spki) = mint_test_identity();
+        let mut trusted = FxHashSet::default();
+        trusted.insert(spki);
+        ClusterConfig::new(self_addr, cert, key, trusted)
+    }
+}
+
+#[cfg(test)]
+fn mint_test_identity() -> (CertificateDer<'static>, PrivateKeyDer<'static>, SpkiHash) {
+    use crate::messaging::quic::spki_verifier::spki_hash_of_cert;
+    let mut params = rcgen::CertificateParams::new(vec!["test.node".to_string()]).unwrap();
+    params.distinguished_name = rcgen::DistinguishedName::new();
+    let key_pair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
+    let cert = params.self_signed(&key_pair).unwrap();
+    let cert_der = CertificateDer::from(cert.der().to_vec());
+    let key_der = PrivateKeyDer::try_from(key_pair.serialize_der()).unwrap();
+    let spki = spki_hash_of_cert(&cert_der).unwrap();
+    (cert_der, key_der, spki)
 }

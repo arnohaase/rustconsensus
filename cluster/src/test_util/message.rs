@@ -1,5 +1,5 @@
 use crate::messaging::message_module::Message;
-use crate::messaging::messaging::MessageSender;
+use crate::messaging::messaging::{Delivery, MessageSender};
 use crate::messaging::node_addr::NodeAddr;
 use async_trait::async_trait;
 use std::any::Any;
@@ -59,12 +59,12 @@ impl MessageSender for TrackingMockMessageSender {
         self.myself
     }
 
-    async fn send_to_node<T: Message>(&self, to: NodeAddr, msg: &T) -> anyhow::Result<()> {
+    async fn send_to_node<T: Message + ?Sized>(&self, to: NodeAddr, _delivery: Delivery, msg: &T) -> anyhow::Result<()> {
         self.tracker.write().await.push((to, msg.box_clone()));
         Ok(())
     }
 
-    async fn send_to_addr<T: Message>(&self, to: SocketAddr, msg: &T) -> anyhow::Result<()> {
+    async fn send_to_addr<T: Message + ?Sized>(&self, to: SocketAddr, msg: &T) -> anyhow::Result<()> {
         self.tracker.write().await.push((NodeAddr { unique: 0, socket_addr: to}, msg.box_clone()));
         Ok(())
     }

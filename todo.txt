@@ -35,3 +35,5 @@ todo
     * broadcast lag
     * downing decisions and their inputs
 * validation for config
+* NodeAddr - equals / hash without unique
+* handling / role of 'unique' part of address

@@ -9,6 +9,9 @@ use cluster::cluster::cluster_config::ClusterConfig;
 use cluster::cluster::discovery_strategy::SeedNodesStrategy;
 use cluster::cluster::heartbeat::downing_strategy::QuorumOfSeedNodesStrategy;
 
+#[path = "common/mod.rs"]
+mod common;
+
 fn init_logging() {
     tracing_subscriber::fmt()
         // .with_max_level(Level::INFO)
@@ -25,8 +28,8 @@ fn addr(n: usize) -> SocketAddr {
 
 #[tracing::instrument(name="Cluster", skip(num_nodes))]
 async fn new_node(num_nodes: usize, n: usize) -> anyhow::Result<()> {
-    // let config = ClusterConfig::new(addr(n), None);
-    let config = ClusterConfig::new(addr(n), Some(b"1234567_1234567_1234567_1234567_".to_vec()));
+    let (cert, key, trusted_spki) = common::demo_identity();
+    let config = ClusterConfig::new(addr(n), cert, key, trusted_spki);
     let cluster = Cluster::new(Arc::new(config)).await?;
 
     let seed_nodes = (0..num_nodes).map(|n| addr(n)).collect::<Vec<_>>();

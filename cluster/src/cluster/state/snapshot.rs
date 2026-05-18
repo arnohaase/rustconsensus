@@ -525,7 +525,7 @@ mod tests {
     use crate::test_util::event::*;
 
     fn new_snap(myself: NodeAddr, nodes: Vec<NodeState>) -> ClusterStateSnapshot {
-        let mut result = ClusterStateSnapshot::new(myself, Arc::new(ClusterConfig::new(myself.socket_addr, None)));
+        let mut result = ClusterStateSnapshot::new(myself, Arc::new(ClusterConfig::new_for_test(myself.socket_addr)));
         for n in nodes {
             result.nodes.insert(n.addr, Arc::new(n));
         }
@@ -536,7 +536,7 @@ mod tests {
     fn test_new() {
         let self_addr = SocketAddr::from_str("127.0.0.1:1234").unwrap();
         let myself = NodeAddr { unique: 0, socket_addr: self_addr };
-        let config = Arc::new(ClusterConfig::new(self_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(self_addr));
         let snap = ClusterStateSnapshot::new(myself, config);
 
         let node_state = NodeState {
@@ -628,7 +628,7 @@ mod tests {
         let myself = test_node_addr_from_number(1);
         // weakly_up requires config.weakly_up_after to be Some when the
         // promotion branch is taken; provide it so the info!() call has a value.
-        let mut config = ClusterConfig::new(myself.socket_addr, None);
+        let mut config = ClusterConfig::new_for_test(myself.socket_addr);
         config.weakly_up_after = Some(std::time::Duration::from_millis(100));
         let mut snap = ClusterStateSnapshot::new(myself, Arc::new(config));
         for n in nodes {
@@ -978,7 +978,7 @@ mod tests {
             unique: 0,
             socket_addr: self_addr,
         };
-        let config = Arc::new(ClusterConfig::new(self_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(self_addr));
         let mut snap = ClusterStateSnapshot::new(myself, config);
         snap.version_counter = 24;
 

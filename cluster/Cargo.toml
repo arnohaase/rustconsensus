@@ -4,34 +4,33 @@ edition.workspace = true
 version.workspace = true
 
 [dev-dependencies]
-clap = "*"
-clap_derive = "*"
-ctor = "*"
-http-body-util = "*"
-hyper = { version = "*", features = ["full"] }
-hyper-util = {  version = "*", features = ["full"] }
-mockall = { version = "*" }
-rstest = "*"
-tokio = { version = "*", features = ["full", "test-util"]}
-tracing-subscriber = "*"
+clap = "4.5"
+clap_derive = "4.5"
+ctor = "0.4"
+http-body-util = "0.1"
+hyper = { version = "1.6", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+mockall = "0.13"
+rstest = "0.25"
+tokio = { version = "1.48", features = ["full", "test-util"] }
+tracing-subscriber = "0.3"
 
 [dependencies]
-#TODO version numbers
-aead = { version = "*", features = ["bytes"] }
-aes-gcm = "*"
-anyhow = "*"
-arc-swap = "*"
-async-trait = "*"
-bit-set = "*"
-bytemuck = "*"
-bytes = "*"
-bytes-varint = "*"
-crc = "*"
-num_enum = "*"
-ordered-float = "*"
-rand = "*"
-rustc-hash = "*"
-sha2 = "*"
-socket2 = "*"
-tokio = { version = "*", features = ["macros", "net", "rt", "sync", "time"] } #TODO
-tracing = "*"
+anyhow = "1.0"
+arc-swap = "1.9"
+async-trait = "0.1"
+bit-set = "0.8"
+bytes = "1.10"
+bytes-varint = "1.1"
+num_enum = "0.7"
+ordered-float = "5.0"
+quinn = { version = "0.11", default-features = false, features = ["log", "runtime-tokio", "rustls-ring"] }
+rand = "0.9"
+rcgen = "0.13"
+rustc-hash = "2.1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = "1.14"
+rustls-webpki = { version = "0.103", default-features = false, features = ["std", "ring"] }
+sha2 = "0.10"
+tokio = { version = "1.48", features = ["macros", "net", "rt", "sync", "time"] }
+tracing = "0.1"

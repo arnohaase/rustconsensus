@@ -6,7 +6,7 @@ use crate::cluster::heartbeat::heartbeat_logic::HeartBeat;
 use crate::cluster::heartbeat::heartbeat_messages::{HeartbeatMessage, HeartbeatMessageModule, HeartbeatResponseData};
 use crate::cluster::heartbeat::reachability_decider::{FixedTimeoutDecider, ReachabilityDecider};
 use crate::cluster::heartbeat::unreachable_tracker::UnreachableTracker;
-use crate::messaging::messaging::{MessageSender, Messaging};
+use crate::messaging::messaging::{MessageSender, MessageSenderExt, Messaging};
 use crate::messaging::node_addr::NodeAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -85,8 +85,9 @@ async fn on_heartbeat_message<M: MessageSender, D: ReachabilityDecider>(sender: 
             let response = HeartbeatMessage::HeartbeatResponse(HeartbeatResponseData {
                 timestamp_nanos: data.timestamp_nanos,
             });
-            messaging.send_to_node(sender, &response).await
-                .expect("HEARTBEAT should fit into a single packet");
+            if let Err(e) = messaging.send_datagram(sender, &response).await {
+                warn!("failed to send heartbeat response to {:?}: {}", sender, e);
+            }
         }
         HeartbeatMessage::HeartbeatResponse(data) => {
             debug!("received heartbeat response message");
@@ -107,8 +108,9 @@ async fn do_heartbeat<M: MessageSender, D: ReachabilityDecider>(cluster_state: &
     let recipients = heart_beat.heartbeat_recipients(&cluster_state.snapshot());
     debug!("sending heartbeat message to {:?}", recipients);
     for recipient in recipients {
-        messaging.send_to_node(recipient, &msg).await
-            .expect("HEARTBEAT RESPONSE should fit into a single packet");
+        if let Err(e) = messaging.send_datagram(recipient, &msg).await {
+            warn!("failed to send heartbeat to {:?}: {}", recipient, e);
+        }
     }
 }
 
@@ -136,7 +138,7 @@ mod tests {
     #[tokio::test]
     async fn test_on_heartbeat_message_heartbeat() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
         let mut heartbeat = HeartBeat::<FixedTimeoutDecider>::new(myself, config);
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
@@ -151,7 +153,7 @@ mod tests {
     #[tokio::test]
     async fn test_on_heartbeat_message_response() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
         let mut heartbeat = HeartBeat::<FixedTimeoutDecider>::new(myself, config);
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
@@ -165,7 +167,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_update_reachability_from_here() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
         let handle = handle_for_new(myself, config.clone());
         for n in [2,3,4,5] {
             let mut node_state = node_state!(2[]:Up->[]@[1,2,3,4,5]);
@@ -199,7 +201,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_do_heartbeat() {
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr, None);
+        let mut config = ClusterConfig::new_for_test(myself.socket_addr);
         config.num_heartbeat_partners_per_node = 2;
         let config = Arc::new(config);
         let handle = handle_for_new(myself, config.clone());

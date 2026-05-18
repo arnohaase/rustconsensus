@@ -17,6 +17,9 @@ use tokio::net::TcpListener;
 use tokio::select;
 use tracing::{error, info, Level};
 
+#[path = "common/mod.rs"]
+mod common;
+
 #[derive(Parser)]
 struct Args {
     cluster_address: String,
@@ -57,7 +60,8 @@ pub async fn main() -> anyhow::Result<()> {
         seed_nodes.push(seed_node);
     }
 
-    let cluster_config = ClusterConfig::new(args.cluster_address.parse()?, Some(vec![5u8;32]));
+    let (cert, key, trusted_spki) = common::demo_identity();
+    let cluster_config = ClusterConfig::new(args.cluster_address.parse()?, cert, key, trusted_spki);
 
     let cluster_config = Arc::new(cluster_config);
     let cluster = Arc::new(Cluster::new(cluster_config.clone()).await?);

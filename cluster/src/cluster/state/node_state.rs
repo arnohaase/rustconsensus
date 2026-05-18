@@ -217,7 +217,7 @@ mod tests {
     #[case::matching_role_and_other_2(node_state!(1["l1", "o"]:Up->[]@[1]), Some(vec!["l1", "l2"]), true)]
     #[case::ignore_reachability(node_state!(1[]:Up->[2:false@5]@[1]), None, true)]
     fn test_node_state_is_leader_eligible(#[case] node_state: NodeState, #[case] required_roles: Option<Vec<&str>>, #[case] expected: bool) {
-        let mut config = ClusterConfig::new(test_node_addr_from_number(1).socket_addr, None);
+        let mut config = ClusterConfig::new_for_test(test_node_addr_from_number(1).socket_addr);
         if let Some(required_roles) = required_roles {
             let leader_eligible_roles = required_roles.iter().map(|r| r.to_string()).collect::<FxHashSet<_>>();
             config.leader_eligible_roles = Some(leader_eligible_roles);

@@ -338,8 +338,6 @@ mod tests {
     use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipMessage, GossipNodesData, GossipSummaryDigestData};
     use crate::cluster::state::node_state::MembershipState::*;
     use crate::cluster::state::node_state::NodeState;
-    use crate::cluster::state::snapshot::ClusterStateSnapshot;
-    use crate::messaging::node_addr::NodeAddr;
     use crate::node_state;
     use crate::test_util::node::test_node_addr_from_number;
     use crate::util::random::{MockRandom, RngRandom, MOCK_RANDOM_MUTEX};
@@ -352,7 +350,7 @@ mod tests {
     #[tokio::test]
     async fn test_gossip_candidates_by_differing_state() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
         let config1 = config.clone();
         let handle = ClusterStateHandle::new(myself, config1);
 
@@ -379,7 +377,7 @@ mod tests {
     #[tokio::test]
     async fn test_gossip_summary_digest() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
         let config1 = config.clone();
         let handle = ClusterStateHandle::new(myself, config1);
         handle.cmd_merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
@@ -405,7 +403,7 @@ mod tests {
                 .collect::<BTreeMap<_, _>>();
 
             let myself = test_node_addr_from_number(1);
-            let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+            let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
             let config1 = config.clone();
             let handle = ClusterStateHandle::new(myself, config1);
             handle.cmd_merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
@@ -429,7 +427,7 @@ mod tests {
     #[tokio::test]
     async fn test_gossip_detailed_digest_with_given_nonce() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
         let config1 = config.clone();
         let handle = ClusterStateHandle::new(myself, config1);
         handle.cmd_merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
@@ -462,7 +460,7 @@ mod tests {
             let _lock = MOCK_RANDOM_MUTEX.lock();
 
             let myself = test_node_addr_from_number(1);
-            let mut config = ClusterConfig::new(myself.socket_addr, None);
+            let mut config = ClusterConfig::new_for_test(myself.socket_addr);
             config.num_gossip_partners = 2;
             let config = Arc::new(config);
             let config1 = config.clone();
@@ -524,7 +522,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
         let handle = ClusterStateHandle::new(myself, config.clone());
         let gossip = Gossip::<MockRandom>::new_with_random(myself, config, handle);
 
@@ -563,7 +561,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let myself = test_node_addr_from_number(1);
-        let mut config = ClusterConfig::new(myself.socket_addr, None);
+        let mut config = ClusterConfig::new_for_test(myself.socket_addr);
         config.gossip_with_differing_state_min_probability = 0.8;
         let config = Arc::new(config);
         let handle = ClusterStateHandle::new(myself, config.clone());
@@ -589,7 +587,7 @@ mod tests {
             let _lock = MOCK_RANDOM_MUTEX.lock();
 
             let myself = test_node_addr_from_number(1);
-            let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+            let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
             let config1 = config.clone();
             let handle = ClusterStateHandle::new(myself, config1);
             handle.cmd_merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
@@ -637,7 +635,7 @@ mod tests {
             let _lock = MOCK_RANDOM_MUTEX.lock();
 
             let myself = test_node_addr_from_number(1);
-            let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+            let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
             let config1 = config.clone();
             let handle = ClusterStateHandle::new(myself, config1);
             for n in local_nodes {
@@ -732,7 +730,7 @@ mod tests {
         let rt = Builder::new_current_thread().build().unwrap();
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
-            let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+            let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
             let config1 = config.clone();
             let handle = ClusterStateHandle::new(myself, config1);
             for n in local_nodes {
@@ -771,7 +769,7 @@ mod tests {
     #[tokio::test]
     async fn test_on_nodes() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
         let config1 = config.clone();
         let handle = ClusterStateHandle::new(myself, config1);
         let gossip = Gossip::new(myself, config, handle);
@@ -800,7 +798,7 @@ mod tests {
     #[tokio::test]
     async fn test_down_myself() {
         let myself = test_node_addr_from_number(1);
-        let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
+        let config = Arc::new(ClusterConfig::new_for_test(myself.socket_addr));
         let config1 = config.clone();
         let handle = ClusterStateHandle::new(myself, config1);
         let gossip = Gossip::new(myself, config, handle);
