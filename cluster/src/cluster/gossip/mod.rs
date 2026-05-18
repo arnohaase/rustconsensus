@@ -1,13 +1,13 @@
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use tokio::{select, time};
 use tracing::debug;
 
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_state::ClusterState;
 use crate::cluster::gossip::gossip_logic::Gossip;
 use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipMessage, GossipMessageModule, GossipNodesData, GossipSummaryDigestData};
+use crate::cluster::cluster_state::ClusterStateHandle;
 use crate::messaging::messaging::{MessageSender, Messaging};
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::random::Random;
@@ -51,12 +51,12 @@ impl <R: Random> GossipApi for Gossip<R> {
     }
 
     async fn gossip_partners(&self) -> Vec<(NodeAddr, Arc<GossipMessage>)> {
-        Self::gossip_partners(self).await
+        Self::gossip_partners(self)
     }
 }
 
 //TODO unit test for gossip loop
-pub async fn run_gossip<M: Messaging>(config: Arc<ClusterConfig>, messaging: Arc<M>, cluster_state: Arc<RwLock<ClusterState>>) -> anyhow::Result<()> {
+pub(crate) async fn run_gossip<M: Messaging>(config: Arc<ClusterConfig>, messaging: Arc<M>, cluster_state: ClusterStateHandle) -> anyhow::Result<()> {
     let myself = messaging.get_self_addr();
 
     let (send, mut recv) = mpsc::channel(32);
@@ -77,12 +77,18 @@ pub async fn run_gossip<M: Messaging>(config: Arc<ClusterConfig>, messaging: Arc
                 on_gossip_message(msg, sender, &mut gossip, messaging).await
             }
             _ = converged_send_gossip_ticks.tick() => {
-                if cluster_state.read().await.is_converged() {
+                // Lock-free convergence check: the published snapshot is
+                // refreshed by `run_administrative_tasks_loop` plus on
+                // demand by writers, so it can lag the live `RwLock` by up
+                // to one tick. For gossip pacing this is fine: a stale
+                // "converged" reading just means we may gossip one extra
+                // unconverged-cadence tick before catching up.
+                if cluster_state.snapshot().is_converged() {
                     do_gossip(&gossip, messaging).await
                 }
             }
             _ = unconverged_send_gossip_ticks.tick() => {
-                if !cluster_state.read().await.is_converged() {
+                if !cluster_state.snapshot().is_converged() {
                     do_gossip(&gossip, messaging).await
                 }
             }
@@ -270,7 +276,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_gossip_message_differing_and_missing_nodes() {
-        use crate::cluster::cluster_state::MembershipState::Up;
+        use crate::cluster::state::node_state::MembershipState::Up;
 
         let myself = test_node_addr_from_number(1);
         let data = GossipDifferingAndMissingNodesData {
@@ -320,7 +326,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_gossip_nodes() {
-        use crate::cluster::cluster_state::MembershipState::Up;
+        use crate::cluster::state::node_state::MembershipState::Up;
 
         let myself = test_node_addr_from_number(1);
         let data = GossipNodesData {

@@ -10,9 +10,9 @@ use tokio::time::Instant;
 use tracing::{debug, warn};
 
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_state::ClusterState;
 use crate::cluster::heartbeat::heartbeat_messages::{HeartbeatData, HeartbeatResponseData};
 use crate::cluster::heartbeat::reachability_decider::ReachabilityDecider;
+use crate::cluster::state::snapshot::ClusterStateSnapshot;
 use crate::messaging::node_addr::NodeAddr;
 
 pub struct HeartBeat<D: ReachabilityDecider> {
@@ -36,13 +36,16 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
 
     /// calculate heartbeat recipients based on the cluster's configuration, cleaning up internal
     ///  data structures on the way
-    pub fn heartbeat_recipients(&mut self, cluster_state: &ClusterState) -> Vec<NodeAddr> {
+    ///
+    /// Takes a [`ClusterStateSnapshot`] so the caller can obtain it lock-free
+    /// via `ClusterStateHandle::snapshot()`
+    pub fn heartbeat_recipients(&mut self, snapshot: &ClusterStateSnapshot) -> Vec<NodeAddr> {
         let mut result = Vec::new();
         let mut num_reachable = 0;
 
         // shuffle the ordering of nodes to improve the likelihood of physically and topologically
         //  distant nodes monitoring each other
-        let node_ring = cluster_state.node_states()
+        let node_ring = snapshot.node_states()
             .map(|s| SortedByHash(s.addr))
             .collect::<BTreeSet<_>>();
 
@@ -56,7 +59,7 @@ impl <D: ReachabilityDecider> HeartBeat<D> {
             }
 
             result.push(candidate.0.clone());
-            let state = cluster_state.get_node_state(&candidate.0).unwrap();
+            let state = snapshot.get_node_state(&candidate.0).unwrap();
             if state.is_reachable() {
                 num_reachable += 1;
             }
@@ -190,16 +193,14 @@ impl PartialOrd for SortedByHash {
 mod tests {
     use super::*;
     use crate::cluster::cluster_config::ClusterConfig;
-    use crate::cluster::cluster_events::ClusterEventNotifier;
-    use crate::cluster::cluster_state::MembershipState::Up;
-    use crate::cluster::cluster_state::*;
+    use crate::cluster::state::node_state::MembershipState::Up;
     use crate::node_state;
     use crate::test_util::node::test_node_addr_from_number;
     use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::time;
-    use crate::cluster::heartbeat::reachability_decider::fixed_timeout::FixedTimeoutDecider;
+    use crate::cluster::heartbeat::reachability_decider::FixedTimeoutDecider;
 
     #[tokio::test]
     async fn test_heartbeat_recipients() {
@@ -207,12 +208,12 @@ mod tests {
         let mut config = ClusterConfig::new(myself.socket_addr, None);
         config.num_heartbeat_partners_per_node = 3;
         let config = Arc::new(config);
-        let mut cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
+        let mut cluster_state = ClusterStateSnapshot::new(myself, config.clone());
 
         for n in [2,3,4,5,6] {
             let mut node_state = node_state!(2[]:Up->[]@[1,2,3,4,5,6]);
             node_state.addr = test_node_addr_from_number(n);
-            cluster_state.merge_node_state(node_state).await;
+            let _ = cluster_state.merge_node_state(node_state);
         }
 
         let mut heartbeat = HeartBeat::<FixedTimeoutDecider>::new(myself, config.clone());
@@ -223,23 +224,14 @@ mod tests {
             test_node_addr_from_number(4),
         ]);
 
-        cluster_state.merge_node_state(node_state!(5[]:Up->[4:false@8]@[1,2,3,4,6])).await;
+        let _ = cluster_state.merge_node_state(node_state!(5[]:Up->[4:false@8]@[1,2,3,4,6]));
         assert_eq!(heartbeat.heartbeat_recipients(&cluster_state), vec![
             test_node_addr_from_number(2),
             test_node_addr_from_number(3),
             test_node_addr_from_number(4),
         ]);
 
-        cluster_state.merge_node_state(node_state!(3[]:Up->[4:false@8]@[1,2,4,6])).await;
-        assert_eq!(heartbeat.heartbeat_recipients(&cluster_state), vec![
-            test_node_addr_from_number(2),
-            test_node_addr_from_number(3),
-            test_node_addr_from_number(4),
-            test_node_addr_from_number(5),
-            test_node_addr_from_number(6),
-        ]);
-
-        cluster_state.merge_node_state(node_state!(6[]:Up->[4:false@8]@[1,2,4])).await;
+        let _ = cluster_state.merge_node_state(node_state!(3[]:Up->[4:false@8]@[1,2,4,6]));
         assert_eq!(heartbeat.heartbeat_recipients(&cluster_state), vec![
             test_node_addr_from_number(2),
             test_node_addr_from_number(3),
@@ -248,7 +240,16 @@ mod tests {
             test_node_addr_from_number(6),
         ]);
 
-        cluster_state.merge_node_state(node_state!(3[]:Up->[4:true@9]@[1,2,4])).await;
+        let _ = cluster_state.merge_node_state(node_state!(6[]:Up->[4:false@8]@[1,2,4]));
+        assert_eq!(heartbeat.heartbeat_recipients(&cluster_state), vec![
+            test_node_addr_from_number(2),
+            test_node_addr_from_number(3),
+            test_node_addr_from_number(4),
+            test_node_addr_from_number(5),
+            test_node_addr_from_number(6),
+        ]);
+
+        let _ = cluster_state.merge_node_state(node_state!(3[]:Up->[4:true@9]@[1,2,4]));
         assert_eq!(heartbeat.heartbeat_recipients(&cluster_state), vec![
             test_node_addr_from_number(2),
             test_node_addr_from_number(3),

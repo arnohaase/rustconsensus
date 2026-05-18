@@ -34,3 +34,4 @@ todo
     * heartbeat RTT (histogram)
     * broadcast lag
     * downing decisions and their inputs
+* validation for config

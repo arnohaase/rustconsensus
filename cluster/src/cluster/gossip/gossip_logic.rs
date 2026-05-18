@@ -1,18 +1,19 @@
+use super::gossip_messages::*;
+use ordered_float::OrderedFloat;
+use rustc_hash::FxHasher;
+use sha2::{Digest, Sha256};
 use std::cmp::max;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use ordered_float::OrderedFloat;
-use rustc_hash::FxHasher;
-use sha2::{Digest, Sha256};
-use tokio::sync::RwLock;
 use tracing::{debug, trace};
-use super::gossip_messages::*;
 
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_state::{ClusterState, NodeState};
+use crate::cluster::cluster_state::ClusterStateHandle;
+use crate::cluster::state::node_state::NodeState;
+use crate::cluster::state::snapshot::ClusterStateSnapshot;
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::random::{Random, RngRandom};
 use crate::util::safe_converter::{PrecheckedCast, SafeCast};
@@ -20,11 +21,11 @@ use crate::util::safe_converter::{PrecheckedCast, SafeCast};
 pub struct Gossip<R: Random> {
     config: Arc<ClusterConfig>,
     myself: NodeAddr,
-    cluster_state: Arc<RwLock<ClusterState>>,
+    cluster_state: ClusterStateHandle,
     pd: PhantomData<R>,
 }
 impl Gossip<RngRandom> {
-    pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>) -> Gossip<RngRandom> {
+    pub fn new(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_state: ClusterStateHandle) -> Gossip<RngRandom> {
         Gossip {
             config,
             myself,
@@ -35,7 +36,7 @@ impl Gossip<RngRandom> {
 }
 impl <R: Random> Gossip<R> {
     #[cfg(test)]
-    pub fn new_with_random(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>) -> Gossip<R> {
+    pub fn new_with_random(myself: NodeAddr, config: Arc<ClusterConfig>, cluster_state: ClusterStateHandle) -> Gossip<R> {
         Gossip {
             config,
             myself,
@@ -56,19 +57,20 @@ impl <R: Random> Gossip<R> {
     /// NB: Since this function is about picking targets for gossip, only potential gossip partners
     ///      are included - i.e. myself is excluded as well as unreachable nodes or those with
     ///      non-gossip-eligible membership states.
-    async fn gossip_candidates_by_differing_state(&self) -> (Vec<NodeAddr>, Vec<NodeAddr>) {
-        let cluster_state = self.cluster_state.read().await;
-
+    fn gossip_candidates_by_differing_state(
+        &self,
+        snapshot: &ClusterStateSnapshot,
+    ) -> (Vec<NodeAddr>, Vec<NodeAddr>) {
         let mut maybe_same = Vec::new();
         let mut proven_different = Vec::new();
 
-        for candidate in cluster_state.node_states()
+        for candidate in snapshot.node_states()
             .filter(|n| n.is_reachable())
             .filter(|n| n.addr != self.myself)
             .filter(|n| n.membership_state.is_gossip_partner())
             .map(|n| n.addr)
         {
-            if cluster_state.is_node_converged(candidate) {
+            if snapshot.is_node_converged(candidate) {
                 maybe_same.push(candidate);
             }
             else {
@@ -79,8 +81,10 @@ impl <R: Random> Gossip<R> {
         (maybe_same, proven_different)
     }
 
-    async fn gossip_summary_digest(&self) -> GossipSummaryDigestData {
-        Self::gossip_summary_digest_for_cluster_state(self.cluster_state.read().await.node_states())
+    fn gossip_summary_digest_from_snapshot(
+        snapshot: &ClusterStateSnapshot,
+    ) -> GossipSummaryDigestData {
+        Self::gossip_summary_digest_for_cluster_state(snapshot.node_states().map(|n| n.as_ref()))
     }
 
     fn gossip_summary_digest_for_cluster_state<'a>(node_states: impl Iterator<Item=&'a NodeState>) -> GossipSummaryDigestData {
@@ -128,18 +132,30 @@ impl <R: Random> Gossip<R> {
         }
     }
 
-    async fn gossip_detailed_digest(&self) -> GossipDetailedDigestData {
+    fn gossip_detailed_digest_from_snapshot(
+        snapshot: &ClusterStateSnapshot,
+    ) -> GossipDetailedDigestData {
         let nonce = R::next_u32();
-        gossip_detailed_digest_with_given_nonce(&*self.cluster_state.read().await, nonce)
+        gossip_detailed_digest_with_given_nonce_iter(
+            snapshot.node_states().map(|n| n.as_ref()),
+            nonce,
+        )
     }
 
-    pub async fn gossip_partners(&self) -> Vec<(NodeAddr, Arc<GossipMessage>)> {
+    pub fn gossip_partners(&self) -> Vec<(NodeAddr, Arc<GossipMessage>)> {
+        // CRITICAL: take exactly one snapshot per call. The previous
+        // implementation took three separate `RwLock::read().await` calls
+        // (one for candidate selection, one for the summary digest, one for
+        // the detailed digest), which meant a concurrent writer could mutate
+        // node state between calls and produce a digest that did not match
+        // the candidate set we shipped it to.
+        let snapshot = self.cluster_state.snapshot();
         let mut result = Vec::with_capacity(self.config.num_gossip_partners);
 
-        let (mut maybe_same, mut proven_different) = self.gossip_candidates_by_differing_state().await;
+        let (mut maybe_same, mut proven_different) = self.gossip_candidates_by_differing_state(&snapshot);
 
-        let summary_digest_message = Arc::new(GossipMessage::GossipSummaryDigest(self.gossip_summary_digest().await));
-        let detailed_digest_message = Arc::new(GossipMessage::GossipDetailedDigest(self.gossip_detailed_digest().await));
+        let summary_digest_message = Arc::new(GossipMessage::GossipSummaryDigest(Self::gossip_summary_digest_from_snapshot(&snapshot)));
+        let detailed_digest_message = Arc::new(GossipMessage::GossipDetailedDigest(Self::gossip_detailed_digest_from_snapshot(&snapshot)));
 
         for _ in 0..self.config.num_gossip_partners {
             // give more weight to nodes with a state that is proven to be different, but give
@@ -195,27 +211,36 @@ impl <R: Random> Gossip<R> {
 
     pub async fn on_summary_digest(&self, other_digest: &GossipSummaryDigestData) -> Option<GossipDetailedDigestData> {
         debug!("received gossip summary digest message");
-        let own_digest = self.gossip_summary_digest().await;
+        // Take a single snapshot so the summary digest we compare against and the
+        // detailed digest we may return are derived from the same consistent view
+        // of cluster state.
+        let snapshot = self.cluster_state.snapshot();
+        let own_digest = Self::gossip_summary_digest_from_snapshot(&snapshot);
         if own_digest.full_sha256_digest == other_digest.full_sha256_digest {
             return None;
         }
 
-        Some(self.gossip_detailed_digest().await)
+        Some(Self::gossip_detailed_digest_from_snapshot(&snapshot))
     }
 
     pub async fn on_detailed_digest(&self, other_digest: &GossipDetailedDigestData) -> Option<GossipDifferingAndMissingNodesData> {
         debug!("received gossip detailed digest message");
-        let cluster_state = self.cluster_state.read().await;
+        // Take exactly one snapshot. The previous implementation held a
+        // read lock on the inner `RwLock<ClusterState>` across hashing and
+        // comparison; with the actor as the sole writer, an `ArcSwap`
+        // snapshot is point-in-time consistent and lock-free.
+        let snapshot = self.cluster_state.snapshot();
 
-        //NB: we don't want anyone else to change state between hashing and comparing the hashes, so we get the lock once at
-        //     the start
-        let own_digest = gossip_detailed_digest_with_given_nonce(&*cluster_state, other_digest.nonce);
+        let own_digest = gossip_detailed_digest_with_given_nonce_iter(
+            snapshot.node_states().map(|n| n.as_ref()),
+            other_digest.nonce,
+        );
 
         // my own data for nodes that hash differently from the gossip partner's hash
         let differing: Vec<NodeState> = own_digest.nodes.iter()
             .filter(|(addr, hash)| Some(*hash) != other_digest.nodes.get(addr))
-            .flat_map(|(addr, _)| cluster_state.get_node_state(addr))
-            .cloned()
+            .flat_map(|(addr, _)| snapshot.get_node_state(addr))
+            .map(|arc| (**arc).clone())
             .collect();
 
         // nodes that are apparently present on the remote node but not locally
@@ -244,55 +269,40 @@ impl <R: Random> Gossip<R> {
             differing_keys,
             other_data.missing);
 
-        let mut response_nodes = Vec::new();
-
-        let mut cluster_state = self.cluster_state.write().await;
-        for s in other_data.differing {
-            let other_node = s.clone();
-            cluster_state.merge_node_state(s).await;
-
-            if let Some(merged) = cluster_state.get_node_state(&other_node.addr) {
-                if merged != &other_node {
-                    response_nodes.push(merged.clone());
-                }
-            }
-        }
-
-        for missing in &other_data.missing {
-            if let Some(state) = cluster_state.get_node_state(missing) {
-                response_nodes.push(state.clone());
-            }
-        }
-
-        if response_nodes.is_empty() {
-            None
-        }
-        else {
-            Some(GossipNodesData {
-                nodes: response_nodes,
-            })
-        }
+        // Single command preserves the atomicity of the original
+        // write-then-read sequence: the actor merges each `differing`
+        // entry, compares the post-merge state against the peer's view,
+        // then collects locally-known state for every `missing` address -
+        // all without any other writer racing in between.
+        self.cluster_state
+            .cmd_gossip_merge_and_collect(other_data.differing, other_data.missing)
+            .await
     }
 
     pub async fn on_nodes(&self, other_data: GossipNodesData) {
         debug!("received gossip nodes message");
-        let mut cluster_state = self.cluster_state.write().await;
+        // Each merge is a single command to the actor. We don't need an
+        // atomic batch here (unlike `on_differing_and_missing_nodes` which
+        // does an interleaved merge+read) - peers tolerate seeing
+        // intermediate states between merges of unrelated nodes.
         for s in other_data.nodes {
-            cluster_state.merge_node_state(s).await;
+            self.cluster_state.cmd_merge_node_state(s).await;
         }
     }
 
     pub async fn down_myself(&self) {
         debug!("received 'down yourself' message");
-        self.cluster_state.write().await
-            .promote_myself_to_down().await
+        self.cluster_state.cmd_promote_myself_to_down().await;
     }
 }
 
-fn gossip_detailed_digest_with_given_nonce(cluster_state: &ClusterState, nonce: u32) -> GossipDetailedDigestData {
+fn gossip_detailed_digest_with_given_nonce_iter<'a>(
+    node_states: impl Iterator<Item=&'a NodeState>,
+    nonce: u32,
+) -> GossipDetailedDigestData {
     let mut nodes: BTreeMap<NodeAddr, u64> = Default::default();
 
-    for s in cluster_state.node_states() {
+    for s in node_states {
         let mut hasher = FxHasher::with_seed(nonce.safe_cast());
 
         // no need to add the node address to the hash (it's the key in the returned map of
@@ -323,39 +333,39 @@ fn gossip_detailed_digest_with_given_nonce(cluster_state: &ClusterState, nonce: 
 #[cfg(test)]
 mod tests {
     use crate::cluster::cluster_config::ClusterConfig;
-    use crate::cluster::cluster_events::ClusterEventNotifier;
-    use crate::cluster::cluster_state::MembershipState::*;
-    use crate::cluster::cluster_state::{ClusterState, NodeReachability, NodeState};
-    use crate::cluster::gossip::gossip_logic::{gossip_detailed_digest_with_given_nonce, Gossip};
+    use crate::cluster::cluster_state::ClusterStateHandle;
+    use crate::cluster::gossip::gossip_logic::Gossip;
     use crate::cluster::gossip::gossip_messages::{GossipDetailedDigestData, GossipDifferingAndMissingNodesData, GossipMessage, GossipNodesData, GossipSummaryDigestData};
+    use crate::cluster::state::node_state::MembershipState::*;
+    use crate::cluster::state::node_state::NodeState;
+    use crate::cluster::state::snapshot::ClusterStateSnapshot;
+    use crate::messaging::node_addr::NodeAddr;
     use crate::node_state;
     use crate::test_util::node::test_node_addr_from_number;
-    use crate::util::random::{MockRandom, MOCK_RANDOM_MUTEX};
+    use crate::util::random::{MockRandom, RngRandom, MOCK_RANDOM_MUTEX};
+    use mockall::predicate::eq;
     use rstest::rstest;
     use std::collections::BTreeMap;
     use std::sync::Arc;
-    use mockall::predicate::eq;
     use tokio::runtime::Builder;
-    use tokio::sync::RwLock;
 
     #[tokio::test]
     async fn test_gossip_candidates_by_differing_state() {
         let myself = test_node_addr_from_number(1);
         let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
-        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+        let config1 = config.clone();
+        let handle = ClusterStateHandle::new(myself, config1);
 
-        {
-            let mut cl = cluster_state.write().await;
-            cl.merge_node_state(node_state!(2[]:Up->[]@[1,2,3,4,5])).await;
-            cl.merge_node_state(node_state!(3[]:Up->[]@[1,  3,4  ])).await;        // non-converged
-            cl.merge_node_state(node_state!(4[]:Up->[]@[1,2,3,4  ])).await;        // non-converged (unreachable must have seen)
-            cl.merge_node_state(node_state!(5[]:Up->[1:false@6]@[1,2,3,4])).await; // unreachable
-            cl.merge_node_state(node_state!(6[]:Down->[]@[1,2,3,4,5])).await;      // non-gossip membership state
-        }
+        handle.cmd_merge_node_state(node_state!(2[]:Up->[]@[1,2,3,4,5])).await;
+        handle.cmd_merge_node_state(node_state!(3[]:Up->[]@[1,  3,4  ])).await;        // non-converged
+        handle.cmd_merge_node_state(node_state!(4[]:Up->[]@[1,2,3,4  ])).await;        // non-converged (unreachable must have seen)
+        handle.cmd_merge_node_state(node_state!(5[]:Up->[1:false@6]@[1,2,3,4])).await; // unreachable
+        handle.cmd_merge_node_state(node_state!(6[]:Down->[]@[1,2,3,4,5])).await;      // non-gossip membership state
+        handle.flush().await;
 
-        let gossip = Gossip::new(myself, config.clone(), cluster_state.clone());
+        let gossip = Gossip::new(myself, config.clone(), handle);
 
-        let (converged, not_converged) = gossip.gossip_candidates_by_differing_state().await;
+        let (converged, not_converged) = gossip.gossip_candidates_by_differing_state(&gossip.cluster_state.snapshot());
 
         assert_eq!(converged, vec![
             test_node_addr_from_number(2),
@@ -370,12 +380,13 @@ mod tests {
     async fn test_gossip_summary_digest() {
         let myself = test_node_addr_from_number(1);
         let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
-        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
-        cluster_state.write().await
-            .merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
-        let gossip = Gossip::new(myself, config.clone(), cluster_state.clone());
+        let config1 = config.clone();
+        let handle = ClusterStateHandle::new(myself, config1);
+        handle.cmd_merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
+        handle.flush().await;
+        let gossip = Gossip::new(myself, config.clone(), handle);
 
-        let digest = gossip.gossip_summary_digest().await;
+        let digest = Gossip::<RngRandom>::gossip_summary_digest_from_snapshot(&gossip.cluster_state.snapshot());
         assert_eq!(digest, GossipSummaryDigestData {
             full_sha256_digest: [249, 136, 27, 4, 192, 153, 241, 143, 172, 175, 242, 57, 30, 216, 249, 70, 185, 200, 108, 235, 240, 20, 228, 128, 106, 60, 163, 54, 131, 34, 203, 14],
         });
@@ -395,17 +406,18 @@ mod tests {
 
             let myself = test_node_addr_from_number(1);
             let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
-            let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
-            cluster_state.write().await
-                .merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
+            let config1 = config.clone();
+            let handle = ClusterStateHandle::new(myself, config1);
+            handle.cmd_merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
+            handle.flush().await;
 
             let ctx = MockRandom::next_u32_context();
             ctx.expect()
                 .returning(move || nonce);
 
-            let gossip = Gossip::<MockRandom>::new_with_random(myself, config.clone(), cluster_state.clone());
+            let gossip = Gossip::<MockRandom>::new_with_random(myself, config.clone(), handle);
 
-            let digest = gossip.gossip_detailed_digest().await;
+            let digest = Gossip::<MockRandom>::gossip_detailed_digest_from_snapshot(&gossip.cluster_state.snapshot());
 
             assert_eq!(digest, GossipDetailedDigestData {
                 nonce,
@@ -418,11 +430,16 @@ mod tests {
     async fn test_gossip_detailed_digest_with_given_nonce() {
         let myself = test_node_addr_from_number(1);
         let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
-        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
-        cluster_state.write().await
-            .merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
+        let config1 = config.clone();
+        let handle = ClusterStateHandle::new(myself, config1);
+        handle.cmd_merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
+        handle.flush().await;
 
-        let digest = gossip_detailed_digest_with_given_nonce(&*cluster_state.read().await, 7);
+        let snap = handle.snapshot();
+        let digest = super::gossip_detailed_digest_with_given_nonce_iter(
+            snap.node_states().map(|a| a.as_ref()),
+            7,
+        );
         assert_eq!(digest, GossipDetailedDigestData {
             nonce: 7,
             nodes: [
@@ -448,21 +465,21 @@ mod tests {
             let mut config = ClusterConfig::new(myself.socket_addr, None);
             config.num_gossip_partners = 2;
             let config = Arc::new(config);
-            let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+            let config1 = config.clone();
+            let handle = ClusterStateHandle::new(myself, config1);
             for n in [2,3,4] {
                 let mut node_state = node_state!(2[]:Up->[]@[1,2,3,4]);
                 node_state.addr = test_node_addr_from_number(n);
-                cluster_state.write().await
-                    .merge_node_state(node_state).await;
+                handle.cmd_merge_node_state(node_state).await;
             }
             for n in [5,6,7] {
                 let mut node_state = node_state!(2["a", "b"]:Up->[]@[1,2,3,4,5,6,7]);
                 node_state.addr = test_node_addr_from_number(n);
-                cluster_state.write().await
-                    .merge_node_state(node_state).await;
+                handle.cmd_merge_node_state(node_state).await;
             }
+            handle.flush().await;
 
-            let gossip = Gossip::<MockRandom>::new_with_random(myself, config, cluster_state.clone());
+            let gossip = Gossip::<MockRandom>::new_with_random(myself, config, handle);
 
             let ctx_f64 = MockRandom::gen_f64_range_context();
             ctx_f64.expect()
@@ -479,7 +496,7 @@ mod tests {
                 .once()
                 .return_const(0u32);
 
-            let gossip_partners = gossip.gossip_partners().await;
+            let gossip_partners = gossip.gossip_partners();
 
             let actual_addrs = gossip_partners.iter()
                 .map(|(addr, _)| addr.clone())
@@ -508,8 +525,8 @@ mod tests {
 
         let myself = test_node_addr_from_number(1);
         let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
-        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
-        let gossip = Gossip::<MockRandom>::new_with_random(myself, config, cluster_state.clone());
+        let handle = ClusterStateHandle::new(myself, config.clone());
+        let gossip = Gossip::<MockRandom>::new_with_random(myself, config, handle);
 
         let mut nodes = [2,3,4,5,6].into_iter()
             .map(|n| test_node_addr_from_number(n))
@@ -549,8 +566,8 @@ mod tests {
         let mut config = ClusterConfig::new(myself.socket_addr, None);
         config.gossip_with_differing_state_min_probability = 0.8;
         let config = Arc::new(config);
-        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
-        let gossip = Gossip::<MockRandom>::new_with_random(myself, config, cluster_state.clone());
+        let handle = ClusterStateHandle::new(myself, config.clone());
+        let gossip = Gossip::<MockRandom>::new_with_random(myself, config, handle);
 
         let ctx = MockRandom::gen_f64_range_context();
         if let Some(random) = random_value {
@@ -573,10 +590,11 @@ mod tests {
 
             let myself = test_node_addr_from_number(1);
             let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
-            let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
-            cluster_state.write().await
-                .merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
-            let gossip = Gossip::<MockRandom>::new_with_random(myself, config, cluster_state.clone());
+            let config1 = config.clone();
+            let handle = ClusterStateHandle::new(myself, config1);
+            handle.cmd_merge_node_state(node_state!(2["a", "b"]:Up->[7:false@88]@[1,2])).await;
+            handle.flush().await;
+            let gossip = Gossip::<MockRandom>::new_with_random(myself, config, handle);
 
             let context = MockRandom::next_u32_context();
             context.expect()
@@ -620,12 +638,13 @@ mod tests {
 
             let myself = test_node_addr_from_number(1);
             let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
-            let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+            let config1 = config.clone();
+            let handle = ClusterStateHandle::new(myself, config1);
             for n in local_nodes {
-                cluster_state.write().await
-                    .merge_node_state(n).await;
+                handle.cmd_merge_node_state(n).await;
             }
-            let gossip = Gossip::<MockRandom>::new_with_random(myself, config, cluster_state.clone());
+            handle.flush().await;
+            let gossip = Gossip::<MockRandom>::new_with_random(myself, config, handle);
 
             let context = MockRandom::next_u32_context();
             context.expect()
@@ -714,21 +733,24 @@ mod tests {
         rt.block_on(async {
             let myself = test_node_addr_from_number(1);
             let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
-            let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+            let config1 = config.clone();
+            let handle = ClusterStateHandle::new(myself, config1);
             for n in local_nodes {
-                cluster_state.write().await
-                    .merge_node_state(n).await;
+                handle.cmd_merge_node_state(n).await;
             }
-            let gossip = Gossip::new(myself, config, cluster_state.clone());
+            handle.flush().await;
+            let gossip = Gossip::new(myself, config, handle);
 
             let actual_response = gossip.on_differing_and_missing_nodes(GossipDifferingAndMissingNodesData {
                 differing: msg_differing,
                 missing: msg_missing,
             }).await;
+            gossip.cluster_state.flush().await;
 
-            let actual_nodes = cluster_state.read().await
+            let snap = gossip.cluster_state.snapshot();
+            let actual_nodes = snap
                 .node_states()
-                .cloned()
+                .map(|a| a.as_ref().clone())
                 .collect::<Vec<_>>();
             assert_eq!(actual_nodes, expected_merged);
 
@@ -750,8 +772,9 @@ mod tests {
     async fn test_on_nodes() {
         let myself = test_node_addr_from_number(1);
         let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
-        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
-        let gossip = Gossip::new(myself, config, cluster_state.clone());
+        let config1 = config.clone();
+        let handle = ClusterStateHandle::new(myself, config1);
+        let gossip = Gossip::new(myself, config, handle);
 
         gossip.on_nodes(GossipNodesData {
             nodes: vec![
@@ -759,15 +782,17 @@ mod tests {
                 node_state!(2[]:Up->[]@[1,2]),
             ],
         }).await;
+        // `on_nodes` enqueues per-node merge commands to the actor;
+        // flush so they have been applied before we read the underlying state.
+        gossip.cluster_state.flush().await;
 
+        let snap = gossip.cluster_state.snapshot();
         assert_eq!(
-            cluster_state.read().await
-                .get_node_state(&myself).unwrap(),
+            snap.get_node_state(&myself).unwrap().as_ref(),
             &node_state!(1[]:Up->[]@[1,2]),
         );
         assert_eq!(
-            cluster_state.read().await
-                .get_node_state(&test_node_addr_from_number(2)).unwrap(),
+            snap.get_node_state(&test_node_addr_from_number(2)).unwrap().as_ref(),
             &node_state!(2[]:Up->[]@[1,2]),
         );
     }
@@ -776,13 +801,15 @@ mod tests {
     async fn test_down_myself() {
         let myself = test_node_addr_from_number(1);
         let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
-        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
-        let gossip = Gossip::new(myself, config, cluster_state.clone());
+        let config1 = config.clone();
+        let handle = ClusterStateHandle::new(myself, config1);
+        let gossip = Gossip::new(myself, config, handle);
 
         gossip.down_myself().await;
+        gossip.cluster_state.flush().await;
 
         assert_eq!(
-            cluster_state.read().await
+            gossip.cluster_state.snapshot()
                 .get_node_state(&myself).unwrap()
                 .membership_state,
             Down

@@ -4,9 +4,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::BytesMut;
 use bytes_varint::{VarIntSupport, VarIntSupportMut};
-use tokio::sync::RwLock;
 use tracing::error;
-use crate::cluster::cluster_state::ClusterState;
+use crate::cluster::cluster_state::ClusterStateHandle;
 use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::buf::{put_string, try_get_string};
@@ -51,11 +50,11 @@ impl JoinMessage {
 }
 
 pub struct JoinMessageModule {
-    cluster_state: Arc<RwLock<ClusterState>>,
+    cluster_state: ClusterStateHandle,
 }
 
 impl JoinMessageModule {
-    pub fn new(cluster_state: Arc<RwLock<ClusterState>>) -> Arc<JoinMessageModule> {
+    pub fn new(cluster_state: ClusterStateHandle) -> Arc<JoinMessageModule> {
         Arc::new(JoinMessageModule {
             cluster_state,
         })
@@ -74,8 +73,11 @@ impl MessageModule for JoinMessageModule {
             Ok(JoinMessage::Join { roles }) => {
                 //TODO check shared secret
 
-                self.cluster_state.write().await
-                    .add_joiner(sender, roles);
+                // Dispatched via the single-writer actor; the actor refreshes
+                // the published snapshot after handling the command so the
+                // new joiner becomes visible to lock-free readers as soon
+                // as `.await` resolves (no manual `refresh_snapshot` needed).
+                self.cluster_state.cmd_add_joiner(sender, roles).await;
             }
             Err(e) => {
                 error!("error deserializing message: {}", e);

@@ -1,4 +1,4 @@
-use crate::cluster::cluster_state::NodeState;
+use crate::cluster::state::node_state::NodeState;
 use crate::cluster::heartbeat::downing_strategy::DowningStrategyDecision::{DownThem, DownUs};
 #[cfg(test)] use mockall::automock;
 use std::fmt::Debug;
@@ -170,8 +170,7 @@ impl DowningStrategy for QuorumOfRoleStrategy {
 mod tests {
     use super::*;
     use crate::node_state;
-    use crate::cluster::cluster_state::*;
-    use MembershipState::*;
+    use crate::cluster::state::node_state::MembershipState::*;
     use crate::test_util::node::test_node_addr_from_number;
     use rstest::rstest;
 

@@ -6,20 +6,20 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 #[cfg(test)] use mockall::automock;
 use tokio::select;
-use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tracing::{debug, error, info, instrument};
 
 use crate::cluster::cluster_config::ClusterConfig;
-use crate::cluster::cluster_state::{ClusterState, NodeState};
+use crate::cluster::cluster_state::ClusterStateHandle;
 use crate::cluster::join_messages::JoinMessage;
+use crate::cluster::state::node_state::NodeState;
 use crate::messaging::messaging::MessageSender;
 use crate::messaging::node_addr::NodeAddr;
 
 //TODO documentation
 //TODO unit test
 
-pub async fn run_discovery<M: MessageSender>(discovery_strategy: impl DiscoveryStrategy, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) {
+pub async fn run_discovery<M: MessageSender>(discovery_strategy: impl DiscoveryStrategy, config: Arc<ClusterConfig>, cluster_state: ClusterStateHandle, messaging: Arc<M>) {
     match discovery_strategy.do_discovery(config, cluster_state, messaging).await {
         Ok(_) => {
             // sleep forever, i.e. until the cluster's regular loop terminates
@@ -43,7 +43,7 @@ pub trait DiscoveryStrategy {
     async fn do_discovery<M: MessageSender> (
         &self,
         config: Arc<ClusterConfig>,
-        cluster_state: Arc<RwLock<ClusterState>>,
+        cluster_state: ClusterStateHandle,
         messaging: Arc<M>,
     ) -> anyhow::Result<()>;
 }
@@ -57,9 +57,8 @@ impl StartAsClusterDiscoveryStrategy {
 }
 #[async_trait]
 impl DiscoveryStrategy for StartAsClusterDiscoveryStrategy {
-    async fn do_discovery<M: MessageSender>(&self, _config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, _messaging: Arc<M>) -> anyhow::Result<()> {
-        cluster_state.write().await
-            .promote_myself_to_up().await;
+    async fn do_discovery<M: MessageSender>(&self, _config: Arc<ClusterConfig>, cluster_state: ClusterStateHandle, _messaging: Arc<M>) -> anyhow::Result<()> {
+        cluster_state.cmd_promote_myself_to_up().await;
         Ok(())
     }
 }
@@ -98,8 +97,8 @@ impl SeedNodesStrategy {
 }
 #[async_trait]
 impl DiscoveryStrategy for SeedNodesStrategy {
-    async fn do_discovery<M: MessageSender>(&self, config: Arc<ClusterConfig>, cluster_state: Arc<RwLock<ClusterState>>, messaging: Arc<M>) -> anyhow::Result<()> {
-        let myself = cluster_state.read().await.myself();
+    async fn do_discovery<M: MessageSender>(&self, config: Arc<ClusterConfig>, cluster_state: ClusterStateHandle, messaging: Arc<M>) -> anyhow::Result<()> {
+        let myself = cluster_state.snapshot().myself();
 
         if self.am_i_seed_node {
             let other_seed_nodes = self.seed_nodes.iter()
@@ -135,33 +134,38 @@ impl DiscoveryStrategy for SeedNodesStrategy {
 ///     --> promote myself to 'Up' to allow becoming the leader and bootstrap the cluster
 /// * Some other node has become leader eligible
 #[instrument(level = "trace", skip_all)]
-async fn check_joined_as_seed_node(cluster_state: Arc<RwLock<ClusterState>>, config: Arc<ClusterConfig>, seed_nodes: Vec<SocketAddr>, myself: NodeAddr) {
+async fn check_joined_as_seed_node(cluster_state: ClusterStateHandle, config: Arc<ClusterConfig>, seed_nodes: Vec<SocketAddr>, myself: NodeAddr) {
     loop {
-        if is_any_node_leader_eligible(config.as_ref(), cluster_state.read().await.node_states()) {
+        // Hold a single snapshot for the duration of one polling iteration so
+        // that the leader-eligibility check, the quorum check and the
+        // convergence check all see the same point-in-time view.
+        let snap = cluster_state.snapshot();
+        if is_any_node_leader_eligible(config.as_ref(), snap.node_states().map(|n| n.as_ref())) {
             //TODO add message for 'joining a cluster' (e.g. before  any node is up)
             info!("joined a cluster"); //TODO better log message - this may be long after the initial 'joining'
             break;
         }
 
-        let seed_node_members = seed_node_members(cluster_state.read().await.node_states(), &seed_nodes);
+        let seed_node_members = seed_node_members(snap.node_states().map(|n| n.as_ref()), &seed_nodes);
         let has_quorum = seed_node_members.len() * 2 > seed_nodes.len();
-        let i_am_first = *seed_node_members.iter().min().unwrap() == myself;
+        let i_am_first = seed_node_members.iter().min().copied() == Some(myself);
 
         //TODO documentation
-        if has_quorum && i_am_first && cluster_state.read().await.is_converged() {
-            cluster_state.write().await
-                .promote_myself_to_up().await;
+        if has_quorum && i_am_first && snap.is_converged() {
+            cluster_state.cmd_promote_myself_to_up().await;
             info!("a quorum of seed nodes joined, promoting myself to leader");
             break;
         }
 
+        drop(snap);
         sleep(Duration::from_millis(10)).await;
     }
 }
 
-async fn check_joined_other_seed_nodes(cluster_state: Arc<RwLock<ClusterState>>, seed_nodes: &[SocketAddr]) {
+async fn check_joined_other_seed_nodes(cluster_state: ClusterStateHandle, seed_nodes: &[SocketAddr]) {
     loop {
-        if cluster_state.read().await
+        if cluster_state
+            .snapshot()
             .node_states()
             .any(|n| seed_nodes.contains(&n.addr.socket_addr))
         {
@@ -207,24 +211,28 @@ fn seed_node_members<'a>(all_nodes: impl Iterator<Item=&'a NodeState>, seed_node
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::cluster_events::ClusterEventNotifier;
-    use crate::cluster::cluster_state::*;
+    use crate::cluster::state::node_state::MembershipState::*;
     use crate::messaging::messaging::MockMessageSender;
     use crate::node_state;
     use crate::test_util::message::TrackingMockMessageSender;
     use crate::test_util::node::test_node_addr_from_number;
     use rstest::rstest;
     use tokio::time;
-    use MembershipState::*;
+
+    /// Build a fresh handle for `myself`/`config`. The handle owns its own
+    /// `ClusterEventNotifier`; tests that need to subscribe reach it via
+    /// `handle.events()`.
+    fn handle_for_new(myself: NodeAddr, config: Arc<ClusterConfig>) -> ClusterStateHandle {
+        ClusterStateHandle::new(myself, config)
+    }
 
     #[tokio::test]
     async fn test_run_discovery() {
         let myself = test_node_addr_from_number(1);
         let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
 
-        let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
-        let cluster_state = Arc::new(RwLock::new(cluster_state));
-        let cluster_state_for_check = cluster_state.clone();
+        let handle = handle_for_new(myself, config.clone());
+        let events_ptr = Arc::as_ptr(handle.events()) as usize;
 
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
         let messaging_for_check = messaging.clone();
@@ -232,36 +240,39 @@ mod tests {
         let mut mock = MockDiscoveryStrategy::new();
         mock.expect_do_discovery()
             .times(1)
-            .withf(move |_, s, _: &Arc<TrackingMockMessageSender>| std::ptr::addr_eq(Arc::as_ptr(s), Arc::as_ptr(&cluster_state_for_check)))
+            .withf(move |_, s, _: &Arc<TrackingMockMessageSender>| Arc::as_ptr(s.events()) as usize == events_ptr)
             .withf(move |_, _, m| std::ptr::addr_eq(Arc::as_ptr(m), Arc::as_ptr(&messaging_for_check)))
             .returning_st(|_a, _b, _c| Ok(()));
 
         time::pause();
 
-        let handle = tokio::spawn(run_discovery(mock, config, cluster_state.clone(), messaging));
+        let join = tokio::spawn(run_discovery(mock, config, handle, messaging));
 
         time::advance(Duration::from_secs(9999999999)).await;
-        assert!(!handle.is_finished());
-        handle.abort();
+        assert!(!join.is_finished());
+        join.abort();
     }
 
     #[tokio::test]
     async fn test_start_as_cluster_strategy() {
         let myself = test_node_addr_from_number(1);
         let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
-        let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
-        let cluster_state = Arc::new(RwLock::new(cluster_state));
+        let handle = handle_for_new(myself, config.clone());
 
         let mut message_sender = MockMessageSender::new();
         message_sender.expect_send_to_addr::<JoinMessage>()
             .never();
 
         let discovery_result = StartAsClusterDiscoveryStrategy{}
-            .do_discovery(config, cluster_state.clone(), Arc::new(message_sender)).await;
+            .do_discovery(config, handle.clone(), Arc::new(message_sender)).await;
 
         assert!(discovery_result.is_ok());
-        assert_eq!(cluster_state.read().await.get_node_state(&myself).unwrap().membership_state, MembershipState::Up);
-        assert!(cluster_state.write().await.am_i_leader());
+        // `do_discovery` dispatches `PromoteMyselfToUp` to the actor and
+        // returns once enqueued; flush before reading the snapshot.
+        handle.flush().await;
+        let snap = handle.snapshot();
+        assert_eq!(snap.get_node_state(&myself).unwrap().membership_state, Up);
+        assert!(snap.am_i_leader());
     }
 
     #[tokio::test]
@@ -276,17 +287,17 @@ mod tests {
             test_node_addr_from_number(3).socket_addr,
         ], config.as_ref()).unwrap();
 
-        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+        let handle = handle_for_new(myself, config.clone());
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
         time::pause();
 
         {
             let config = config.clone();
-            let cluster_state = cluster_state.clone();
+            let handle = handle.clone();
             let messaging = messaging.clone();
             tokio::spawn(async move {
-                strategy.do_discovery(config, cluster_state, messaging).await
+                strategy.do_discovery(config, handle, messaging).await
             })
         };
 
@@ -311,17 +322,17 @@ mod tests {
             test_node_addr_from_number(3).socket_addr,
         ], config.as_ref()).unwrap();
 
-        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+        let handle = handle_for_new(myself, config.clone());
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
         time::pause();
 
-        let handle = {
+        let join = {
             let config = config.clone();
-            let cluster_state = cluster_state.clone();
+            let handle = handle.clone();
             let messaging = messaging.clone();
             tokio::spawn(async move {
-                strategy.do_discovery(config, cluster_state, messaging).await
+                strategy.do_discovery(config, handle, messaging).await
             })
         };
 
@@ -333,15 +344,18 @@ mod tests {
             messaging.assert_no_remaining_messages().await;
         }
 
-        cluster_state.write().await
-            .merge_node_state(node_state!(1["xyz"]:Joining->[]@[1,2])).await;
-        cluster_state.write().await
-            .merge_node_state(node_state!(2[]:Joining->[]@[1,2])).await;
+        handle.cmd_merge_node_state(node_state!(1["xyz"]:Joining->[]@[1,2])).await;
+        handle.cmd_merge_node_state(node_state!(2[]:Joining->[]@[1,2])).await;
+        handle.flush().await;
 
-        sleep(Duration::from_millis(10)).await;
-        assert!(handle.is_finished());
-        assert!(handle.await.is_ok());
-        assert_eq!(cluster_state.read().await
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+            sleep(Duration::from_millis(10)).await;
+            if join.is_finished() { break; }
+        }
+        assert!(join.is_finished());
+        assert!(join.await.is_ok());
+        assert_eq!(handle.snapshot()
             .get_node_state(&myself).unwrap().membership_state, Up);
     }
 
@@ -361,22 +375,22 @@ mod tests {
             test_node_addr_from_number(3).socket_addr,
         ], config.as_ref()).unwrap();
 
-        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+        let handle = handle_for_new(myself, config.clone());
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
-        let handle = {
+        let join = {
             let config = config.clone();
-            let cluster_state = cluster_state.clone();
+            let handle = handle.clone();
             let messaging = messaging.clone();
             tokio::spawn(async move {
-                strategy.do_discovery(config, cluster_state, messaging).await
+                strategy.do_discovery(config, handle, messaging).await
             })
         };
 
         sleep(config.discovery_seed_node_give_up_timeout + Duration::from_secs(1)).await;
-        assert!(handle.is_finished());
-        assert!(handle.await.unwrap().is_err());
-        assert_eq!(cluster_state.read().await
+        assert!(join.is_finished());
+        assert!(join.await.unwrap().is_err());
+        assert_eq!(handle.snapshot()
             .get_node_state(&myself).unwrap().membership_state, Joining);
     }
 
@@ -437,12 +451,11 @@ mod tests {
             let seed_nodes = [test_node_addr_from_number(1).socket_addr, test_node_addr_from_number(2).socket_addr, test_node_addr_from_number(3).socket_addr].to_vec();
 
             let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
-            let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
-            let cluster_state = Arc::new(RwLock::new(cluster_state));
+            let handle = handle_for_new(myself, config.clone());
 
             time::pause();
 
-            let join_handle = tokio::spawn(check_joined_as_seed_node(cluster_state.clone(), config, seed_nodes, myself));
+            let join_handle = tokio::spawn(check_joined_as_seed_node(handle.clone(), config, seed_nodes, myself));
 
             sleep(Duration::from_millis(10)).await;
             assert!(!join_handle.is_finished());
@@ -458,36 +471,45 @@ mod tests {
             // add some non-seed nodes to verify that quorum is counted on seed nodes only, and that
             //  'myself' needs to be the first of the seed nodes, not all nodes
             node_state_template.addr = test_node_addr_from_number(0);
-            cluster_state.write().await
-                .merge_node_state(node_state_template.clone()).await;
+            handle.cmd_merge_node_state(node_state_template.clone()).await;
             node_state_template.addr = test_node_addr_from_number(4);
-            cluster_state.write().await
-                .merge_node_state(node_state_template.clone()).await;
+            handle.cmd_merge_node_state(node_state_template.clone()).await;
+            handle.flush().await;
 
             sleep(Duration::from_millis(10)).await;
             assert!(!join_handle.is_finished());
 
             if has_quorum {
                 node_state_template.addr = other_seed;
-                cluster_state.write().await
-                    .merge_node_state(node_state_template.clone()).await;
+                handle.cmd_merge_node_state(node_state_template.clone()).await;
+                handle.flush().await;
 
                 sleep(Duration::from_millis(10)).await;
                 assert!(!join_handle.is_finished());
             }
 
             node_state_template.addr = myself;
-            cluster_state.write().await
-                .merge_node_state(node_state_template.clone()).await;
+            handle.cmd_merge_node_state(node_state_template.clone()).await;
+            handle.flush().await;
 
-            sleep(Duration::from_millis(10)).await;
+            // Give the polling loop time to wake, observe the new snapshot,
+            // dispatch its `cmd_promote_myself_to_up` and complete. With
+            // `time::pause()` and a current-thread runtime, a single 10ms
+            // sleep may resume the test task before the polling task gets
+            // scheduled; yield + advance until the join handle settles or
+            // we've waited well past the polling interval.
+            for _ in 0..10 {
+                tokio::task::yield_now().await;
+                sleep(Duration::from_millis(10)).await;
+                if join_handle.is_finished() { break; }
+            }
             assert_eq!(join_handle.is_finished(), expected);
             if expected {
-                let self_state = cluster_state.read().await
+                let self_state = handle.snapshot()
                     .get_node_state(&myself).unwrap()
                     .membership_state;
 
-                assert_eq!(self_state, MembershipState::Up);
+                assert_eq!(self_state, Up);
             }
         });
     }
@@ -498,19 +520,18 @@ mod tests {
         let seed_nodes = [myself.socket_addr, test_node_addr_from_number(2).socket_addr, test_node_addr_from_number(3).socket_addr].to_vec();
 
         let config = Arc::new(ClusterConfig::new(myself.socket_addr, None));
-        let cluster_state = ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()));
-        let cluster_state = Arc::new(RwLock::new(cluster_state));
+        let handle = handle_for_new(myself, config.clone());
 
         time::pause();
 
-        let join_handle = tokio::spawn(check_joined_as_seed_node(cluster_state.clone(), config, seed_nodes, myself));
+        let join_handle = tokio::spawn(check_joined_as_seed_node(handle.clone(), config, seed_nodes, myself));
 
         sleep(Duration::from_millis(300)).await;
         assert!(!join_handle.is_finished());
 
         // add some other node that is Up - NB: we do not need to wait for convergence
-        cluster_state.write().await
-            .merge_node_state(node_state!(2[]:Up->[]@[2])).await;
+        handle.cmd_merge_node_state(node_state!(2[]:Up->[]@[2])).await;
+        handle.flush().await;
 
         sleep(Duration::from_millis(10)).await;
         assert!(join_handle.is_finished());
@@ -590,7 +611,7 @@ mod tests {
         config.roles.insert("abc".to_string());
         let config = Arc::new(config);
 
-        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+        let handle = handle_for_new(myself, config.clone());
 
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
@@ -601,12 +622,12 @@ mod tests {
 
         time::pause();
 
-        let handle = {
+        let join = {
             let config = config.clone();
-            let cluster_state = cluster_state.clone();
+            let handle = handle.clone();
             let messaging = messaging.clone();
             tokio::spawn(async move {
-                strategy.do_discovery(config, cluster_state, messaging).await
+                strategy.do_discovery(config, handle, messaging).await
             })
         };
 
@@ -616,10 +637,10 @@ mod tests {
             messaging.assert_message_sent(test_node_addr_from_number(3), JoinMessage::Join { roles: ["abc".to_string()].into() }).await;
             messaging.assert_no_remaining_messages().await;
         }
-        assert!(!handle.is_finished());
+        assert!(!join.is_finished());
 
-        cluster_state.write().await
-            .merge_node_state(node_state!(4[]:Joining->[]@[1,2,3,4])).await; // not a seed node
+        handle.cmd_merge_node_state(node_state!(4[]:Joining->[]@[1,2,3,4])).await; // not a seed node
+        handle.flush().await;
 
         for _ in 0..10 {
             sleep(config.discovery_seed_node_retry_interval).await;
@@ -627,14 +648,18 @@ mod tests {
             messaging.assert_message_sent(test_node_addr_from_number(3), JoinMessage::Join { roles: ["abc".to_string()].into() }).await;
             messaging.assert_no_remaining_messages().await;
         }
-        assert!(!handle.is_finished());
+        assert!(!join.is_finished());
 
-        cluster_state.write().await
-            .merge_node_state(node_state!(3[]:Joining->[]@[1,2,3,4])).await; // Joining is enough
+        handle.cmd_merge_node_state(node_state!(3[]:Joining->[]@[1,2,3,4])).await; // Joining is enough
+        handle.flush().await;
 
-        sleep(Duration::from_millis(10)).await;
-        assert!(handle.is_finished());
-        assert!(handle.await.is_ok());
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+            sleep(Duration::from_millis(10)).await;
+            if join.is_finished() { break; }
+        }
+        assert!(join.is_finished());
+        assert!(join.await.is_ok());
     }
 
     #[tokio::test]
@@ -644,7 +669,7 @@ mod tests {
         config.roles.insert("abc".to_string());
         let config = Arc::new(config);
 
-        let cluster_state = Arc::new(RwLock::new(ClusterState::new(myself, config.clone(), Arc::new(ClusterEventNotifier::new()))));
+        let handle = handle_for_new(myself, config.clone());
 
         let messaging = Arc::new(TrackingMockMessageSender::new(myself));
 
@@ -655,18 +680,18 @@ mod tests {
 
         time::pause();
 
-        let handle = {
+        let join = {
             let config = config.clone();
-            let cluster_state = cluster_state.clone();
+            let handle = handle.clone();
             let messaging = messaging.clone();
             tokio::spawn(async move {
-                strategy.do_discovery(config, cluster_state, messaging).await
+                strategy.do_discovery(config, handle, messaging).await
             })
         };
 
         sleep(config.discovery_seed_node_give_up_timeout + Duration::from_secs(1)).await;
 
-        assert!(handle.is_finished());
-        assert!(handle.await.unwrap().is_err());
+        assert!(join.is_finished());
+        assert!(join.await.unwrap().is_err());
     }
 }

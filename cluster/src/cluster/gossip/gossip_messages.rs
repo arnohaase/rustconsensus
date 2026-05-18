@@ -10,7 +10,7 @@ use num_enum::TryFromPrimitive;
 use tokio::sync::mpsc;
 use tracing::error;
 
-use crate::cluster::cluster_state::{MembershipState, NodeReachability, NodeState};
+use crate::cluster::state::node_state::{MembershipState, NodeReachability, NodeState};
 use crate::messaging::message_module::{Message, MessageModule, MessageModuleId};
 use crate::messaging::node_addr::NodeAddr;
 use crate::util::buf::{put_string, try_get_string};
@@ -619,6 +619,6 @@ mod tests {
         let mut buf = BytesMut::new();
         msg.ser(&mut buf);
         
-        let deser_msg = GossipMessage::deser(&buf).unwrap();
+        let _deser_msg = GossipMessage::deser(&buf).unwrap();
     }
 }

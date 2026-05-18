@@ -14,7 +14,7 @@ macro_rules! node_state {
         #[allow(unused_mut)]
         let mut reachability = std::collections::BTreeMap::new();
         $(
-            reachability.insert($crate::test_util::node::test_node_addr_from_number($r_id), NodeReachability {
+            reachability.insert($crate::test_util::node::test_node_addr_from_number($r_id), $crate::cluster::state::node_state::NodeReachability {
                 counter_of_reporter: $counter,
                 is_reachable: $reachable,
             });
@@ -26,7 +26,7 @@ macro_rules! node_state {
             seen_by.insert($crate::test_util::node::test_node_addr_from_number($seen_by));
         )*
 
-        $crate::cluster::cluster_state::NodeState {
+        $crate::cluster::state::node_state::NodeState {
             addr: $crate::test_util::node::test_node_addr_from_number($self_addr),
             membership_state: $ms,
             roles,

@@ -1,5 +1,5 @@
 use crate::cluster::cluster_events::{ClusterEvent, LeaderChangedData, NodeAddedData, NodeRemovedData, NodeStateChangedData, NodeUpdatedData, ReachabilityChangedData};
-use crate::cluster::cluster_state::MembershipState;
+use crate::cluster::state::node_state::MembershipState;
 use crate::test_util::node::test_node_addr_from_number;
 
 pub fn test_updated_evt(node: u16) -> ClusterEvent {
